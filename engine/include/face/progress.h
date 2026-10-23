@@ -1,6 +1,7 @@
 // Рост брелока. На старте открыта база эмоций, остальные приходят «имплантами»
 // за опыт: дни вместе, касания, шаги, встречи с другими брелоками и дуэли.
-// Состояние — плоская структура: прошивка хранит её во флеше как есть.
+// Состояние — плоская структура постоянного размера: прошивка хранит её во флеше
+// как есть, а load() понимает и старые версии записи.
 #pragma once
 
 #include <stdint.h>
@@ -36,9 +37,19 @@ struct XpRules {
   uint16_t duel_lose = 10;
 };
 
+// Эмоция открыта, если её имплант уже установлен, или она в списке дополнительных
+// (выигранные в дуэли, а потом и секретные), или открыто всё. Дополнительные хранятся
+// по ключу от имени эмоции, а не по номеру в каталоге: новые эмоции и перестановки
+// в каталоге не сбивают записанный прогресс.
+//
+// Как расширять: новое поле берётся из reserved (по умолчанию там нули), версия
+// растёт на 1, а load() читает предыдущую версию и дописывает значения по умолчанию.
+// Размер записи при этом не меняется.
 struct Progress {
   static constexpr uint32_t kMagic = 0x4B43484Bu;  // «KCHK»
-  static constexpr uint16_t kVersion = 1;
+  static constexpr uint16_t kVersion = 2;
+  static constexpr int kExtraSlots = 16;
+  static constexpr uint8_t kAllUnlocked = 1;  // флаг: открыто всё
 
   uint32_t magic = kMagic;
   uint16_t version = kVersion;
@@ -53,15 +64,18 @@ struct Progress {
   uint16_t today_step_xp = 0;
   uint16_t step_rest = 0;  // шаги, которые ещё не превратились в опыт
   uint8_t implant = 0;  // сколько имплантов уже установлено (0 — только база)
-  uint8_t pad = 0;
-  uint8_t unlocked[(kExprCount + 7) / 8] = {};  // открытые эмоции, по биту на каждую
+  uint8_t flags = 0;    // kAllUnlocked
+  uint8_t reserved[26] = {};         // запас под будущие поля: серии, достижения
+  uint32_t extra[kExtraSlots] = {};  // ключи дополнительно открытых эмоций, 0 — пусто
   uint32_t crc = 0;
 
   // Чистое состояние нового брелока: открыта только база.
   void reset();
-  bool is_unlocked(Expr e) const { return (unlocked[(int)e >> 3] >> ((int)e & 7)) & 1u; }
-  void unlock(Expr e) { unlocked[(int)e >> 3] |= (uint8_t)(1u << ((int)e & 7)); }
+  bool is_unlocked(Expr e) const;
+  // Открыть эмоцию досрочно. false — уже открыта или нет свободного места.
+  bool unlock(Expr e);
   int unlocked_count() const;
+  int extra_count() const;
   void unlock_all();
 
   // Каждое начисление возвращает номер импланта, который только что
@@ -84,6 +98,13 @@ struct Progress {
   uint32_t compute_crc() const;
   void seal() { crc = compute_crc(); }
   bool valid() const { return magic == kMagic && version == kVersion && crc == compute_crc(); }
+  // Разобрать запись из флеша любой известной версии. false — запись чужая или испорчена.
+  bool load(const void* data, uint32_t n);
+
+  // Ключ эмоции для списка дополнительных: FNV-1a от её id, никогда не 0.
+  static uint32_t key(Expr e);
 };
+
+static_assert(sizeof(Progress) == 128, "запись во флеше постоянного размера");
 
 }  // namespace face

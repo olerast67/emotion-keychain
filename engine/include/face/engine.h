@@ -3,15 +3,18 @@
 //   engine.init(seed, now);
 //   engine.set_expression(Expr::happy, now);
 //   loop:
-//     if (engine.update(now)) отправить engine.dirty(...) на экран;
+//     if (time_reached(now, engine.next_update_ms()) && engine.update(now))
+//       отправить engine.dirty(...) на экран;
 //     спать до engine.next_update_ms();
 //
 // Если лицо статично, next_update_ms() указывает на следующее запланированное
 // событие (моргание, взгляд, дрейф), и до него можно спать: экран держит картинку сам.
+// Дальше kMaxSleepMs вперёд движок не планирует, сравнивать время — только через time_reached.
 #pragma once
 
 #include <stdint.h>
 
+#include "face/clock.h"
 #include "face/expressions.h"
 #include "face/fmath.h"
 #include "face/framebuffer.h"
@@ -73,8 +76,11 @@ struct EngineOptions {
   bool idle_motion = true;   // моргание и взгляд
   bool scanlines = false;    // ретро-режим: горит каждая вторая строка
   bool upside_down = false;  // повернуть кадр на 180°
-  uint16_t frame_ms = 33;    // период кадров во время анимации (~30 fps)
+  uint16_t frame_ms = 33;    // период кадров анимации (~30 fps), от 10
   Theme theme = Theme::Classic;
+  // Через сколько мс без внимания (note_activity, взгляд, наклон) лицо успокаивается:
+  // фирменные жесты втрое реже, взгляд вдвое реже. 0 — не успокаиваться.
+  uint32_t calm_after_ms = 180000;
 };
 
 struct EngineStats {
@@ -94,6 +100,9 @@ class FaceEngine {
   Clip clip() const { return clip_active_ ? clip_ : Clip::None; }
   // Внешнее управление взглядом (например, «смотрит туда, откуда звук»).
   void look_at(float gx, float gy, uint32_t now_ms, uint32_t hold_ms);
+  // Кто-то обратил внимание на брелок (датчик, кнопка, команда): лицо снова оживлённое.
+  void note_activity(uint32_t now_ms);
+  bool calm() const { return calm_; }
 
   // Фильтр эмоций: движок сам переходит по цепочкам (смех → радость) и через
   // фильтр не покажет то, что ещё не открыто. nullptr — без фильтра.
@@ -106,9 +115,11 @@ class FaceEngine {
 
   // Наклон из акселерометра: проекция силы тяжести на плоскость экрана, −1…1
   // (x вправо, y вниз). Зрачки плавно «скатываются» в нижнюю сторону.
+  // Изменения меньше kTiltDeadband — шум датчика: они не будят движок.
   void set_tilt(float x, float y);
   // Резкое движение брелока: персонаж на миг смотрит в ту сторону.
   void jerk(float dx, float dy, uint32_t now_ms);
+  static constexpr float kTiltDeadband = 0.05f;
 
   // Полноэкранная сцена вместо лица (scenes.h). Лицо продолжает жить под ней.
   void play_scene(Scene s, uint32_t now_ms, const SceneParams& p = {});
@@ -128,17 +139,21 @@ class FaceEngine {
   uint32_t expression_started_ms() const { return expr_t0_; }
 
  private:
-  void compose(uint32_t now);
   void update_blink(uint32_t now, uint32_t& period);
   void update_gaze(uint32_t now, uint32_t& period);
   void schedule_blink(uint32_t now);
   void schedule_gaze(uint32_t now);
-  void apply_motion(uint32_t now, uint32_t& period);
+  void apply_motion(uint32_t now);
   void apply_accent(uint32_t now, uint32_t& period);
   void schedule_accent(uint32_t from);
   void apply_clip(uint32_t now, uint32_t& period);
+  // Клип ещё идёт и сам управляет глазами (моргание ждёт).
+  bool clip_running(uint32_t now) const;
+  bool clip_holds_eyes(uint32_t now) const;
+  void apply_tilt(uint32_t now, uint32_t& period);
   void overlays_update(uint32_t now, uint32_t& period);
   void compute_fit();
+  uint32_t frame_ms() const { return opt_.frame_ms < 10 ? 10u : opt_.frame_ms; }
 
   EngineOptions opt_;
   EngineStats stats_;
@@ -158,22 +173,32 @@ class FaceEngine {
 
   Face composed_;
 
-  // Моргание.
+  // Моргание. blink_armed_ — следующее моргание запланировано на blink_next_.
   uint32_t blink_next_ = 0, blink_t0_ = 0;
   uint16_t blink_ms_ = 180;
   bool blink_on_ = false;
+  bool blink_armed_ = false;
   bool blink_double_ = false;
 
-  // Взгляд.
+  // Взгляд. g_ext_ — взгляд задан снаружи (look_at) до g_ext_until_.
   float g_from_x_ = 0, g_from_y_ = 0, g_to_x_ = 0, g_to_y_ = 0, gx_ = 0, gy_ = 0;
   uint32_t g_t0_ = 0, g_next_ = 0, g_ext_until_ = 0;
   uint16_t g_ms_ = 80;
   bool g_moving_ = false;
+  bool g_ext_ = false;
 
   // Фирменное движение эмоции.
   uint32_t accent_next_ = 0, accent_t0_ = 0;
   bool accent_on_ = false;
   float accent_sign_ = 1;
+
+  // Внимание: когда его долго нет, лицо успокаивается (calm_).
+  uint32_t active_ms_ = 0;
+  bool calm_ = false;
+
+  // Движение пресета: через сколько мс лицо сдвинется на пиксель (0 — не сдвинется)
+  // и на сколько этот шаг можно отложить ради уже запланированного кадра.
+  uint32_t motion_wake_ = 0, motion_slack_ = 0;
 
   // Клип.
   Clip clip_ = Clip::None;
@@ -198,9 +223,11 @@ class FaceEngine {
   Scene scene_ = Scene::None;
   uint32_t scene_t0_ = 0;
   SceneParams scene_p_;
-  float tilt_x_ = 0, tilt_y_ = 0, tilt_cx_ = 0, tilt_cy_ = 0;
+  // Наклон: цель от датчика, сглаженное значение и его ступени, которыми он рисуется.
+  float tilt_x_ = 0, tilt_y_ = 0, tilt_cx_ = 0, tilt_cy_ = 0, tilt_qx_ = 0, tilt_qy_ = 0;
   uint32_t tilt_last_ = 0;
   uint32_t micro_glitch_next_ = 0, micro_glitch_until_ = 0;
+  bool micro_glitch_on_ = false;
   void apply_quirks(Face& f) const;
 
   // Оверлеи.

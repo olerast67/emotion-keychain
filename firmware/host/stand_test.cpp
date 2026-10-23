@@ -80,6 +80,7 @@ uint8_t TwoWire::endTransmission(bool) {
   // 9 бит на байт плюс адрес, старт и стоп.
   host::now_us += (uint64_t)((n_ + 1) * 9 + 2) * 1000000ull / hz_;
   if (!emu.present || addr_ != emu.addr) return 2;  // NACK
+  if (emu.fail_next) return --emu.fail_next, 4;     // помеха: транзакция не дошла
   ++emu.transactions;
   if (n_ == 0) return 0;  // проверка адреса
   emu.bytes += (uint32_t)n_;
@@ -117,6 +118,7 @@ static bool screen_matches() {
 }
 
 static uint32_t g_mismatch = 0;
+static uint64_t g_skipped_us = 0;  // перескоки часов к переполнению: в среднюю нагрузку не входят
 static std::set<int> g_seen;
 
 static void run_ms(uint32_t ms) {
@@ -325,10 +327,140 @@ int main(int argc, char** argv) {
   type("reset yes");
   CHECK(progress.xp == 0 && progress.implant == 0, "рост начат заново");
 
+  // Плохой ввод: сообщение о формате, и ничего не применяется.
+  type("a");
+  run_ms(2000);
+  const uint32_t xp0 = progress.xp, steps0 = progress.steps;
+  const uint8_t contrast0 = contrast;
+  Serial.out.clear();
+  type("t -1:00");
+  CHECK(said("Формат: t 23:30"), "отрицательные часы не принимаются");
+  Serial.out.clear();
+  type("t 25:99");
+  CHECK(said("Формат: t 23:30"), "25:99 не принимается");
+  type("xp -1");
+  type("xp abc");
+  type("xp 10x");
+  type("steps -5");
+  CHECK(progress.xp == xp0 && progress.steps == steps0, "опыт и шаги не изменились: %u, %u", progress.xp,
+        progress.steps);
+  type("b 300");
+  type("b x");
+  CHECK(contrast == contrast0, "яркость не изменилась: %u", contrast);
+  type("s 10");
+  CHECK(mode == Mode::Alive, "s 10 не включает показ");
+  type("date 2026-13-01");
+  CHECK(said("Формат: date"), "13-й месяц не принимается");
+  Serial.out.clear();
+  type("42abc");
+  CHECK(said("Не знаю такую команду"), "42abc — не эмоция №42");
+  // Строка длиннее буфера не исполняется, даже если начинается с настоящей команды.
+  Serial.out.clear();
+  type(("xp 9" + std::string(90, '9')).c_str());
+  CHECK(said("Строка длиннее") && progress.xp == xp0, "длинная строка пропущена: %u", progress.xp);
+  // NaN и бесконечность в наклоне и рывке не гасят лицо.
+  type("jerk 1e39 0");
+  type("tilt nan 0.5");
+  run_ms(1500);
+  CHECK(eng.frame().count_lit() > 80, "лицо на месте после NaN: %d пикселей", eng.frame().count_lit());
+  type("tilt 0 0");
+
+  // Автояркость: в темноте и ночью тусклее, яркость пользователя — обычный уровень.
+  type("t 12:00");
+  type("b 128");
+  run_ms(500);
+  CHECK(Wire.emu.contrast == 128, "днём — яркость пользователя: %u", Wire.emu.contrast);
+  type("e dark");
+  run_ms(500);
+  CHECK(Wire.emu.contrast == 8, "в темноте — 1/16: %u", Wire.emu.contrast);
+  type("e light");
+  run_ms(500);
+  CHECK(Wire.emu.contrast == 128, "свет — снова обычная: %u", Wire.emu.contrast);
+  type("t 23:30");
+  run_ms(500);
+  CHECK(Wire.emu.contrast == 32, "ночью — 1/4: %u", Wire.emu.contrast);
+  type("dim");
+  CHECK(Wire.emu.contrast == 128 && said("Автояркость выключена"), "без автояркости — как задано: %u",
+        Wire.emu.contrast);
+  type("dim");
+  type("laugh");
+  CHECK(Wire.emu.contrast == 128, "в ручном режиме — как задано: %u", Wire.emu.contrast);
+  type("a");
+  type("t 12:00");
+  type("b 127");
+  run_ms(1000);
+
+  // Помеха на шине: сорвавшаяся отправка — и следом весь кадр целиком.
+  {
+    const uint32_t f0 = stat_frames;
+    Wire.emu.fail_next = 1;
+    while (stat_frames == f0) loop();
+    CHECK(have_oled && screen_matches(), "после помехи кадр дошёл целиком");
+  }
+  // Экран отключили и подключили снова: модуль включается с нуля — выключен,
+  // постраничная адресация, пустая память. Прошивка находит его, включает и перерисовывает.
+  Serial.out.clear();
+  Wire.emu.present = false;
+  for (const uint64_t end = host::now_us + 3000000ull; host::now_us < end;) loop();
+  CHECK(!have_oled && said("Экран не отвечает"), "пропажа экрана замечена");
+  Wire.emu.present = true;
+  Wire.emu.on = false;
+  Wire.emu.mode = 2;
+  Wire.emu.contrast = 0;
+  memset(Wire.emu.ram, 0, sizeof Wire.emu.ram);
+  for (const uint64_t end = host::now_us + 3000000ull; host::now_us < end;) loop();
+  CHECK(have_oled && Wire.emu.on && Wire.emu.mode == 0 && Wire.emu.contrast == 127 && screen_matches(),
+        "экран вернулся: включён, горизонтальная адресация, яркость %u, кадр на месте", Wire.emu.contrast);
+  run_ms(2000);
+
+  // Запись роста первой версии (с плат разработки) переносится и переписывается в новом формате.
+  {
+    uint8_t v1[56] = {};
+    auto put16 = [&](int o, uint32_t v) { v1[o] = (uint8_t)v, v1[o + 1] = (uint8_t)(v >> 8); };
+    auto put32 = [&](int o, uint32_t v) { put16(o, v & 0xFFFF), put16(o + 2, v >> 16); };
+    put32(0, Progress::kMagic), put16(4, 1), put16(6, 9), put32(8, 1000), v1[32] = 4;
+    for (int i = 0; i < kExprCount; ++i)
+      if (implant_of((Expr)i) <= 4) v1[34 + i / 8] |= (uint8_t)(1u << (i % 8));
+    uint32_t c = 0xFFFFFFFFu;
+    for (int i = 0; i < 52; ++i) {
+      c ^= v1[i];
+      for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+    }
+    put32(52, ~c);
+    Preferences::store()["keychain/progress"].assign(v1, v1 + sizeof v1);
+    setup();
+    CHECK(progress.days == 9 && progress.xp == 1000 && progress.implant == 4,
+          "рост версии 1 перенесён: день %u, опыт %u, имплант %u", progress.days, progress.xp, progress.implant);
+    CHECK(Preferences::store()["keychain/progress"].size() == sizeof(Progress), "и сразу записан в новом формате");
+    run_ms(5000);
+  }
+
+  // Переполнение millis() через 49.7 суток работы: стенд живёт дальше в любом режиме, часы не прыгают.
+  {
+    const uint64_t W = 1ull << 32;
+    const char* const cmds[] = {"neutral", "e charge_start", "e dark"};
+    for (const char* cmd : cmds) {
+      g_skipped_us += (W - 90000u) * 1000ull - host::now_us;
+      host::now_us = (W - 90000u) * 1000ull;
+      setup();
+      type(cmd);
+      type("t 12:00");
+      run_ms(85000);
+      const uint32_t r0 = eng.stats().renders;
+      run_ms(120000);
+      CHECK(eng.stats().renders - r0 > 20, "«%s»: после переполнения лицо живёт (%u отрисовок за 2 мин)", cmd,
+            eng.stats().renders - r0);
+      CHECK(!have_oled || screen_matches(), "«%s»: экран совпадает с кадром", cmd);
+      Serial.out.clear();
+      type("i");
+      CHECK(said("время 12:03") || said("время 12:04"), "«%s»: часы не прыгнули при переполнении", cmd);
+    }
+  }
+
   CHECK(g_mismatch == 0, "экран расходится с кадром %u раз", g_mismatch);
   CHECK(Wire.emu.overflows == 0, "переполнение буфера Wire: %u", Wire.emu.overflows);
 
-  const double sec = host::now_us / 1e6;
+  const double sec = (host::now_us - g_skipped_us) / 1e6;
   printf("Стенд: %.0f с виртуального времени, %u транзакций, %.1f КБ по шине (%.0f байт/с)\n", sec,
          Wire.emu.transactions, Wire.emu.bytes / 1024.0, Wire.emu.bytes / sec);
   if (verbose) fputs(Serial.out.c_str(), stdout);

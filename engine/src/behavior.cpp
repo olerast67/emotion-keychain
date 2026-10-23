@@ -6,8 +6,18 @@ namespace face {
 
 namespace {
 
-constexpr uint32_t kNever = 0xFFFFFFFFu;
 constexpr uint32_t kMin = 60000u;
+constexpr uint32_t kDay = 24u * 60u * kMin;
+// Сюрпризы — не реже раза в неделю: так любой срок остаётся меньше 2^31 мс.
+constexpr uint32_t kMaxSurpriseMs = 7u * kDay;
+constexpr uint32_t kMaxManualMs = 10u * kMin;
+// Сколько показываем продолжение цепочки движка, прежде чем снова выбирать по настроению.
+constexpr uint32_t kFollowMs = 4000u;
+// Дольше этого после своего выбора цепочкам не уступаем: закрытая эмоция может
+// подмениться той же самой (love → adoring → love), и цепочка не кончится никогда.
+constexpr uint32_t kChainMaxMs = 20000u;
+// Сколько ждём, пока движок сам перейдёт по цепочке, если он обновляется после поведения.
+constexpr uint32_t kHoldSlackMs = 50u;
 
 const char* const kEventIds[] = {
 #define FACE_X(n) #n,
@@ -123,8 +133,12 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   rng_.seed(seed ^ 0xA5A5F00Du);
   mood_ = Mood{};
   base_ = Expr::neutral;
-  react_until_ = manual_until_ = 0;
-  last_touch_ = last_event_ = last_decay_ = now;
+  reacting_ = manual_ = follow_ = falling_ = false;
+  react_until_ = manual_until_ = follow_until_ = 0;
+  seen_t0_ = eng_ ? eng_->expression_started_ms() : now;
+  chose_ms_ = now;
+  last_touch_ = last_event_ = last_decay_ = last_now_ = now;
+  dark_since_ = upside_since_ = fall_at_ = now;
   next_idle_ = now + 12000u + rng_.next() % 15000u;
   next_eval_ = now;
   shake_level_ = 0;
@@ -132,16 +146,33 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   for (uint32_t& t : falls_) t = 0;
   for (uint8_t& r : recent_idle_) r = 255;
   for (Expr& r : recent_react_) r = Expr::Count;
-  loud_at_ = last_calling_ = last_cyclops_ = 0;
+  loud_at_ = 0;
+  last_calling_ = last_cyclops_ = now;
   queue_n_ = 0;
   after_scene_ = Expr::Count;
-  next_surprise_ = now + surprise_min_ + rng_.next() % (surprise_max_ - surprise_min_ + 1u);
+  schedule_surprise(now);
   holiday_done_ = 0;
   dark = charging = upside = music_on = speech_on = cold = hot = moving = running = false;
   battery = 2;
   reason_ = "";
   next_ = now;
   if (progress_) attach_progress(progress_);
+}
+
+void Behavior::schedule_surprise(uint32_t now) {
+  next_surprise_ = now + surprise_min_ + rng_.next() % (surprise_max_ - surprise_min_ + 1u);
+}
+
+void Behavior::hold_manual(uint32_t now, uint32_t ms) {
+  manual_ = true;
+  manual_until_ = now + (ms < kMaxManualMs ? ms : kMaxManualMs);
+}
+
+Brightness Behavior::brightness() const {
+  if (dark) return Brightness::Dark;  // в кармане или в тёмной комнате хватает минимума
+  const Expr cur = eng_ ? eng_->expression() : Expr::neutral;
+  if (night() || cur == Expr::sleeping || cur == Expr::sleepy) return Brightness::Dim;
+  return Brightness::Normal;
 }
 
 Expr Behavior::pick(const Option* opts, int n) {
@@ -172,18 +203,53 @@ Expr Behavior::pick(const Option* opts, int n) {
 }
 
 void Behavior::react(Expr e, uint32_t now, uint32_t ms, const char* why, Clip clip) {
-  if (e != Expr::Count) eng_->set_expression(allowed(e), now);
+  if (e != Expr::Count) show(allowed(e), now);
   if (clip != Clip::None) eng_->play_clip(clip, now);
+  reacting_ = true;
   react_until_ = now + ms;
   next_eval_ = react_until_;
-  manual_until_ = 0;
+  manual_ = follow_ = false;
   reason_ = why;
   next_ = now;
 }
 
+void Behavior::show(Expr e, uint32_t now) {
+  eng_->set_expression(e, now);
+  seen_t0_ = eng_->expression_started_ms();
+  chose_ms_ = now;
+}
+
+void Behavior::age_marks(uint32_t now) {
+  auto cap = [&](uint32_t& t) {
+    if (now - t > kDay) t = now - kDay;
+  };
+  cap(last_touch_);
+  cap(last_event_);
+  cap(dark_since_);
+  cap(upside_since_);
+  cap(fall_at_);
+  cap(last_calling_);
+  cap(last_cyclops_);
+  cap(chose_ms_);
+  // Отметки, где 0 значит «не было», просто забываются.
+  for (uint32_t& t : tap_times_)
+    if (t && now - t > kDay) t = 0;
+  for (uint32_t& t : falls_)
+    if (t && now - t > kDay) t = 0;
+  if (loud_at_ && now - loud_at_ > kDay) loud_at_ = 0;
+}
+
 void Behavior::decay(uint32_t now) {
-  const float dt = (float)(now - last_decay_) * 0.001f;
+  age_marks(now);
+  // Черты характера доступны снаружи по ссылке: держим их конечными и в 0..1.
+  pers_.playful = sanef(pers_.playful, 0.6f, 0.0f, 1.0f);
+  pers_.grumpy = sanef(pers_.grumpy, 0.3f, 0.0f, 1.0f);
+  pers_.sleepy = sanef(pers_.sleepy, 0.4f, 0.0f, 1.0f);
+  pers_.shy = sanef(pers_.shy, 0.4f, 0.0f, 1.0f);
+  uint32_t dt_ms = now - last_decay_;
   last_decay_ = now;
+  if (dt_ms > kDay) dt_ms = kDay;
+  const float dt = (float)dt_ms * 0.001f;
   if (dt <= 0.0f) return;
   Mood& m = mood_;
   m.valence += (0.15f - m.valence) * clampf(dt * 0.01f, 0.0f, 1.0f);
@@ -202,6 +268,8 @@ void Behavior::decay(uint32_t now) {
 void Behavior::on_event(Event e, uint32_t now) {
   if (!eng_) return;
   decay(now);
+  last_now_ = now;
+  eng_->note_activity(now);
   const uint32_t since_touch = now - last_touch_;
   last_event_ = now;
   mood_.boredom *= 0.3f;
@@ -299,13 +367,16 @@ void Behavior::on_event(Event e, uint32_t now) {
     }
     case Event::free_fall: {
       fall_at_ = now;
+      falling_ = true;
       mood_.arousal = 1.0f;
       const Option o[] = {{Expr::terrified, 3}, {Expr::scared, 2}, {Expr::screaming, 1}};
       react(pick(o), now, 1500, "падаю!");
       break;
     }
     case Event::impact: {
-      const bool fell = now - fall_at_ < 2000u;
+      // Падением считается только удар вскоре после свободного падения.
+      const bool fell = falling_ && now - fall_at_ < 2000u;
+      falling_ = false;
       mood_.valence = clamp11(mood_.valence - (fell ? 0.35f : 0.12f));
       if (fell) {
         falls_[2] = falls_[1];
@@ -370,6 +441,7 @@ void Behavior::on_event(Event e, uint32_t now) {
       react(Expr::upside_down, now, 2200, "перевернули вверх ногами");
       break;
     case Event::upright:
+      if (!upside) break;  // и не был вверх ногами: возвращать нечего
       upside = false;
       if (now - upside_since_ > 5000u)
         react(Expr::dizzy, now, 2500, "долго висел вверх ногами");
@@ -607,17 +679,30 @@ void Behavior::idle_action(uint32_t now) {
 void Behavior::update(uint32_t now) {
   if (!eng_) return;
   decay(now);
-  if (now < manual_until_) {
-    next_ = manual_until_;
-    return;
+  last_now_ = now;
+  // Срок по умолчанию — горизонт сна; ветки ниже приближают его.
+  next_ = now + kMaxSleepMs;
+  auto wake = [&](uint32_t t) {
+    if (time_left(now, t) < time_left(now, next_)) next_ = t;
+  };
+  if (manual_) {
+    if (!time_reached(now, manual_until_)) {
+      next_ = manual_until_;
+      return;
+    }
+    manual_ = false;
   }
   if (!auto_) {
-    next_ = kNever;
+    // Автоматика выключена: сроки держим свежими, чтобы после включения всё пошло сразу.
+    reacting_ = follow_ = false;
+    next_eval_ = now;
+    next_idle_ = now + 12000u;
+    if (time_reached(now, next_surprise_)) schedule_surprise(now);
     return;
   }
   // Пока идёт сцена, персонаж не отвлекается; после неё — эмоция-развязка.
   if (eng_->scene() != Scene::None) {
-    next_ = eng_->scene_ends_ms();
+    wake(eng_->scene_ends_ms());
     return;
   }
   if (run_queue(now)) return;
@@ -627,9 +712,20 @@ void Behavior::update(uint32_t now) {
     react(e, now, 3500, after_why_);
     return;
   }
-  if (now < react_until_) {
-    next_ = react_until_;
-    return;
+  if (reacting_) {
+    if (!time_reached(now, react_until_)) {
+      next_ = react_until_;
+      return;
+    }
+    reacting_ = false;
+  }
+  // Эмоцию сменил сам движок (цепочка «смех → радость»): даём её продолжению побыть на экране.
+  const uint32_t started = eng_->expression_started_ms();
+  const bool chain_ok = now - chose_ms_ < kChainMaxMs;
+  if (started != seen_t0_) {
+    seen_t0_ = started;
+    follow_ = chain_ok;
+    follow_until_ = started + kFollowMs;
   }
   const Expr curx = eng_->expression();
   const bool awake = curx != Expr::sleeping && curx != Expr::sleepy && curx != Expr::pocket_peek && !dark;
@@ -655,34 +751,46 @@ void Behavior::update(uint32_t now) {
       return;
     }
   }
-  if (awake && !charging && now >= next_surprise_) {
-    surprise(now);
-    return;
+  if (time_reached(now, next_surprise_)) {
+    if (awake && !charging) {
+      surprise(now);
+      return;
+    }
+    next_surprise_ = now;  // время пришло во сне или на зарядке — покажем, когда проснётся
   }
   // Не перебиваем цепочку эмоции (например, смех → радость), пока она не доиграла.
-  const Expression& cur = expression(eng_->expression());
-  const uint32_t started = eng_->expression_started_ms();
-  if (cur.hold_ms && now - started < cur.hold_ms) {
-    next_ = started + cur.hold_ms;
+  // Небольшой запас — на случай, если движок обновится в этом цикле уже после поведения.
+  const Expression& cur = expression(curx);
+  if (cur.hold_ms && chain_ok && now - started <= cur.hold_ms + kHoldSlackMs) {
+    const uint32_t end = started + cur.hold_ms + 1u;
+    next_ = time_reached(now, end) ? now + 1u : end;
     return;
   }
-  if (now >= next_eval_) {
+  if (follow_) {
+    if (chain_ok && !time_reached(now, follow_until_)) {
+      next_ = follow_until_;
+      return;
+    }
+    follow_ = false;
+  }
+  if (time_reached(now, next_eval_)) {
     const Expr want = allowed(choose_base(now));
     if (want != eng_->expression()) {
-      eng_->set_expression(want, now);
+      show(want, now);
       reason_ = "настроение и обстановка";
     }
     base_ = want;
     next_eval_ = now + 4000u;
   }
-  if (now >= next_idle_) {
+  if (time_reached(now, next_idle_)) {
     idle_action(now);
     const bool sleepy = mood_.energy < 0.3f;
     next_idle_ = now + (12000u + rng_.next() % 28000u) * (sleepy ? 2u : 1u);
   }
-  next_ = next_eval_ < next_idle_ ? next_eval_ : next_idle_;
-  if (next_surprise_ > now && next_surprise_ < next_) next_ = next_surprise_;
-  if (react_until_ > now && react_until_ < next_) next_ = react_until_;
+  if (reacting_) wake(react_until_);
+  wake(next_eval_);
+  wake(next_idle_);
+  if (!time_reached(now, next_surprise_)) wake(next_surprise_);
 }
 
 // ---------------------------------------------------------------- рост, сцены, встречи
@@ -750,7 +858,7 @@ Expr Behavior::pick_unlocked(const Expr* opts, int n) {
 
 void Behavior::queue_scene(Scene s, const SceneParams& p, Expr after, uint32_t now, const char* why) {
   if (queue_n_ < 4) queue_[queue_n_++] = Queued{s, p, after, why};
-  manual_until_ = 0;
+  manual_ = false;
   reason_ = why;
   next_ = now;
   if (eng_->scene() == Scene::None && after_scene_ == Expr::Count) run_queue(now);
@@ -797,6 +905,7 @@ void Behavior::add_steps(uint32_t steps, uint32_t now) {
 
 void Behavior::meet(const char* code, bool is_new, uint32_t now) {
   last_event_ = last_touch_ = now;
+  if (eng_) eng_->note_activity(now);
   mood_.valence = clamp11(mood_.valence + 0.2f);
   mood_.affection = clamp01(mood_.affection + 0.05f);
   SceneParams p;
@@ -809,6 +918,7 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now) {
 
 void Behavior::duel(const char* code, bool won, uint32_t now) {
   last_event_ = now;
+  if (eng_) eng_->note_activity(now);
   SceneParams p;
   p.set_text(code);
   p.value = won ? 1 : 0;
@@ -835,13 +945,13 @@ void Behavior::set_date(uint16_t year, uint8_t month, uint8_t day) {
 }
 
 void Behavior::set_surprise_interval(uint32_t min_ms, uint32_t max_ms, uint32_t now) {
-  surprise_min_ = min_ms;
-  surprise_max_ = max_ms > min_ms ? max_ms : min_ms + 1;
-  next_surprise_ = now + surprise_min_ + rng_.next() % (surprise_max_ - surprise_min_ + 1u);
+  surprise_max_ = max_ms < kMaxSurpriseMs ? max_ms : kMaxSurpriseMs;
+  surprise_min_ = min_ms < surprise_max_ ? min_ms : surprise_max_;
+  schedule_surprise(now);
 }
 
 void Behavior::surprise(uint32_t now) {
-  next_surprise_ = now + surprise_min_ + rng_.next() % (surprise_max_ - surprise_min_ + 1u);
+  schedule_surprise(now);
   const bool cyber = eng_->options().theme == Theme::Cyber;
   struct Opt {
     Scene s;

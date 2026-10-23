@@ -7,6 +7,7 @@
 #include "face/engine.h"
 #include "face/identity.h"
 #include "face/progress.h"
+#include "face/render.h"
 #include "face/scenes.h"
 #include "face/text.h"
 
@@ -100,8 +101,6 @@ static void test_every_expression_renders() {
 static void test_safe_area_and_strokes() {
   for (int i = 0; i < kExprCount; ++i) {
     const Expr e = (Expr)i;
-    // Летучая мышь по задумке пролетает через весь экран.
-    const bool crosses = expression(e).overlays & ov(Overlay::Bat);
     FaceEngine eng;
     eng.init(1234 + i, 0);
     eng.set_expression(e, 0, 0);
@@ -121,7 +120,7 @@ static void test_safe_area_and_strokes() {
           if ((!f.get(x - 1, y) && !f.get(x + 1, y)) || (!f.get(x, y - 1) && !f.get(x, y + 1))) ++thin;
         }
     }
-    if (!crosses) CHECK(margin >= kSafeMargin - 1, "%s: до края %d px", expression(e).id, margin);
+    CHECK(margin >= kSafeMargin - 1, "%s: до края %d px", expression(e).id, margin);
     CHECK(lit == 0 || thin * 100 < lit * 10, "%s: однопиксельных пикселей %ld%%", expression(e).id,
           lit ? thin * 100 / lit : 0);
   }
@@ -420,7 +419,6 @@ static void test_cyber_theme_and_tilt() {
   q.cyber_eye = true;
   for (int i = 0; i < kExprCount; ++i) {
     const Expr e = (Expr)i;
-    if (expression(e).overlays & ov(Overlay::Bat)) continue;
     FaceEngine eng;
     eng.options().drift = false;
     eng.options().theme = Theme::Cyber;
@@ -521,6 +519,560 @@ static void test_growth_behavior() {
   CHECK(bday, "день рождения хозяина");
 }
 
+// ---------------------------------------------------------------- время, батарея, устойчивость
+
+// Цикл как в прошивке: опрос раз в 1 мс, а отправка изменённых окон по I2C на 400 кГц
+// занимает ~23 мкс на байт плюс команды окна. Время 64-битное, в движок идёт uint32.
+struct FirmwareLoop {
+  FaceEngine* eng;
+  Behavior* bh;
+  uint64_t t;
+  uint64_t last_eng = 0, last_bh = 0, max_eng_gap = 0, max_bh_gap = 0;
+  uint32_t eng_updates = 0, bh_updates = 0, frames = 0, max_ahead = 0;
+  void reset_stats() {
+    last_eng = last_bh = t;
+    max_eng_gap = max_bh_gap = 0;
+    eng_updates = bh_updates = frames = 0;
+  }
+  void step() {
+    const uint32_t now = (uint32_t)t;
+    uint32_t cost_us = 1000;
+    if (bh && time_reached(now, bh->next_update_ms())) {
+      bh->update(now);
+      ++bh_updates;
+      if (t - last_bh > max_bh_gap) max_bh_gap = t - last_bh;
+      last_bh = t;
+      max_ahead = imax((int)max_ahead, (int)time_left(now, bh->next_update_ms()));
+    }
+    if (time_reached(now, eng->next_update_ms())) {
+      if (eng->update(now)) {
+        DirtyWindow w[kPages];
+        const int n = eng->dirty(w);
+        cost_us += (uint32_t)dirty_bytes(w, n) * 23u + (uint32_t)n * 300u;
+        ++frames;
+      }
+      ++eng_updates;
+      if (t - last_eng > max_eng_gap) max_eng_gap = t - last_eng;
+      last_eng = t;
+      max_ahead = imax((int)max_ahead, (int)time_left(now, eng->next_update_ms()));
+    }
+    t += (cost_us + 999u) / 1000u;
+  }
+  void run_until(uint64_t end) {
+    while (t < end) step();
+  }
+};
+
+// millis() переполняется раз в 49.7 суток. Лицо и характер живут дальше во всех состояниях:
+// не замирают, не крутятся вхолостую по 1 мс перед переполнением и не засыпают на полтора месяца.
+static void test_millis_wrap() {
+  const uint64_t W = 1ull << 32;
+  struct Case {
+    const char* name;
+    Event ev;
+    bool manual;
+  };
+  const Case cases[] = {{"ручной режим", Event::Count, true},
+                        {"на зарядке", Event::charge_start, false},
+                        {"во сне в темноте", Event::dark, false},
+                        {"бодрствует", Event::Count, false}};
+  for (const Case& c : cases) {
+    for (uint32_t phase = 0; phase < 4; ++phase) {
+      FaceEngine eng;
+      Behavior bh;
+      const uint64_t t0 = W - 150000u - phase * 7919u;
+      eng.init(11 + phase, (uint32_t)t0);
+      bh.init(&eng, 11 + phase, (uint32_t)t0);
+      bh.set_clock(c.ev == Event::dark ? 23 * 60 : 12 * 60);
+      if (c.manual) {
+        bh.set_auto(false);
+        eng.set_expression(Expr::neutral, (uint32_t)t0);
+      }
+      if (c.ev != Event::Count) bh.on_event(c.ev, (uint32_t)t0);
+      FirmwareLoop lp{&eng, &bh, t0};
+      lp.run_until(W - 30000u);
+      lp.reset_stats();
+      lp.run_until(W);
+      const uint32_t before = lp.eng_updates;
+      lp.reset_stats();
+      lp.run_until(W + 180000u);
+      CHECK(before < 2000, "%s, фаза %u: перед переполнением %u обновлений за 30 с — холостой цикл", c.name, phase,
+            before);
+      CHECK(lp.max_eng_gap <= kMaxSleepMs + kWakeMergeMs + 50, "%s, фаза %u: лицо замерло на %.1f с после переполнения",
+            c.name, phase, lp.max_eng_gap / 1000.0);
+      CHECK(lp.frames >= 5, "%s, фаза %u: после переполнения всего %u кадров", c.name, phase, lp.frames);
+      CHECK(lp.bh_updates >= 3 && lp.max_bh_gap <= kMaxSleepMs + 50,
+            "%s, фаза %u: характер замер (%u обновлений, пауза %.1f с)", c.name, phase, lp.bh_updates,
+            lp.max_bh_gap / 1000.0);
+      CHECK(lp.max_ahead <= kMaxSleepMs + kWakeMergeMs, "%s, фаза %u: расписание на %u мс вперёд", c.name, phase,
+            lp.max_ahead);
+    }
+  }
+
+  // Сюрпризы рядом с переполнением идут по расписанию, а не подряд.
+  FaceEngine eng;
+  Behavior bh;
+  const uint64_t t0 = W - 3u * 3600000u;
+  eng.init(5, (uint32_t)t0);
+  bh.init(&eng, 5, (uint32_t)t0);
+  bh.set_surprise_interval(3600000u, 7200000u, (uint32_t)t0);
+  int scenes = 0;
+  Scene last = Scene::None;
+  for (uint64_t t = t0; t < W + 3600000u;) {
+    const uint32_t now = (uint32_t)t;
+    bh.set_clock(12 * 60);
+    if (time_reached(now, bh.next_update_ms())) bh.update(now);
+    if (time_reached(now, eng.next_update_ms())) eng.update(now);
+    if (eng.scene() != last && eng.scene() != Scene::None) ++scenes;
+    last = eng.scene();
+    const uint32_t wait = imin((int)time_left(now, bh.next_update_ms()), (int)time_left(now, eng.next_update_ms()));
+    t += wait ? wait : 1;
+  }
+  CHECK(scenes >= 1 && scenes <= 4, "за 4 часа у переполнения %d сюрпризов (раз в 1–2 часа)", scenes);
+}
+
+static int lit_now(const FaceEngine& eng) { return eng.frame().count_lit(); }
+
+// Чих, испуг и «тык» не отменяют моргание навсегда, даже если начались посреди него.
+static void test_blink_survives_clips() {
+  const Clip clips[] = {Clip::sneeze, Clip::startle, Clip::boop};
+  int lost = 0, total = 0;
+  for (uint32_t seed = 1; seed <= 30; ++seed) {
+    for (Clip c : clips) {
+      FaceEngine eng;
+      eng.options().drift = false;
+      eng.init(seed, 0);
+      uint32_t t = 0;
+      eng.set_expression(Expr::neutral, t, 0);
+      eng.update(t);
+      while (t < 8000u + seed * 37u) {
+        t = eng.next_update_ms();
+        eng.update(t);
+      }
+      const int open = lit_now(eng);
+      eng.play_clip(c, t);
+      const uint32_t clip_end = t + clip_duration_ms(c) + 100u;
+      bool blinked = false;
+      while (t < clip_end + 20000u && !blinked) {
+        t = eng.next_update_ms();
+        eng.update(t);
+        if (t > clip_end && lit_now(eng) < open * 6 / 10) blinked = true;
+      }
+      ++total;
+      lost += !blinked;
+    }
+  }
+  CHECK(lost == 0, "после клипа моргание пропало в %d случаях из %d", lost, total);
+}
+
+// NaN и бесконечности снаружи не ломают лицо: ни взгляд, ни наклон, ни внешность.
+static void test_nonfinite_inputs() {
+  const float nan = __builtin_nanf(""), inf = __builtin_inff();
+  FaceEngine eng;
+  eng.init(3, 0);
+  uint32_t t = 0;
+  settle(eng, Expr::neutral, t);
+  auto run = [&](uint32_t ms) {
+    for (const uint32_t end = t + ms; t < end; t += 33) eng.update(t);
+  };
+  eng.jerk(inf, 0.0f, t);
+  eng.jerk(-inf, 1.0f, t);
+  run(1500);
+  CHECK(lit_now(eng) > 80 && finitef(eng.face().gx), "рывок с бесконечностью: %d пикселей", lit_now(eng));
+  eng.set_tilt(nan, 0.5f);
+  run(1500);
+  CHECK(lit_now(eng) > 80 && finitef(eng.face().gx) && finitef(eng.face().gy), "наклон с NaN: %d пикселей",
+        lit_now(eng));
+  eng.look_at(nan, inf, t, 1000);
+  run(1500);
+  CHECK(lit_now(eng) > 80 && finitef(eng.face().gx), "взгляд с NaN");
+  Quirks q;
+  q.spacing = nan, q.eye_scale = inf, q.pupil_scale = -inf, q.blink_rate = nan, q.brow_lift = nan;
+  eng.set_quirks(q, t);
+  run(3000);
+  CHECK(lit_now(eng) > 80 && finitef(eng.quirks().eye_scale) && finitef(eng.quirks().blink_rate), "внешность с NaN");
+  eng.set_tilt(0.8f, 0.0f);
+  run(1500);
+  CHECK(eng.face().gx > 0.5f, "после NaN наклон снова работает: %.2f", eng.face().gx);
+
+  Behavior bh;
+  bh.init(&eng, 3, t);
+  bh.personality().playful = nan;
+  bh.personality().sleepy = inf;
+  for (int i = 0; i < 20; ++i) {
+    bh.on_event(Event::tap, t);
+    bh.update(t);
+    run(500);
+  }
+  CHECK(finitef(bh.mood().energy) && finitef(bh.personality().playful) && lit_now(eng) > 80, "характер с NaN");
+}
+
+static uint32_t tilt_renders_per_min(bool feed, float noise) {
+  FaceEngine eng;
+  eng.init(3, 0);
+  uint32_t t = 0;
+  eng.set_expression(Expr::neutral, t, 0);
+  eng.update(t);
+  Rng r;
+  r.seed(99);
+  uint32_t next_imu = 0;
+  uint32_t renders0 = 0;
+  bool started = false;
+  while (t < 65000) {
+    if (!started && t >= 5000) started = true, renders0 = eng.stats().renders;
+    if (feed && time_reached(t, next_imu)) {
+      eng.set_tilt(0.4f + r.range(-noise, noise), 0.3f + r.range(-noise, noise));
+      next_imu = t + 20;  // акселерометр 50 Гц
+    }
+    if (time_reached(t, eng.next_update_ms())) eng.update(t);
+    uint32_t n = imin((int)time_left(t, eng.next_update_ms()), feed ? (int)time_left(t, next_imu) : 1 << 30);
+    t += n ? n : 1;
+  }
+  return eng.stats().renders - renders0;
+}
+
+// Шум акселерометра не будит движок и не дёргает зрачки, а настоящий наклон работает.
+static void test_tilt_noise() {
+  const uint32_t still = tilt_renders_per_min(false, 0.0f), noisy = tilt_renders_per_min(true, 0.01f);
+  CHECK(noisy <= still * 13 / 10 + 30, "наклон с шумом 50 Гц: %u отрисовок/мин против %u без него", noisy, still);
+  printf("  наклон с шумом ±0.01 на 50 Гц: %u отрисовок/мин, без наклона %u\n", noisy, still);
+
+  // Рывок в ту же сторону только продлевает взгляд, не будит движок заново.
+  FaceEngine eng;
+  eng.init(3, 0);
+  uint32_t t = 0;
+  settle(eng, Expr::neutral, t);
+  eng.jerk(1.0f, 0.0f, t);
+  for (int i = 0; i < 5; ++i) eng.update(t += 33);
+  const uint32_t next = eng.next_update_ms();
+  eng.jerk(1.0f, 0.02f, t + 10);
+  CHECK(eng.next_update_ms() == next, "повторный рывок в ту же сторону разбудил движок");
+}
+
+static uint32_t wakes_per_min(Expr e, uint32_t* renders = nullptr, uint32_t* frames = nullptr) {
+  FaceEngine eng;
+  eng.init(7, 0);
+  uint32_t t = 0;
+  eng.set_expression(e, t, 0);
+  eng.update(t);
+  while (t < 5000) {
+    t = eng.next_update_ms();
+    eng.update(t);
+  }
+  const EngineStats s0 = eng.stats();
+  uint32_t wakes = 0;
+  while (t < 65000) {
+    t = eng.next_update_ms();
+    eng.update(t);
+    ++wakes;
+  }
+  if (renders) *renders = eng.stats().renders - s0.renders;
+  if (frames) *frames = eng.stats().frames - s0.frames;
+  return wakes;
+}
+
+// Дрожь от холода — приступами 1 с из 4, и между приступами процессор спит.
+static void test_shiver_wakes() {
+  const uint32_t w = wakes_per_min(Expr::cold);
+  CHECK(w < 900, "холод: %u пробуждений в минуту", w);
+}
+
+// Значки будят процессор, только когда меняется их картинка.
+static void test_overlay_clocks() {
+  uint32_t w = 0;
+  CHECK(overlay_clock(Overlay::Ellipsis, 300, &w) == 289 && w == 577 - 300, "многоточие: шаги по точкам");
+  CHECK(overlay_clock(Overlay::BatteryLow, 10, &w) == 1 && w == 771, "батарейка мигает дважды за цикл");
+  CHECK(overlay_clock(Overlay::Exclaim, 700, &w) == 600 && w == 0, "«!» замирает после встряски");
+  CHECK(overlay_clock(Overlay::Sweat, 12345, &w) == 0 && w == 0, "капля пота статична");
+  CHECK(overlay_clock(Overlay::Zzz, 30u * 86400000u + 123u, &w) < 3200, "время Zzz не растёт дальше цикла");
+  uint32_t r_low = 0, r_bored = 0, r_listen = 0;
+  wakes_per_min(Expr::low_battery, &r_low);
+  wakes_per_min(Expr::bored, &r_bored);
+  wakes_per_min(Expr::listening, &r_listen);
+  CHECK(r_low < 520, "мало заряда: %u отрисовок/мин", r_low);
+  CHECK(r_bored < 650, "скука: %u отрисовок/мин", r_bored);
+  CHECK(r_listen < 800, "слушает: %u отрисовок/мин", r_listen);
+}
+
+static uint32_t crc32_ref(const uint8_t* p, uint32_t n) {
+  uint32_t c = 0xFFFFFFFFu;
+  for (uint32_t i = 0; i < n; ++i) {
+    c ^= p[i];
+    for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+  }
+  return ~c;
+}
+
+// Запись роста не зависит от порядка каталога и переносится со старой версии.
+static void test_progress_format() {
+  bool keys_ok = true;
+  for (int i = 0; i < kExprCount; ++i) {
+    if (!Progress::key((Expr)i)) keys_ok = false;
+    for (int j = 0; j < i; ++j)
+      if (Progress::key((Expr)i) == Progress::key((Expr)j)) keys_ok = false;
+  }
+  CHECK(keys_ok, "ключи эмоций разные и не нулевые");
+
+  // Дуэль кладёт эмоцию в список дополнительных, имплант потом освобождает место.
+  Progress p;
+  p.reset();
+  Rng rng;
+  rng.seed(7);
+  const Expr won = p.steal_one(rng);
+  CHECK(won != Expr::Count && p.is_unlocked(won) && p.extra_count() == 1, "выигранная эмоция в списке дополнительных");
+  p.add_xp(implant(1).xp);
+  CHECK(p.is_unlocked(won) && p.extra_count() == 0, "имплант открыл её и освободил место");
+  int filled = 0;
+  for (int i = 0; i < kExprCount; ++i)
+    if (!p.is_unlocked((Expr)i) && p.unlock((Expr)i)) ++filled;
+  CHECK(filled == Progress::kExtraSlots && p.steal_one(rng) == Expr::Count, "в список влезает %d, не больше", filled);
+  Progress all;
+  all.reset();
+  all.unlock_all();
+  CHECK(all.unlocked_count() == kExprCount, "«открыть всё» — флагом");
+
+  // Своя версия: запись → чтение без потерь; порча и чужая версия не проходят.
+  p.seal();
+  Progress back;
+  CHECK(back.load(&p, sizeof p) && memcmp(&back, &p, sizeof p) == 0, "запись читается без потерь");
+  Progress bad = p;
+  bad.xp ^= 1;
+  CHECK(!back.load(&bad, sizeof bad), "испорченная запись не читается");
+  Progress future = p;
+  future.version = Progress::kVersion + 1;
+  future.seal();
+  CHECK(!back.load(&future, sizeof future), "запись более новой версии не читается");
+
+  // Версия 1: битовая карта по номерам каталога. Сверх имплантов открыто «рыдание» — выиграно в дуэли.
+  uint8_t v1[56] = {};
+  auto put16 = [&](int o, uint32_t v) { v1[o] = (uint8_t)v, v1[o + 1] = (uint8_t)(v >> 8); };
+  auto put32 = [&](int o, uint32_t v) { put16(o, v & 0xFFFF), put16(o + 2, v >> 16); };
+  put32(0, Progress::kMagic), put16(4, 1), put16(6, 17), put32(8, 700), put32(12, 321), put32(16, 54321);
+  put16(20, 3), put16(22, 2), put16(24, 1), put16(26, 8), put16(28, 10), put16(30, 42), v1[32] = 3;
+  for (int i = 0; i < kExprCount; ++i)
+    if (implant_of((Expr)i) <= 3) v1[34 + i / 8] |= (uint8_t)(1u << (i % 8));
+  v1[34 + (int)Expr::sobbing / 8] |= (uint8_t)(1u << ((int)Expr::sobbing % 8));
+  put32(52, crc32_ref(v1, 52));
+  Progress m;
+  CHECK(m.load(v1, sizeof v1) && m.valid() && m.version == Progress::kVersion, "запись версии 1 переносится");
+  CHECK(m.days == 17 && m.xp == 700 && m.touches == 321 && m.steps == 54321 && m.friends == 3 && m.implant == 3 &&
+            m.step_rest == 42,
+        "поля версии 1 на месте");
+  CHECK(m.is_unlocked(Expr::sobbing) && !m.is_unlocked(Expr::furious) && m.extra_count() == 1,
+        "выигранная в версии 1 эмоция осталась открытой");
+  v1[10] ^= 1;
+  CHECK(!m.load(v1, sizeof v1), "испорченная запись версии 1 не читается");
+}
+
+// Цепочка движка «смех → радость» доигрывает: радость видна, характер её не перебивает.
+// А цепочка, которая замкнулась на себя (закрытая эмоция подменилась той же), не вечна.
+static void test_chain_follow_up() {
+  FaceEngine eng;
+  Behavior bh;
+  eng.init(9, 0);
+  bh.init(&eng, 9, 0);
+  uint64_t t = 1000;
+  FirmwareLoop lp{&eng, &bh, t};
+  lp.run_until(20000);
+  bh.queue_scene(Scene::boot, SceneParams{}, Expr::laugh, (uint32_t)lp.t, "тест");
+  bool laughed = false;
+  uint32_t happy_ms = 0;
+  for (const uint64_t end = lp.t + 16000; lp.t < end;) {
+    const uint64_t before = lp.t;
+    lp.step();
+    if (eng.scene() != Scene::None) continue;
+    if (eng.expression() == Expr::laugh) laughed = true;
+    if (laughed && eng.expression() == Expr::happy) happy_ms += (uint32_t)(lp.t - before);
+  }
+  CHECK(laughed && happy_ms >= 2000, "после смеха радость была видна %u мс", happy_ms);
+
+  Progress fresh;
+  fresh.reset();
+  bh.attach_progress(&fresh);
+  CHECK(!fresh.is_unlocked(Expr::adoring) && bh.allowed(Expr::adoring) == Expr::love,
+        "love → adoring замыкается на love");
+  bh.queue_scene(Scene::boot, SceneParams{}, Expr::love, (uint32_t)lp.t, "тест");
+  lp.run_until(lp.t + 6000);
+  bool left = false;
+  for (const uint64_t end = lp.t + 40000; lp.t < end; lp.step()) left |= eng.expression() != Expr::love;
+  CHECK(left, "замкнутая цепочка love держится вечно");
+}
+
+// Значок появляется с «пружинкой», даже если лицо перед этим долго стояло.
+static void test_overlay_pop_after_idle() {
+  FaceEngine eng;
+  eng.options().drift = false;
+  eng.options().idle_motion = false;
+  eng.init(2, 0);
+  eng.set_expression(Expr::neutral, 0, 0);
+  eng.update(0);
+  eng.set_expression(Expr::nervous, 3000, 0);  // капля пота
+  eng.update(3000);
+  const int first = lit_now(eng);
+  for (uint32_t t = 3033; t < 3500; t += 33) eng.update(t);
+  CHECK(first < lit_now(eng), "капля появилась сразу целиком: %d → %d пикселей", first, lit_now(eng));
+}
+
+// Движение и значки через месяц на одной эмоции идут так же, как в первые секунды.
+static void test_long_hold_precision() {
+  FaceEngine eng;
+  eng.init(4, 0);
+  eng.set_expression(Expr::charging, 0, 0);
+  auto frames = [&](uint32_t from) {
+    uint32_t t = from;
+    eng.update(t);
+    const uint32_t f0 = eng.stats().frames;
+    while (t < from + 10000) {
+      t = eng.next_update_ms();
+      eng.update(t);
+    }
+    return eng.stats().frames - f0;
+  };
+  const uint32_t early = frames(5000);
+  uint32_t t = 15000;
+  for (; t < 30u * 86400000u; t += 59000u) eng.update(t);
+  const uint32_t late = frames(t);
+  CHECK(late * 4 >= early * 3 && late * 4 <= early * 5, "кадров за 10 с: в начале %u, через месяц %u", early, late);
+}
+
+// Удар без падения — не падение; «перевернули обратно» без переворота — не головокружение.
+static void test_behavior_fresh_state() {
+  FaceEngine eng;
+  Behavior bh;
+  eng.init(1, 1000);
+  bh.init(&eng, 1, 1000);
+  bh.on_event(Event::impact, 1500);
+  CHECK(strcmp(bh.last_reason(), "стукнули") == 0, "удар сразу после старта: «%s»", bh.last_reason());
+  bh.on_event(Event::upright, 30000);
+  CHECK(eng.expression() != Expr::dizzy && strcmp(bh.last_reason(), "стукнули") == 0,
+        "upright без переворота: %s, «%s»", expr_id(eng.expression()), bh.last_reason());
+  bh.on_event(Event::free_fall, 40000);
+  bh.on_event(Event::impact, 40500);
+  CHECK(strcmp(bh.last_reason(), "упал и ударился") == 0, "падение и удар: «%s»", bh.last_reason());
+
+  // Автоматика выключена надолго, потом включена — характер сразу в деле.
+  for (uint32_t tt = 50000; tt < 50000u + 3600000u; tt += 20000) {
+    if (tt == 50000) bh.set_auto(false);
+    bh.update(tt);
+  }
+  bh.set_auto(true);
+  CHECK(time_reached(50000u + 3600000u, bh.next_update_ms()), "после включения автоматики поведение ждёт");
+}
+
+// Оскал рисуется без однопиксельных линий и щелей.
+static void test_teeth_strokes() {
+  for (int i = 0; i < kExprCount; ++i) {
+    const Expression& x = expression((Expr)i);
+    if (x.mouth.kind != MouthKind::Teeth) continue;
+    Face f;
+    expression_face((Expr)i, &f);
+    for (int k = 0; k < 2; ++k) f.eye[k] = no_eye(), f.brow[k].len = 0;
+    Framebuffer fb;
+    fb.clear();
+    render_face(fb, f, nullptr);
+    int lonely = 0;
+    for (int y = 0; y < kHeight; ++y)
+      for (int x2 = 0; x2 < kWidth; ++x2) {
+        if (!fb.get(x2, y)) continue;
+        bool in_block = false;
+        for (int dy = -1; dy <= 0 && !in_block; ++dy)
+          for (int dx = -1; dx <= 0 && !in_block; ++dx)
+            in_block = fb.get(x2 + dx, y + dy) && fb.get(x2 + dx + 1, y + dy) && fb.get(x2 + dx, y + dy + 1) &&
+                       fb.get(x2 + dx + 1, y + dy + 1);
+        lonely += !in_block;
+      }
+    CHECK(lonely == 0, "%s: в оскале %d однопиксельных пикселей", x.id, lonely);
+  }
+}
+
+// Щетина привязана к лицу: сдвиг лица сдвигает точки, в том числе левее нуля.
+static void test_stubble_follows_face() {
+  Face f;
+  expression_face(Expr::soy_scream, &f);
+  Framebuffer a, b;
+  a.clear(), b.clear();
+  Anchors an;
+  f.ox = -3.0f;
+  render_face(a, f, &an);
+  a.clear();
+  render_overlay(a, Overlay::Stubble, an, 1.0f, 0.0f);
+  f.ox = 0.0f;
+  render_face(b, f, &an);
+  b.clear();
+  render_overlay(b, Overlay::Stubble, an, 1.0f, 0.0f);
+  int diff = 0, lit = 0;
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 12; x < 112; ++x) diff += a.get(x - 3, y) != b.get(x, y), lit += b.get(x, y);
+  CHECK(lit > 20 && diff == 0, "щетина не следует за лицом: %d расхождений из %d", diff, lit);
+}
+
+// Пробуждения, выпавшие ближе 20 мс друг к другу, сливаются; а дальше минуты движок не спит.
+static void test_wake_merge_and_horizon() {
+  FaceEngine eng;
+  eng.init(6, 0);
+  eng.options().drift = true;
+  uint32_t t = 0;
+  eng.set_expression(Expr::neutral, t, 0);
+  eng.update(t);
+  int idle_short = 0, wakes = 0;
+  bool prev_changed = true;
+  uint32_t longest = 0;
+  while (t < 600000) {
+    const uint32_t n = eng.next_update_ms();
+    if (n - t < kWakeMergeMs && !prev_changed) ++idle_short;
+    longest = n - t > longest ? n - t : longest;
+    t = n;
+    prev_changed = eng.update(t);
+    ++wakes;
+  }
+  CHECK(idle_short == 0, "%d пробуждений ближе %u мс без анимации", idle_short, kWakeMergeMs);
+  CHECK(longest <= kMaxSleepMs + kWakeMergeMs, "движок проспал %u мс", longest);
+}
+
+// Через несколько минут без внимания лицо успокаивается: жесты реже, кадров меньше.
+static void test_calm_breathing() {
+  FaceEngine eng;
+  eng.init(8, 0);
+  uint32_t t = 0;
+  eng.set_expression(Expr::neutral, t, 0);
+  eng.update(t);
+  auto frames = [&](uint32_t to) {
+    const uint32_t f0 = eng.stats().frames;
+    while (t < to) {
+      t = eng.next_update_ms();
+      eng.update(t);
+    }
+    return eng.stats().frames - f0;
+  };
+  frames(10000);
+  const uint32_t lively = frames(70000);
+  frames(250000);
+  const uint32_t calm = frames(310000);
+  CHECK(eng.calm() && calm * 10 < lively * 7, "спокойное лицо: %u кадров/мин против %u", calm, lively);
+  eng.note_activity(t);
+  CHECK(!eng.calm(), "внимание возвращает живость");
+  printf("  нейтральное лицо: %u кадров/мин, успокоившись — %u\n", lively, calm);
+}
+
+// Яркость: темно — минимум, ночь и сон — приглушённо, иначе обычная.
+static void test_brightness_levels() {
+  FaceEngine eng;
+  Behavior bh;
+  eng.init(1, 0);
+  bh.init(&eng, 1, 0);
+  bh.set_clock(12 * 60);
+  CHECK(bh.brightness() == Brightness::Normal, "днём — обычная яркость");
+  bh.on_event(Event::dark, 1000);
+  CHECK(bh.brightness() == Brightness::Dark, "в темноте — минимум");
+  bh.on_event(Event::light, 2000);
+  CHECK(bh.brightness() == Brightness::Normal, "свет — снова обычная");
+  bh.set_clock(23 * 60 + 30);
+  CHECK(bh.brightness() == Brightness::Dim, "ночью — приглушённо");
+  bh.set_clock(12 * 60);
+  eng.set_expression(Expr::sleeping, 3000);
+  CHECK(bh.brightness() == Brightness::Dim, "во сне — приглушённо");
+}
+
 int main() {
   test_framebuffer();
   test_catalog();
@@ -538,6 +1090,22 @@ int main() {
   test_scenes();
   test_cyber_theme_and_tilt();
   test_growth_behavior();
+  test_millis_wrap();
+  test_blink_survives_clips();
+  test_nonfinite_inputs();
+  test_tilt_noise();
+  test_shiver_wakes();
+  test_overlay_clocks();
+  test_progress_format();
+  test_chain_follow_up();
+  test_overlay_pop_after_idle();
+  test_long_hold_precision();
+  test_behavior_fresh_state();
+  test_teeth_strokes();
+  test_stubble_follows_face();
+  test_wake_merge_and_horizon();
+  test_calm_breathing();
+  test_brightness_levels();
   printf("%d проверок, %d ошибок\n", g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

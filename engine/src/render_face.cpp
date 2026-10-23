@@ -327,26 +327,35 @@ void draw_mouth(Framebuffer& fb, const Mouth& m, float mx, float my) {
       return;
     }
     case MouthKind::Teeth: {
+      // Оскал: рамка, перемычки между зубами и щели — всё не тоньше 2 px,
+      // иначе с расстояния брелока рот сливается в серую сетку.
       const float hh = m.h * m.sx * 0.5f;
-      const float x0 = mx - hw, x1 = mx + hw;
-      const int xa = iround(x0), xb = iround(x1) - 1;
+      const int xa = iround(mx - hw), xb = iround(mx + hw) - 1;
       const int ya = iround(my - hh), yb = iround(my + hh) - 1;
-      for (int x = xa; x <= xb; ++x) {
-        fb.set(x, ya);
-        fb.set(x, ya + 1);
-        fb.set(x, yb);
-        fb.set(x, yb - 1);
+      if (xb - xa < 3 || yb - ya < 3) {
+        fb.hspan(ya, xa, xb, Ink::Set);  // сжат при смене формы рта: просто полоска
+        fb.hspan(ya + 1, xa, xb, Ink::Set);
+        return;
       }
       for (int y = ya; y <= yb; ++y) {
-        fb.set(xa, y);
-        fb.set(xa + 1, y);
-        fb.set(xb, y);
-        fb.set(xb - 1, y);
+        if (y <= ya + 1 || y >= yb - 1) {
+          fb.hspan(y, xa, xb, Ink::Set);
+        } else {
+          fb.hspan(y, xa, xa + 1, Ink::Set);
+          fb.hspan(y, xb - 1, xb, Ink::Set);
+        }
       }
-      const int mid = iround(my) - 0;
-      fb.hspan(mid, xa, xb, Ink::Set);
-      for (int x = xa + 4; x < xb - 2; x += 4) {
-        for (int y = ya; y <= yb; ++y) fb.set(x, y);
+      // Внутри рамки — щели не уже 3 px и перемычки по 2 px между ними.
+      const int inner = xb - xa - 3, teeth = (inner + 2) / 5;
+      for (int i = 1; i < teeth; ++i) {
+        const int x = xa + (i * (inner + 2)) / teeth;
+        for (int y = ya + 2; y <= yb - 2; ++y) fb.hspan(y, x, x + 1, Ink::Set);
+      }
+      // Ряд верхних и нижних зубов — только если щелям хватает по 2 px над и под чертой.
+      if (yb - ya - 3 >= 6) {
+        const int mid = (ya + yb) / 2;
+        fb.hspan(mid, xa, xb, Ink::Set);
+        fb.hspan(mid + 1, xa, xb, Ink::Set);
       }
       return;
     }

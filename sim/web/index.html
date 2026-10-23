@@ -520,7 +520,9 @@
         dirtyAt = t;
         draw();
       } else if (showDirty && t - dirtyAt < 200) draw();
-      due = Math.min(E.fe_next(), E.fe_bh_next());
+      // Сроки движка — uint32, а JS видит их знаковыми: считаем, сколько до них осталось, по разности.
+      const ahead = t => Math.max(0, (t - now()) | 0);
+      due = sim + Math.min(ahead(E.fe_next()), ahead(E.fe_bh_next()));
     }
     if (t - infoAt > 250) { updateInfo(); infoAt = t; }
     requestAnimationFrame(tick);

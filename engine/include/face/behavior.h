@@ -3,8 +3,10 @@
 //
 //   Behavior b;  b.init(&engine, seed, now);
 //   b.on_event(Event::DoubleTap, now);        // из обработчика прерывания IMU
-//   b.update(now);                            // в главном цикле
-//   спать до min(engine.next_update_ms(), b.next_update_ms())
+//   b.update(now);                            // в главном цикле, в любом режиме
+//   спать до ближайшего из engine.next_update_ms() и b.next_update_ms()
+//
+// Как и движок, поведение не планирует дальше kMaxSleepMs и сравнивает время через time_reached.
 #pragma once
 
 #include <stdint.h>
@@ -76,6 +78,13 @@ struct Mood {
   float affection = 0.3f;  // растёт от внимания
 };
 
+// Сколько яркости нужно экрану сейчас. Прошивка переводит уровень в контраст.
+enum class Brightness : uint8_t {
+  Normal,  // обычная
+  Dim,     // ночь или персонаж спит
+  Dark,    // темно, брелок в кармане или в сумке
+};
+
 class Behavior {
  public:
   void init(FaceEngine* engine, uint32_t seed, uint32_t now_ms);
@@ -84,11 +93,17 @@ class Behavior {
   uint32_t next_update_ms() const { return next_; }
 
   // Часы для суточного ритма: минуты от полуночи (0..1439).
-  void set_clock(uint16_t minutes) { clock_min_ = minutes; }
-  void set_auto(bool on) { auto_ = on; }
+  void set_clock(uint16_t minutes) { clock_min_ = (uint16_t)(minutes % 1440); }
+  // Без автоматики поведение только ведёт настроение; включённое снова — сразу в деле.
+  void set_auto(bool on) {
+    auto_ = on;
+    if (on) next_ = last_now_;
+  }
   bool auto_mode() const { return auto_; }
-  // Ручной выбор эмоции из симулятора: поведение не мешает hold_ms.
-  void hold_manual(uint32_t now_ms, uint32_t ms) { manual_until_ = now_ms + ms; }
+  // Ручной выбор эмоции из симулятора: поведение не мешает ms (не дольше 10 минут).
+  void hold_manual(uint32_t now_ms, uint32_t ms);
+  // Какой яркости экрана хватает: в темноте — минимум, ночью и во сне — приглушённо.
+  Brightness brightness() const;
 
   // Рост: без прогресса открыто всё (симулятор, тесты). С прогрессом персонаж
   // показывает только открытые эмоции, а касания, шаги и встречи дают опыт.
@@ -130,6 +145,11 @@ class Behavior {
     float weight;
   };
   void react(Expr e, uint32_t now, uint32_t ms, const char* why, Clip clip = Clip::None);
+  // Показать эмоцию и запомнить, что её выбрало поведение (а не цепочка движка).
+  void show(Expr e, uint32_t now);
+  void schedule_surprise(uint32_t now);
+  // Отметки «когда было» старше суток прижимаются к суткам: разность uint32 верна лишь до 49.7 суток.
+  void age_marks(uint32_t now);
   // Взвешенный выбор из пула вариантов, недавние реакции выпадают реже.
   Expr pick(const Option* opts, int n);
   template <int N>
@@ -157,16 +177,27 @@ class Behavior {
   uint16_t clock_min_ = 12 * 60;
 
   Expr base_ = Expr::neutral;
+  // Сроки с флагом «взведён»: устаревший срок не путается с будущим после переполнения millis().
   uint32_t react_until_ = 0;
+  bool reacting_ = false;
   uint32_t manual_until_ = 0;
+  bool manual_ = false;
+  // Эмоция, которую поставила цепочка движка (смех → радость): её не перебиваем до follow_until_.
+  // chose_ms_ — когда поведение само выбрало эмоцию в последний раз.
+  uint32_t seen_t0_ = 0;
+  uint32_t follow_until_ = 0;
+  uint32_t chose_ms_ = 0;
+  bool follow_ = false;
   uint32_t last_touch_ = 0;  // последнее внимание (тап, взяли в руки)
   uint32_t last_event_ = 0;  // последнее любое событие
   uint32_t last_decay_ = 0;
+  uint32_t last_now_ = 0;
   uint32_t next_idle_ = 0;
   uint32_t next_eval_ = 0;
   uint32_t dark_since_ = 0;
   uint32_t upside_since_ = 0;
   uint32_t fall_at_ = 0;
+  bool falling_ = false;  // было свободное падение, ждём удара
   uint32_t falls_[3] = {};
   uint32_t loud_at_ = 0;
   uint32_t last_calling_ = 0;
@@ -189,7 +220,7 @@ class Behavior {
   int queue_n_ = 0;
   Expr after_scene_ = Expr::Count;
   const char* after_why_ = "";
-  uint32_t surprise_min_ = 24u * 3600000u, surprise_max_ = 60u * 3600000u;
+  uint32_t surprise_min_ = 24u * 3600000u, surprise_max_ = 60u * 3600000u;  // не больше недели
   uint32_t next_surprise_ = 0;
   uint16_t year_ = 0;
   uint8_t month_ = 0, day_ = 0, bday_m_ = 0, bday_d_ = 0;

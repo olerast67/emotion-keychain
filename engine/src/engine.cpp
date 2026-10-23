@@ -4,7 +4,13 @@ namespace face {
 
 namespace {
 
-constexpr uint32_t kNever = 0xFFFFFFFFu;
+// Во сколько раз реже фирменные жесты, когда лицо успокоилось (взгляд — вдвое реже).
+constexpr uint32_t kCalmAccentStretch = 3;
+// Самое долгое внешнее удержание взгляда и самый долгий переход.
+constexpr uint32_t kMaxLookHoldMs = 600000;
+constexpr int kMaxTransitionMs = 10000;
+// Ступень, которой рисуется наклон: примерно полпикселя сдвига зрачка.
+constexpr float kTiltStep = 0.05f;
 
 inline float frac(float x) { return x - (float)ifloor(x); }
 
@@ -172,14 +178,18 @@ void FaceEngine::init(uint32_t seed, uint32_t now_ms) {
   drift_next_ = now_ms + 20000u + (rng_.next() % 20000u);
   gx_ = gy_ = g_from_x_ = g_from_y_ = g_to_x_ = g_to_y_ = 0;
   g_moving_ = false;
-  g_ext_until_ = 0;
+  g_ext_ = false;
+  blink_on_ = blink_double_ = false;
+  active_ms_ = now_ms;
+  calm_ = false;
   expression_face(Expr::neutral, &base_);
   apply_quirks(base_);
   scene_ = Scene::None;
-  tilt_x_ = tilt_y_ = tilt_cx_ = tilt_cy_ = 0;
+  tilt_x_ = tilt_y_ = tilt_cx_ = tilt_cy_ = tilt_qx_ = tilt_qy_ = 0;
   tilt_last_ = now_ms;
   micro_glitch_next_ = now_ms + 45000u + rng_.next() % 60000u;
-  micro_glitch_until_ = 0;
+  micro_glitch_on_ = false;
+  ov_last_ = now_ms;
   last_now_ = now_ms;
   set_expression(Expr::neutral, now_ms, 0);
 }
@@ -194,7 +204,7 @@ void FaceEngine::set_expression(Expr e, uint32_t now_ms, int transition_ms) {
   apply_quirks(to_);
   for (int i = 0; i < 2; ++i) eye_swap_[i] = from_.eye[i].kind != to_.eye[i].kind;
   mouth_swap_ = from_.mouth.kind != to_.mouth.kind;
-  tr_ms_ = (uint16_t)(transition_ms < 0 ? preset_->in_ms : transition_ms);
+  tr_ms_ = (uint16_t)(transition_ms < 0 ? preset_->in_ms : imin(transition_ms, kMaxTransitionMs));
   tr_t0_ = now_ms;
   tr_active_ = tr_ms_ > 0;
   if (!tr_active_) base_ = to_;
@@ -208,8 +218,21 @@ void FaceEngine::set_expression(Expr e, uint32_t now_ms, int transition_ms) {
   g_moving_ = false;
   schedule_gaze(now_ms + tr_ms_ / 2);
   accent_on_ = false;
-  // Первый жест — пораньше, чтобы новая эмоция сразу ожила.
-  accent_next_ = now_ms + tr_ms_ + (uint32_t)((float)preset_->accent_ms * rng_.range(0.3f, 0.7f));
+  // Первый жест — пораньше, чтобы новая эмоция сразу ожила (у спокойного лица — тоже реже).
+  const uint32_t first_ms = preset_->accent_ms * (calm_ ? kCalmAccentStretch : 1u);
+  accent_next_ = now_ms + tr_ms_ + (uint32_t)((float)first_ms * rng_.range(0.3f, 0.7f));
+  next_update_ = now_ms;
+}
+
+void FaceEngine::note_activity(uint32_t now_ms) {
+  active_ms_ = now_ms;
+  if (!calm_) return;
+  calm_ = false;
+  // Спокойное лицо планировало жест надолго вперёд — оживляем его сразу.
+  if (preset_ && !accent_on_) {
+    const uint32_t soon = now_ms + (uint32_t)((float)preset_->accent_ms * rng_.range(0.3f, 0.7f));
+    if (time_left(now_ms, soon) < time_left(now_ms, accent_next_)) accent_next_ = soon;
+  }
   next_update_ = now_ms;
 }
 
@@ -295,22 +318,41 @@ void FaceEngine::apply_quirks(Face& f) const {
 }
 
 void FaceEngine::set_quirks(const Quirks& q, uint32_t now_ms) {
+  // Внешность приходит снаружи (серийный номер, симулятор): чистим от NaN и крайностей.
   quirks_ = q;
+  quirks_.spacing = sanef(q.spacing, 0.0f, -8.0f, 8.0f);
+  quirks_.eye_scale = sanef(q.eye_scale, 1.0f, 0.5f, 1.5f);
+  quirks_.pupil_scale = sanef(q.pupil_scale, 1.0f, 0.0f, 2.0f);
+  quirks_.blink_rate = sanef(q.blink_rate, 1.0f, 0.25f, 4.0f);
+  quirks_.brow_lift = sanef(q.brow_lift, 0.0f, -4.0f, 4.0f);
   expression_face(expr_, &base_);
   apply_quirks(base_);
   set_expression(expr_, now_ms, 0);
 }
 
 void FaceEngine::set_tilt(float x, float y) {
-  tilt_x_ = clampf(x, -1.0f, 1.0f);
-  tilt_y_ = clampf(y, -1.0f, 1.0f);
+  x = sanef(x, 0.0f, -1.0f, 1.0f);
+  y = sanef(y, 0.0f, -1.0f, 1.0f);
+  // Мёртвая зона: шум акселерометра не будит движок и не дёргает зрачки.
+  if (fabs_(x - tilt_x_) < kTiltDeadband && fabs_(y - tilt_y_) < kTiltDeadband) return;
+  tilt_x_ = x;
+  tilt_y_ = y;
+  note_activity(last_now_);
   next_update_ = last_now_;
 }
 
 void FaceEngine::jerk(float dx, float dy, uint32_t now_ms) {
+  if (!finitef(dx) || !finitef(dy)) return;
   const float m = fmax_(fabs_(dx), fabs_(dy));
   if (m < 0.05f) return;
-  look_at(clampf(dx / m, -1.0f, 1.0f), clampf(dy / m * 0.5f, -0.5f, 0.5f), now_ms, 700);
+  const float tx = clampf(dx / m, -1.0f, 1.0f), ty = clampf(dy / m * 0.5f, -0.5f, 0.5f);
+  // Рывок в ту же сторону, куда персонаж и так смотрит, только продлевает взгляд.
+  if (g_ext_ && fabs_(tx - g_to_x_) < kTiltDeadband && fabs_(ty - g_to_y_) < kTiltDeadband) {
+    g_ext_until_ = g_next_ = now_ms + 700u;
+    note_activity(now_ms);
+    return;
+  }
+  look_at(tx, ty, now_ms, 700);
 }
 
 void FaceEngine::play_scene(Scene s, uint32_t now_ms, const SceneParams& p) {
@@ -369,7 +411,9 @@ void FaceEngine::compute_fit() {
 }
 
 void FaceEngine::schedule_accent(uint32_t from) {
-  accent_next_ = from + (uint32_t)((float)preset_->accent_ms * rng_.range(0.65f, 1.35f));
+  // Успокоившееся лицо жестикулирует реже: долгие тихие состояния почти не будят процессор.
+  const uint32_t ms = preset_->accent_ms * (calm_ ? kCalmAccentStretch : 1u);
+  accent_next_ = from + (uint32_t)((float)ms * rng_.range(0.65f, 1.35f));
 }
 
 namespace {
@@ -402,7 +446,7 @@ uint16_t accent_duration(Accent a) {
 void FaceEngine::apply_accent(uint32_t now, uint32_t& period) {
   if (!preset_ || preset_->accent == Accent::None || !opt_.idle_motion) return;
   if (!accent_on_) {
-    if (now < accent_next_ || tr_active_ || clip_active_) return;
+    if (!time_reached(now, accent_next_) || tr_active_ || clip_running(now)) return;
     accent_on_ = true;
     accent_t0_ = now;
     accent_sign_ = rng_.chance(0.5f) ? 1.0f : -1.0f;
@@ -416,7 +460,7 @@ void FaceEngine::apply_accent(uint32_t now, uint32_t& period) {
   }
   const float b = bump(k);
   Face& c = composed_;
-  uint32_t p = opt_.frame_ms;
+  uint32_t p = frame_ms();
   switch (a) {
     case Accent::None: break;
     case Accent::Breath:
@@ -507,14 +551,23 @@ void FaceEngine::play_clip(Clip c, uint32_t now_ms) {
 void FaceEngine::look_at(float gx, float gy, uint32_t now_ms, uint32_t hold_ms) {
   g_from_x_ = gx_;
   g_from_y_ = gy_;
-  g_to_x_ = clampf(gx, -1.0f, 1.0f);
-  g_to_y_ = clampf(gy, -1.0f, 1.0f);
+  g_to_x_ = sanef(gx, 0.0f, -1.0f, 1.0f);
+  g_to_y_ = sanef(gy, 0.0f, -1.0f, 1.0f);
   g_t0_ = now_ms;
   g_ms_ = 90;
   g_moving_ = true;
-  g_ext_until_ = now_ms + hold_ms;
+  g_ext_ = true;
+  g_ext_until_ = now_ms + (hold_ms < kMaxLookHoldMs ? hold_ms : kMaxLookHoldMs);
   g_next_ = g_ext_until_;
+  note_activity(now_ms);
   next_update_ = now_ms;
+}
+
+bool FaceEngine::clip_running(uint32_t now) const { return clip_active_ && now - clip_t0_ < clip_duration_ms(clip_); }
+
+bool FaceEngine::clip_holds_eyes(uint32_t now) const {
+  // Испуг, чих и «тык» сами сжимают глаза: моргание на них не накладывается.
+  return clip_running(now) && (clip_ == Clip::startle || clip_ == Clip::sneeze || clip_ == Clip::boop);
 }
 
 int FaceEngine::dirty(DirtyWindow out[kPages]) const {
@@ -525,8 +578,9 @@ int FaceEngine::dirty(DirtyWindow out[kPages]) const {
 void FaceEngine::schedule_blink(uint32_t from) {
   if (!preset_) return;
   uint32_t lo, hi;
+  blink_armed_ = preset_->blink != Blink::None;
   switch (preset_->blink) {
-    case Blink::None: blink_next_ = kNever; return;
+    case Blink::None: return;
     case Blink::Rare: lo = 6000, hi = 14000; break;
     case Blink::Often: lo = 900, hi = 2600; break;
     case Blink::Slow: lo = 2500, hi = 6000; break;
@@ -538,11 +592,17 @@ void FaceEngine::schedule_blink(uint32_t from) {
 
 void FaceEngine::update_blink(uint32_t now, uint32_t& period) {
   if (!opt_.idle_motion && !blink_on_) return;
-  if (!blink_on_ && blink_next_ != kNever && now >= blink_next_ && !tr_active_) {
+  const bool held = clip_holds_eyes(now);
+  if (blink_on_ && held) {
+    // Клип сам управляет глазами: это моргание отменяется, следующее планируем заново.
+    blink_on_ = blink_double_ = false;
+    schedule_blink(now);
+  }
+  if (!blink_on_ && blink_armed_ && time_reached(now, blink_next_) && !tr_active_ && !held) {
     blink_on_ = true;
     blink_t0_ = now;
     blink_ms_ = preset_->blink == Blink::Slow ? 560 : (preset_->blink == Blink::Often ? 150 : 180);
-    blink_next_ = kNever;  // следующее моргание планируется, когда закончится это
+    blink_armed_ = false;  // следующее моргание планируется, когда закончится это
   }
   if (!blink_on_) return;
   float k = (float)(now - blink_t0_) / (float)blink_ms_;
@@ -552,6 +612,7 @@ void FaceEngine::update_blink(uint32_t now, uint32_t& period) {
     if (!blink_double_ && rng_.chance(double_p)) {
       blink_double_ = true;
       blink_next_ = now + 110;
+      blink_armed_ = true;
     } else {
       blink_double_ = false;
       schedule_blink(now);
@@ -571,7 +632,7 @@ void FaceEngine::update_blink(uint32_t now, uint32_t& period) {
     composed_.eye[i].squash *= sq;
     composed_.eye[i].stretch *= st;
   }
-  want(period, opt_.frame_ms);
+  want(period, frame_ms());
 }
 
 void FaceEngine::schedule_gaze(uint32_t from) {
@@ -590,11 +651,13 @@ void FaceEngine::schedule_gaze(uint32_t from) {
     case Gaze::Idle:
     default: lo = 1200, hi = 3600; break;
   }
-  g_next_ = from + lo + rng_.next() % (hi - lo);
+  // Спокойное лицо и осматривается вдвое реже.
+  g_next_ = from + (lo + rng_.next() % (hi - lo)) * (calm_ ? 2u : 1u);
 }
 
 void FaceEngine::update_gaze(uint32_t now, uint32_t& period) {
-  if (opt_.idle_motion && !g_moving_ && now >= g_next_ && now >= g_ext_until_) {
+  if (g_ext_ && time_reached(now, g_ext_until_)) g_ext_ = false;
+  if (opt_.idle_motion && !g_moving_ && !g_ext_ && time_reached(now, g_next_)) {
     float tx = 0, ty = 0;
     float r = rng_.unit();
     switch (preset_->gaze) {
@@ -636,7 +699,7 @@ void FaceEngine::update_gaze(uint32_t now, uint32_t& period) {
       gy_ = lerpf(g_from_y_, g_to_y_, e);
       float dist = fabs_(g_to_x_ - g_from_x_) + fabs_(g_to_y_ - g_from_y_);
       if (dist > 0.5f) squash = 1.0f - 0.12f * bump(k);
-      want(period, opt_.frame_ms);
+      want(period, frame_ms());
     }
   }
   composed_.gx = gx_;
@@ -647,63 +710,127 @@ void FaceEngine::update_gaze(uint32_t now, uint32_t& period) {
   }
 }
 
-void FaceEngine::apply_motion(uint32_t now, uint32_t& period) {
-  if (!preset_ || preset_->motion == Motion::None) return;
-  const float t = (float)(now - expr_t0_) * 0.001f;
-  const float A = preset_->motion_amp, f = preset_->motion_hz;
-  Face& c = composed_;
-  switch (preset_->motion) {
+namespace {
+
+// Сдвиг лица от движения пресета — в целых пикселях: лицо и так стоит на целых
+// координатах, а целые сдвиги позволяют точно знать, когда картинка сменится,
+// и не будить процессор между этими моментами.
+struct MotionStep {
+  int ox = 0, oy = 0, tilt = 0;
+  float scale = 1.0f;  // Pulse: масштаб глаз
+  bool operator==(const MotionStep& o) const { return ox == o.ox && oy == o.oy && tilt == o.tilt && scale == o.scale; }
+};
+
+// Период движения в мс. Фаза считается от целых мс по модулю периода,
+// поэтому анимация не теряет точность, сколько бы ни держалась эмоция.
+uint32_t motion_period(const Expression& x) {
+  const uint32_t p = (uint32_t)imax(2, iround(1000.0f / fmax_(x.motion_hz, 0.05f)));
+  return x.motion == Motion::Float ? p * 2 : p;  // вторая составляющая — с половинной частотой
+}
+
+MotionStep motion_at(const Expression& x, uint32_t el) {
+  MotionStep m;
+  const float A = x.motion_amp;
+  const uint32_t P = motion_period(x);
+  const float ph = (float)(el % P) / (float)P;
+  const float s = fsin(kTau * ph);
+  switch (x.motion) {
     case Motion::None: break;
-    case Motion::Bounce: c.oy -= A * fabs_(fsin(kPi * f * t)); break;
-    case Motion::Bob: c.oy += A * fsin(kTau * f * t); break;
+    case Motion::Bounce: m.oy = -iround(A * fabs_(fsin(kPi * ph))); break;
+    case Motion::Bob: m.oy = iround(A * s); break;
     case Motion::Tremble: {
-      uint32_t h = hash32((uint32_t)(t * f) * 2654435761u ^ 0x5bd1e995u);
-      int span = (int)A * 2 + 1;
-      c.ox += (float)((int)(h % (uint32_t)span) - (int)A);
-      c.oy += (float)((int)((h >> 8) % (uint32_t)span) - (int)A);
+      const uint32_t h = hash32((el / P) * 2654435761u ^ 0x5bd1e995u);
+      const int a = (int)A, span = a * 2 + 1;
+      m.ox = (int)(h % (uint32_t)span) - a;
+      m.oy = (int)((h >> 8) % (uint32_t)span) - a;
       break;
     }
-    case Motion::Shake: c.ox += A * fsin(kTau * f * t); break;
+    case Motion::Shake: m.ox = iround(A * s); break;
     case Motion::Sway:
-      c.ox += A * fsin(kTau * f * t);
-      c.layout.tilt += A * 0.5f * fsin(kTau * f * t);
+      m.ox = iround(A * s);
+      m.tilt = iround(A * 0.5f * s);
       break;
     case Motion::Shiver:
       // Дрожь приступами: 1 с из 4, иначе холод съест батарею.
-      if (frac(t / 4.0f) < 0.25f) c.ox += fsin(kTau * f * t) > 0.0f ? A : -A;
+      if (el % 4000u < 1000u) m.ox = el % P < P / 2 ? iround(A) : -iround(A);
       break;
     case Motion::Pulse: {
-      float p = frac(t * f);
-      float k = bump(clampf(p / 0.16f, 0.0f, 1.0f)) + 0.7f * bump(clampf((p - 0.22f) / 0.16f, 0.0f, 1.0f));
-      float s = 1.0f + A * 0.01f * k;
-      for (int i = 0; i < 2; ++i) {
-        c.eye[i].sx *= s;
-        c.eye[i].sy *= s;
-      }
+      const float k = bump(clampf(ph / 0.16f, 0.0f, 1.0f)) + 0.7f * bump(clampf((ph - 0.22f) / 0.16f, 0.0f, 1.0f));
+      m.scale = 1.0f + A * 0.01f * k;
       break;
     }
     case Motion::Float:
-      c.oy += A * fsin(kTau * f * t);
-      c.ox += A * 0.6f * fsin(kPi * f * t);
+      m.oy = iround(A * fsin(kTau * 2.0f * ph));  // период Float — двойной
+      m.ox = iround(A * 0.6f * s);
       break;
-    case Motion::Nod: c.oy += A * fabs_(fsin(kPi * f * t)); break;
+    case Motion::Nod: m.oy = iround(A * fabs_(fsin(kPi * ph))); break;
     case Motion::Wobble:
-      c.layout.tilt += A * fsin(kTau * f * t);
-      c.ox += A * 0.4f * fsin(kTau * f * t);
+      m.tilt = iround(A * s);
+      m.ox = iround(A * 0.4f * s);
       break;
   }
-  // Кадры нужны не чаще, чем лицо реально сдвигается на пиксель.
-  uint32_t p;
-  switch (preset_->motion) {
-    case Motion::Tremble: p = (uint32_t)(1000.0f / fmax_(f, 1.0f)); break;
-    case Motion::Shiver: p = (uint32_t)(500.0f / fmax_(f, 1.0f)); break;
-    case Motion::Pulse: p = 40; break;
-    default: {
-      const float speed = kTau * f * fmax_(A, 0.5f);  // пикс/с на пике
-      p = (uint32_t)clampf(1000.0f / (speed * 1.5f), (float)opt_.frame_ms, 250.0f);
+  return m;
+}
+
+// Через сколько мс движение сдвинет лицо хотя бы на пиксель (не дальше limit).
+uint32_t motion_wait(const Expression& x, uint32_t el, uint32_t limit) {
+  const uint32_t P = motion_period(x);
+  switch (x.motion) {
+    case Motion::None: return 0;
+    case Motion::Pulse: return 40;  // глаза плавно меняют размер
+    case Motion::Tremble: return P - el % P;
+    case Motion::Shiver: {
+      const uint32_t c = el % 4000u;
+      if (c >= 1000u) return 4000u - c;  // до следующего приступа
+      const uint32_t in = el % P, flip = in < P / 2 ? P / 2 - in : P - in;  // смена стороны
+      return flip < 1000u - c ? flip : 1000u - c;
+    }
+    default: break;
+  }
+  // Плавные движения: шагаем вперёд, пока сдвиг не сменится, затем уточняем делением пополам.
+  const MotionStep cur = motion_at(x, el);
+  const uint32_t step = (uint32_t)imax(2, (int)(P / 32));
+  uint32_t lo = 0;
+  for (uint32_t d = step; d <= limit; d += step) {
+    if (!(motion_at(x, el + d) == cur)) {
+      uint32_t hi = d;
+      while (hi - lo > 1) {
+        const uint32_t mid = (lo + hi) / 2;
+        if (motion_at(x, el + mid) == cur)
+          lo = mid;
+        else
+          hi = mid;
+      }
+      return hi;
+    }
+    lo = d;
+  }
+  return limit;
+}
+
+}  // namespace
+
+void FaceEngine::apply_motion(uint32_t now) {
+  if (!preset_ || preset_->motion == Motion::None) return;
+  const uint32_t el = now - expr_t0_;
+  const MotionStep m = motion_at(*preset_, el);
+  Face& c = composed_;
+  c.ox += (float)m.ox;
+  c.oy += (float)m.oy;
+  c.layout.tilt += (float)m.tilt;
+  if (m.scale != 1.0f) {
+    for (int i = 0; i < 2; ++i) {
+      c.eye[i].sx *= m.scale;
+      c.eye[i].sy *= m.scale;
     }
   }
-  want(period, p);
+  // Кадр нужен ровно тогда, когда лицо сдвинется на пиксель, но не чаще frame_ms.
+  // Медленному движению не к спеху: его шаг может подождать до 200 мс и уйти
+  // вместе с кадром, который и так запланирован (например, для Zzz во сне).
+  const uint32_t P = motion_period(*preset_);
+  const uint32_t w = motion_wait(*preset_, el, (uint32_t)imin((int)P, 10000));
+  motion_wake_ = w > frame_ms() ? w : frame_ms();
+  motion_slack_ = P >= 1000u ? (uint32_t)imin(200, (int)(P / 16)) : 0u;
 }
 
 void FaceEngine::apply_clip(uint32_t now, uint32_t& period) {
@@ -715,7 +842,7 @@ void FaceEngine::apply_clip(uint32_t now, uint32_t& period) {
     clip_active_ = false;
     return;
   }
-  want(period, opt_.frame_ms);
+  want(period, frame_ms());
   const float k = ms / (float)dur;
   Face& c = composed_;
   switch (clip_) {
@@ -738,7 +865,6 @@ void FaceEngine::apply_clip(uint32_t now, uint32_t& period) {
         c.eye[i].sy *= 1.0f + 0.25f * env;
       }
       c.oy -= 3.0f * bump(clampf(k * 2.0f, 0.0f, 1.0f));
-      blink_on_ = false;
       break;
     }
     case Clip::yawn: {
@@ -806,7 +932,6 @@ void FaceEngine::apply_clip(uint32_t now, uint32_t& period) {
         for (int i = 0; i < 2; ++i)
           if (blinkable(c.eye[i].kind)) c.eye[i].squash *= 0.4f + 0.6f * ease_out(r);
       }
-      blink_on_ = false;
       break;
     }
     case Clip::look_around: {
@@ -883,7 +1008,6 @@ void FaceEngine::apply_clip(uint32_t now, uint32_t& period) {
         c.eye[i].stretch *= 1.0f + 0.1f * hit;
       }
       c.oy += 2.0f * hit;
-      blink_on_ = false;
       break;
     }
     case Clip::shake_off: {
@@ -896,24 +1020,68 @@ void FaceEngine::apply_clip(uint32_t now, uint32_t& period) {
 }
 
 void FaceEngine::overlays_update(uint32_t now, uint32_t& period) {
-  const float dt = (float)(now - ov_last_);
+  // Появление и исчезание идут не быстрее кадра: если лицо до этого спало,
+  // первый кадр не перескакивает сразу к концу и «пружинка» значка видна.
+  uint32_t dt = now - ov_last_;
+  if (dt > frame_ms()) dt = frame_ms();
   ov_last_ = now;
-  const float step = dt / 180.0f;
+  const float step = (float)dt / 180.0f;
   for (int i = 0; i < (int)Overlay::Count; ++i) {
     const bool on = (ov_target_ >> i) & 1ull;
     float& a = ov_alpha_[i];
     if (on && a < 1.0f) {
       if (a <= 0.0f) ov_t0_[i] = now;
-      a = fmin_(1.0f, a + fmax_(step, 0.0f));
-      want(period, opt_.frame_ms);
+      a = fmin_(1.0f, a + step);
+      want(period, frame_ms());
     } else if (!on && a > 0.0f) {
-      a = fmax_(0.0f, a - fmax_(step, 0.0f));
-      want(period, opt_.frame_ms);
+      a = fmax_(0.0f, a - step);
+      want(period, frame_ms());
     }
-    if (a > 0.0f) {
-      const uint16_t ms = overlay_frame_ms((Overlay)i);
-      if (ms) want(period, ms);
-    }
+  }
+}
+
+namespace {
+
+// Ступень, которой рисуется сглаженный наклон.
+inline float tilt_quantize(float v) { return (float)iround(v / kTiltStep) * kTiltStep; }
+
+// Через сколько мс сглаженный наклон c, догоняющий цель x, перейдёт на другую
+// ступень. За один шаг dt разрыв сжимается в 120 / (dt + 120) раз, отсюда
+// dt = 120 · (разрыв / нужный разрыв − 1). Ступень не сменится — ждать нечего.
+uint32_t tilt_wait(float c, float x) {
+  const float gap = fabs_(x - c);
+  const int q = iround(c / kTiltStep);
+  if (gap <= 0.02f || q == iround(x / kTiltStep)) return kMaxSleepMs;
+  const float edge = ((float)q + (x > c ? 0.5f : -0.5f)) * kTiltStep;
+  const float need = fmax_(fabs_(x - edge) - 0.001f, 0.001f);
+  return (uint32_t)(120.0f * fmax_(gap / need - 1.0f, 0.0f)) + 1u;
+}
+
+}  // namespace
+
+void FaceEngine::apply_tilt(uint32_t now, uint32_t& period) {
+  // Зрачки догоняют силу тяжести с небольшой инерцией.
+  uint32_t dt_ms = now - tilt_last_;
+  tilt_last_ = now;
+  if (dt_ms > 1000u) dt_ms = 1000u;
+  const float dt = (float)dt_ms, k = dt / (dt + 120.0f);
+  tilt_cx_ += (tilt_x_ - tilt_cx_) * k;
+  tilt_cy_ += (tilt_y_ - tilt_cy_) * k;
+  if (fabs_(tilt_x_ - tilt_cx_) <= 0.02f && fabs_(tilt_y_ - tilt_cy_) <= 0.02f) {
+    tilt_cx_ = tilt_x_, tilt_cy_ = tilt_y_;  // догнали
+  } else {
+    // Наклон рисуется ступенями: просыпаемся, только когда ступень сменится.
+    const uint32_t wx = tilt_wait(tilt_cx_, tilt_x_), wy = tilt_wait(tilt_cy_, tilt_y_);
+    const uint32_t w = wx < wy ? wx : wy;
+    want(period, w > frame_ms() ? w : frame_ms());
+  }
+  tilt_qx_ = tilt_quantize(tilt_cx_);
+  tilt_qy_ = tilt_quantize(tilt_cy_);
+  if (fabs_(tilt_qx_) > 0.01f || fabs_(tilt_qy_) > 0.01f) {
+    // Чем сильнее наклон, тем меньше остаётся от собственного взгляда.
+    const float wx = fabs_(tilt_qx_), wy = fabs_(tilt_qy_);
+    composed_.gx = clampf(composed_.gx * (1.0f - 0.85f * wx) + tilt_qx_ * 0.95f, -1.0f, 1.0f);
+    composed_.gy = clampf(composed_.gy * (1.0f - 0.6f * wy) + tilt_qy_ * 0.4f, -0.6f, 0.6f);
   }
 }
 
@@ -921,8 +1089,9 @@ bool FaceEngine::update(uint32_t now) {
   if (!preset_) init(1, now);
   if (preset_->hold_ms && now - expr_t0_ >= preset_->hold_ms)
     set_expression(filter_ ? filter_(preset_->next, filter_ctx_) : preset_->next, now);
+  if (!calm_ && opt_.calm_after_ms && now - active_ms_ >= opt_.calm_after_ms) calm_ = true;
 
-  uint32_t period = kNever;  // когда нужен следующий кадр; kNever — лицо статично
+  uint32_t period = kMaxSleepMs;  // через сколько мс нужен кадр; статичному лицу — через kMaxSleepMs
 
   if (tr_active_) {
     float k = (float)(now - tr_t0_) / (float)tr_ms_;
@@ -966,56 +1135,44 @@ bool FaceEngine::update(uint32_t now) {
       base_.layout.tilt = lerpf(from_.layout.tilt, to_.layout.tilt, e);
       fit_x_ = lerpf(fit_from_x_, fit_to_x_, e);
       fit_y_ = lerpf(fit_from_y_, fit_to_y_, e);
-      want(period, opt_.frame_ms);
+      want(period, frame_ms());
     }
   }
 
   composed_ = base_;
   composed_.ox = fit_x_;
   composed_.oy = fit_y_;
+  motion_wake_ = 0;
   for (int i = 0; i < 2; ++i) {
-    // Спирали крутятся, пока держится эмоция.
+    // Спирали крутятся, пока держится эмоция: 0.3°/мс, оборот за 1.2 с.
     if (composed_.eye[i].kind == EyeKind::Spiral) {
-      composed_.eye[i].rot += (float)(now - expr_t0_) * 0.3f;
+      composed_.eye[i].rot += (float)((now - expr_t0_) % 1200u) * 0.3f;
       want(period, 50);
     }
   }
-  apply_motion(now, period);
+  apply_motion(now);
   update_gaze(now, period);
   apply_accent(now, period);
   update_blink(now, period);
   apply_clip(now, period);
-
-  // Наклон: зрачки догоняют силу тяжести с небольшой инерцией.
-  {
-    const float dt = (float)(now - tilt_last_);
-    tilt_last_ = now;
-    const float k = dt / (dt + 120.0f);
-    tilt_cx_ += (tilt_x_ - tilt_cx_) * k;
-    tilt_cy_ += (tilt_y_ - tilt_cy_) * k;
-    if (fabs_(tilt_x_ - tilt_cx_) > 0.02f || fabs_(tilt_y_ - tilt_cy_) > 0.02f) want(period, opt_.frame_ms);
-    if (fabs_(tilt_cx_) > 0.01f || fabs_(tilt_cy_) > 0.01f) {
-      // Чем сильнее наклон, тем меньше остаётся от собственного взгляда.
-      const float wx = fabs_(tilt_cx_), wy = fabs_(tilt_cy_);
-      composed_.gx = clampf(composed_.gx * (1.0f - 0.85f * wx) + tilt_cx_ * 0.95f, -1.0f, 1.0f);
-      composed_.gy = clampf(composed_.gy * (1.0f - 0.6f * wy) + tilt_cy_ * 0.4f, -0.6f, 0.6f);
-    }
-  }
+  apply_tilt(now, period);
 
   // Киберпанк: редкие короткие сбои сигнала, раз в 45–150 с.
   const bool cyber = opt_.theme == Theme::Cyber;
   if (cyber && opt_.idle_motion && scene_ == Scene::None) {
-    if (now >= micro_glitch_next_) {
+    if (time_reached(now, micro_glitch_next_)) {
+      micro_glitch_on_ = true;
       micro_glitch_until_ = now + 140u;
       micro_glitch_next_ = now + 45000u + rng_.next() % 105000u;
     }
-    if (now < micro_glitch_until_) {
+    if (micro_glitch_on_ && time_reached(now, micro_glitch_until_)) micro_glitch_on_ = false;
+    if (micro_glitch_on_) {
       glitch_ = fmax_(glitch_, 0.3f);
       want(period, 50);
     }
   }
   const float lock = cyber ? ease_out(clampf((float)(now - expr_t0_) / 350.0f, 0.0f, 1.0f)) : 1.0f;
-  if (cyber && lock < 1.0f) want(period, opt_.frame_ms);
+  if (cyber && lock < 1.0f) want(period, frame_ms());
   const bool glint = quirks_.cyber_eye && (now % 5000u) < 400u;
   if (glint) want(period, 100);
 
@@ -1025,7 +1182,7 @@ bool FaceEngine::update(uint32_t now) {
     scene_t = now - scene_t0_;
     if (scene_t >= scene_duration_ms(scene_)) {
       scene_ = Scene::None;
-      want(period, opt_.frame_ms);
+      want(period, frame_ms());
     } else {
       const uint16_t sp = scene_frame_ms(scene_, scene_t);
       scene_t -= scene_t % sp;
@@ -1033,7 +1190,7 @@ bool FaceEngine::update(uint32_t now) {
     }
   }
 
-  if (opt_.drift && now >= drift_next_) {
+  if (opt_.drift && time_reached(now, drift_next_)) {
     // Шаг дрейфа на 1 px раз в 20–40 с: глаза не стоят часами на одних пикселях.
     int nx = drift_x_ + rng_.irange(-1, 1), ny = drift_y_ + rng_.irange(-1, 1);
     drift_x_ = iclamp(nx, -3, 3);
@@ -1047,21 +1204,20 @@ bool FaceEngine::update(uint32_t now) {
 
   overlays_update(now, period);
 
-  // Время значков квантуется их собственным периодом: если кадр рисуется
-  // ради другого движения, значок не обновляется лишний раз.
+  // У каждого значка свои часы: время для отрисовки меняется, только когда меняется
+  // картинка значка, поэтому кадр ради чужого движения не перерисовывает его лишний раз.
   uint32_t ov_local[(int)Overlay::Count];
   Hasher hs;
   hs.face(composed_);
   for (int i = 0; i < (int)Overlay::Count; ++i) {
     ov_local[i] = 0;
     if (ov_alpha_[i] <= 0.0f) continue;
-    uint32_t local = now - ov_t0_[i];
-    const uint16_t p = overlay_frame_ms((Overlay)i);
-    local = p ? local - local % p : 0;
-    ov_local[i] = local;
+    uint32_t wait = 0;
+    ov_local[i] = overlay_clock((Overlay)i, now - ov_t0_[i], &wait);
+    if (wait) want(period, wait);
     hs.byte((uint8_t)i);
     hs.f(ov_alpha_[i]);
-    hs.u32(local);
+    hs.u32(ov_local[i]);
   }
   hs.f(glitch_);
   hs.u32(glitch_ > 0.0f ? now / 50u : 0u);
@@ -1127,33 +1283,43 @@ bool FaceEngine::update(uint32_t now) {
     }
   }
 
-  uint32_t next = period == kNever ? kNever : now + period;
+  // Когда проснуться: ближайшее запланированное событие, но не дальше kMaxSleepMs.
+  // Все сроки — через time_left, поэтому переполнение millis() ничего не ломает.
+  uint32_t wake[16];
+  int nw = 0;
+  auto at = [&](uint32_t t) {
+    const uint32_t d = time_left(now, t);
+    if (d) wake[nw++] = d;
+  };
+  wake[nw++] = period;
   if (opt_.idle_motion) {
-    if (blink_next_ > now && blink_next_ < next) next = blink_next_;
-    uint32_t g = g_next_ > g_ext_until_ ? g_next_ : g_ext_until_;
-    if (g > now && g < next) next = g;
+    if (blink_armed_) at(blink_next_);
+    at(g_next_);
+    if (g_ext_) at(g_ext_until_);
+    if (!accent_on_ && preset_->accent != Accent::None) at(accent_next_);
   }
-  if (opt_.drift && drift_next_ < next) next = drift_next_;
-  if (opt_.idle_motion && !accent_on_ && preset_->accent != Accent::None && accent_next_ > now && accent_next_ < next)
-    next = accent_next_;
-  if (preset_->hold_ms) {
-    uint32_t h = expr_t0_ + preset_->hold_ms;
-    if (h < next) next = h;
+  if (opt_.drift) at(drift_next_);
+  if (preset_->hold_ms) at(expr_t0_ + preset_->hold_ms);
+  if (opt_.scanlines) wake[nw++] = 20000u - now % 20000u;
+  if (quirks_.cyber_eye) wake[nw++] = (glint ? 400u : 5000u) - now % 5000u;
+  if (cyber && opt_.idle_motion) {
+    at(micro_glitch_next_);
+    if (micro_glitch_on_) at(micro_glitch_until_);
   }
-  if (opt_.scanlines) {
-    uint32_t s = (now / 20000u + 1u) * 20000u;
-    if (s < next) next = s;
+  if (scene_ != Scene::None) at(scene_ends_ms());
+  // События, выпавшие рядом, сливаются: процессор просыпается один раз на всех.
+  uint32_t first = kMaxSleepMs;
+  for (int i = 0; i < nw; ++i)
+    if (wake[i] < first) first = wake[i];
+  // Шаг движения ждёт ближайшего кадра, если тот в пределах его запаса.
+  if (motion_wake_ && (first < motion_wake_ || first > motion_wake_ + motion_slack_)) {
+    wake[nw++] = motion_wake_;
+    if (motion_wake_ < first) first = motion_wake_;
   }
-  if (quirks_.cyber_eye) {
-    const uint32_t g = now - now % 5000u + (glint ? 400u : 5000u);
-    if (g < next) next = g;
-  }
-  if (cyber && opt_.idle_motion && micro_glitch_next_ > now && micro_glitch_next_ < next) next = micro_glitch_next_;
-  if (scene_ != Scene::None) {
-    const uint32_t e = scene_ends_ms();
-    if (e > now && e < next) next = e;
-  }
-  next_update_ = next <= now ? now + 1 : next;
+  uint32_t sleep = first;
+  for (int i = 0; i < nw; ++i)
+    if (wake[i] > sleep && wake[i] <= first + kWakeMergeMs) sleep = wake[i];
+  next_update_ = now + (sleep ? sleep : 1u);
   last_now_ = now;
   return dirty_n_ > 0;
 }

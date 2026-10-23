@@ -15,9 +15,15 @@ inline float fmax_(float a, float b) { return a > b ? a : b; }
 inline float clampf(float x, float lo, float hi) { return x < lo ? lo : (x > hi ? hi : x); }
 inline float lerpf(float a, float b, float t) { return a + (b - a) * t; }
 inline float fsqrt(float x) { return x <= 0.0f ? 0.0f : __builtin_sqrtf(x); }
+// Конечное ли число. NaN и бесконечности из датчиков и команд не должны попасть в расчёты.
+inline bool finitef(float x) { return __builtin_isfinite(x); }
+// Значение снаружи движка: NaN и ±∞ заменяются на def, остальное зажимается в [lo, hi].
+inline float sanef(float x, float def, float lo, float hi) { return finitef(x) ? clampf(x, lo, hi) : def; }
 
 inline int ifloor(float x) {
-  int i = (int)x;
+  // За ±2^30 приведение к int не определено (в WebAssembly — исключение): насыщаем, NaN уходит в минус.
+  if (!(x > -1073741824.0f && x < 1073741824.0f)) return x > 0.0f ? 1073741824 : -1073741824;
+  const int i = (int)x;
   return (x < (float)i) ? i - 1 : i;
 }
 inline int iround(float x) { return ifloor(x + 0.5f); }

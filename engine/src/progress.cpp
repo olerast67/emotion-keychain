@@ -29,7 +29,7 @@ struct Slot {
 
 // Кому что. База — то, без чего персонаж не может жить с датчиками:
 // сон, зарядка, батарея, холод, базовые радость, грусть и злость.
-const Slot kSlots[] = {
+constexpr Slot kSlots[] = {
     // База
     {E::neutral, 0},
     {E::calm, 0},
@@ -183,6 +183,32 @@ const Slot kSlots[] = {
     {E::cyclops, 11},
 };
 
+// Номер импланта для каждой эмоции — таблицей: is_unlocked зовут часто.
+// Эмоция без места в kSlots открывается последней (тест это ловит).
+struct ImplantTable {
+  uint8_t of[kExprCount];
+};
+constexpr ImplantTable make_implant_table() {
+  ImplantTable t{};
+  for (uint8_t& v : t.of) v = (uint8_t)(kImplantCount - 1);
+  for (const Slot& s : kSlots) t.of[(int)s.expr] = s.implant;
+  return t;
+}
+constexpr ImplantTable kImplantOf = make_implant_table();
+
+// Ключ эмоции — FNV-1a от её id: не зависит от места в каталоге.
+constexpr uint32_t fnv1a(const char* s) {
+  uint32_t h = 2166136261u;
+  for (; *s; ++s) h = (h ^ (uint8_t)*s) * 16777619u;
+  return h ? h : 1u;
+}
+constexpr uint32_t kKeys[] = {
+#define FACE_X(n) fnv1a(#n),
+    FACE_EXPR_LIST(FACE_X)
+#undef FACE_X
+};
+static_assert(sizeof(kKeys) / sizeof(kKeys[0]) == kExprCount, "ключи эмоций");
+
 uint32_t crc32(const uint8_t* p, uint32_t n) {
   uint32_t c = 0xFFFFFFFFu;
   for (uint32_t i = 0; i < n; ++i) {
@@ -192,21 +218,66 @@ uint32_t crc32(const uint8_t* p, uint32_t n) {
   return ~c;
 }
 
+uint16_t read16(const uint8_t* p) { return (uint16_t)(p[0] | p[1] << 8); }
+uint32_t read32(const uint8_t* p) {
+  return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+// Версия 1 (только платы разработки): те же поля до implant включительно, затем
+// битовая карта открытых эмоций по номерам тогдашнего каталога из 139 эмоций
+// и CRC на смещении 52. Перенос по возможности: каталог с тех пор мог измениться.
+constexpr uint32_t kV1Size = 56, kV1Crc = 52, kV1Bits = 34;
+constexpr int kV1ExprCount = 139;
+
+bool from_v1(Progress& out, const uint8_t* p, uint32_t n) {
+  if (n != kV1Size || crc32(p, kV1Crc) != read32(p + kV1Crc)) return false;
+  out.reset();
+  out.days = read16(p + 6);
+  out.xp = read32(p + 8);
+  out.touches = read32(p + 12);
+  out.steps = read32(p + 16);
+  out.friends = read16(p + 20);
+  out.duels_won = read16(p + 22);
+  out.duels_lost = read16(p + 24);
+  out.today_touch_xp = read16(p + 26);
+  out.today_step_xp = read16(p + 28);
+  out.step_rest = read16(p + 30);
+  out.implant = p[32] < kImplantCount ? p[32] : (uint8_t)(kImplantCount - 1);
+  // Открытое сверх имплантов (выигранное в дуэлях) переезжает в список дополнительных.
+  for (int i = 0; i < kV1ExprCount && i < kExprCount; ++i)
+    if ((p[kV1Bits + (i >> 3)] >> (i & 7)) & 1u) out.unlock((Expr)i);
+  out.seal();
+  return true;
+}
+
 }  // namespace
 
 int implant_count() { return kImplantCount; }
 const Implant& implant(int i) { return kImplants[i < 0 ? 0 : i >= kImplantCount ? kImplantCount - 1 : i]; }
 
-int implant_of(Expr e) {
-  for (const Slot& s : kSlots)
-    if (s.expr == e) return s.implant;
-  return kImplantCount - 1;  // эмоция без места в таблице открывается последней (тест это ловит)
+int implant_of(Expr e) { return (int)e < kExprCount ? kImplantOf.of[(int)e] : kImplantCount - 1; }
+
+uint32_t Progress::key(Expr e) { return (int)e < kExprCount ? kKeys[(int)e] : 0u; }
+
+void Progress::reset() { *this = Progress{}; }
+
+bool Progress::is_unlocked(Expr e) const {
+  if ((int)e >= kExprCount) return false;
+  if ((flags & kAllUnlocked) || kImplantOf.of[(int)e] <= implant) return true;
+  const uint32_t k = kKeys[(int)e];
+  for (uint32_t x : extra)
+    if (x == k) return true;
+  return false;
 }
 
-void Progress::reset() {
-  *this = Progress{};
-  for (const Slot& s : kSlots)
-    if (s.implant == 0) unlock(s.expr);
+bool Progress::unlock(Expr e) {
+  if ((int)e >= kExprCount || is_unlocked(e)) return false;
+  for (uint32_t& x : extra) {
+    if (x) continue;
+    x = kKeys[(int)e];
+    return true;
+  }
+  return false;
 }
 
 int Progress::unlocked_count() const {
@@ -215,8 +286,14 @@ int Progress::unlocked_count() const {
   return n;
 }
 
+int Progress::extra_count() const {
+  int n = 0;
+  for (uint32_t x : extra) n += x != 0;
+  return n;
+}
+
 void Progress::unlock_all() {
-  for (int i = 0; i < kExprCount; ++i) unlock((Expr)i);
+  flags |= kAllUnlocked;
   implant = (uint8_t)(kImplantCount - 1);
 }
 
@@ -225,9 +302,19 @@ int Progress::add_xp(uint32_t n) {
   int installed = -1;
   while (implant + 1 < kImplantCount && xp >= kImplants[implant + 1].xp) {
     ++implant;
-    for (const Slot& s : kSlots)
-      if (s.implant == implant) unlock(s.expr);
     installed = implant;
+  }
+  if (installed >= 0) {
+    // Что теперь открыл имплант, освобождает место в списке дополнительных.
+    // Ключи эмоций, которых нет в этом каталоге (из будущих прошивок), не трогаем.
+    for (uint32_t& x : extra) {
+      if (!x) continue;
+      for (int i = 0; i < kExprCount; ++i) {
+        if (kKeys[i] != x) continue;
+        if (kImplantOf.of[i] <= implant) x = 0;
+        break;
+      }
+    }
   }
   return installed;
 }
@@ -278,8 +365,7 @@ Expr Progress::steal_one(Rng& rng) {
       if (s.implant == imp && !is_unlocked(s.expr) && n < 16) cand[n++] = s.expr;
     if (!n) continue;
     const Expr e = cand[rng.next() % (uint32_t)n];
-    unlock(e);
-    return e;
+    return unlock(e) ? e : Expr::Count;  // список дополнительных полон — открывать некуда
   }
   return Expr::Count;
 }
@@ -292,6 +378,24 @@ uint32_t Progress::xp_to_next() const {
 
 uint32_t Progress::compute_crc() const {
   return crc32((const uint8_t*)this, (uint32_t)((const uint8_t*)&crc - (const uint8_t*)this));
+}
+
+bool Progress::load(const void* data, uint32_t n) {
+  const uint8_t* p = (const uint8_t*)data;
+  if (!p || n < 8 || read32(p) != kMagic) return false;
+  switch (read16(p + 4)) {
+    case 1: return from_v1(*this, p, n);
+    case kVersion: {
+      if (n != sizeof(Progress)) return false;
+      Progress q;
+      uint8_t* dst = (uint8_t*)&q;
+      for (uint32_t i = 0; i < n; ++i) dst[i] = p[i];
+      if (!q.valid()) return false;
+      *this = q;
+      return true;
+    }
+    default: return false;  // запись более новой прошивки или чужая
+  }
 }
 
 }  // namespace face

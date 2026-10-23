@@ -43,8 +43,15 @@ EXPORT(fe_init) void fe_init(uint32_t seed, uint32_t now) {
   g_eng.init(seed, now);
   g_bh.init(&g_eng, seed, now);
 }
-EXPORT(fe_set_expr) void fe_set_expr(int id, uint32_t now, int ms) { g_eng.set_expression((Expr)id, now, ms); }
-EXPORT(fe_play_clip) void fe_play_clip(int id, uint32_t now) { g_eng.play_clip((Clip)id, now); }
+// Выбор эмоции, жеста или сцены на странице — это внимание к брелоку, как кнопка на стенде.
+EXPORT(fe_set_expr) void fe_set_expr(int id, uint32_t now, int ms) {
+  g_eng.note_activity(now);
+  g_eng.set_expression((Expr)id, now, ms);
+}
+EXPORT(fe_play_clip) void fe_play_clip(int id, uint32_t now) {
+  g_eng.note_activity(now);
+  g_eng.play_clip((Clip)id, now);
+}
 EXPORT(fe_look_at) void fe_look_at(float gx, float gy, uint32_t now, uint32_t hold) {
   g_eng.look_at(gx, gy, now, hold);
 }
@@ -53,6 +60,8 @@ EXPORT(fe_update) int fe_update(uint32_t now) {
   g_dirty_n = changed ? g_eng.dirty(g_dirty) : 0;
   return changed;
 }
+// Следующее пробуждение — не дальше kMaxSleepMs. JS получает uint32 как знаковое число:
+// сравнивать его со временем страницы нужно по разности, как time_reached.
 EXPORT(fe_next) uint32_t fe_next() { return g_eng.next_update_ms(); }
 EXPORT(fe_frame) const uint8_t* fe_frame() { return g_eng.frame().data; }
 EXPORT(fe_current) int fe_current() { return (int)g_eng.expression(); }
@@ -136,6 +145,7 @@ EXPORT(fe_play_scene) void fe_play_scene(int i, uint32_t now) {
   if ((Scene)i == Scene::greet || (Scene)i == Scene::duel) p.set_text(make_identity(now).code);
   if ((Scene)i == Scene::duel) p.value = (int)(now & 1u);
   if ((Scene)i == Scene::new_year) p.set_text("2027");
+  g_eng.note_activity(now);
   g_eng.play_scene((Scene)i, now, p);
 }
 EXPORT(fe_scene_active) int fe_scene_active() { return g_eng.scene() == Scene::None ? -1 : (int)g_eng.scene(); }

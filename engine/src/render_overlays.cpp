@@ -74,44 +74,72 @@ bool overlay_screen_space(Overlay o) {
   }
 }
 
-uint16_t overlay_frame_ms(Overlay o) {
-  // Длительные состояния (сон, усталость, мало заряда) должны быть дешёвыми:
-  // их значки статичны или обновляются редко.
+namespace {
+
+// Как значок меняется во времени:
+//   cycle — через сколько мс анимация повторяется (0 — не повторяется);
+//   step  — шаг кадров плавного движения, мс: примерно на пиксель сдвига;
+//   still — с этого момента значок неподвижен (0 — не замирает);
+//   edges — у мигающих значков: первая мс каждого состояния внутри цикла.
+//           Картинка между границами одна и та же, кадры нужны только на них.
+// У статичных значков всё по нулям: кадр нужен только при появлении.
+// Длительные состояния (сон, скука, мало заряда, зарядка) поэтому почти не будят процессор.
+struct Timing {
+  uint16_t cycle, step, still;
+  uint16_t edges[5];
+};
+
+Timing timing(Overlay o) {
   switch (o) {
-    case Overlay::BlushLines:
-    case Overlay::BlushDither:
-    case Overlay::Shades:
-    case Overlay::Horns:
-    case Overlay::Gloom:
-    case Overlay::Sweat:
-    case Overlay::Glasses:
-    case Overlay::Nose:
-    case Overlay::Stubble:
-    case Overlay::EyeBags:
-    case Overlay::ShrugArms:
-    case Overlay::GameOver:
-    case Overlay::QueasyLines: return 0;
-    case Overlay::Bat: return 66;
-    case Overlay::Explosion: return 50;
-    case Overlay::Stick: return 120;
-    case Overlay::TearStream:
-    case Overlay::DizzyStars:
-    case Overlay::SpeedLines:
-    case Overlay::Vein:
-    case Overlay::Rays: return 50;
-    case Overlay::Sparkles:
-    case Overlay::SoundWaves:
-    case Overlay::Steam:
-    case Overlay::Tear: return 66;
-    case Overlay::Hearts:
-    case Overlay::Notes: return 80;
-    case Overlay::Exclaim:
-    case Overlay::Question:
-    case Overlay::Bulb:
-    case Overlay::Bolt: return 100;
-    case Overlay::Zzz: return 200;
-    default: return 150;
+    case Overlay::Vein: return {500, 50, 0, {}};
+    case Overlay::Tear: return {1300, 65, 0, {}};
+    case Overlay::TearStream: return {225, 45, 0, {}};
+    case Overlay::Zzz: return {3200, 200, 0, {}};
+    case Overlay::Hearts: return {2400, 80, 0, {}};
+    case Overlay::Sparkles: return {10000, 66, 0, {}};
+    case Overlay::SoundWaves: return {714, 0, 0, {1, 179, 358, 465, 643}};
+    case Overlay::Notes: return {2200, 80, 0, {}};
+    case Overlay::Question: return {1250, 125, 0, {}};
+    case Overlay::Exclaim: return {0, 50, 600, {}};
+    case Overlay::Ellipsis: return {1600, 0, 0, {1, 289, 577, 865}};
+    case Overlay::Steam: return {1100, 66, 0, {}};
+    case Overlay::DizzyStars: return {2000, 50, 0, {}};
+    case Overlay::Bulb: return {400, 0, 0, {1, 241}};
+    case Overlay::Bolt: return {2000, 125, 0, {}};
+    case Overlay::Snow: return {4000, 200, 0, {}};
+    case Overlay::Drool: return {2400, 200, 0, {}};
+    case Overlay::Rays: return {400, 50, 0, {}};
+    case Overlay::BatteryLow: return {1200, 0, 0, {1, 781}};
+    case Overlay::SpeedLines: return {400, 50, 0, {}};
+    case Overlay::Bubble: return {3000, 120, 0, {}};
+    case Overlay::Halo: return {2000, 250, 0, {}};
+    case Overlay::Stick: return {2800, 140, 0, {}};
+    case Overlay::Explosion: return {600, 50, 0, {}};
+    case Overlay::Bat: return {6000, 66, 0, {}};
+    default: return {0, 0, 0, {}};  // румянец, капля, очки, нос, щетина и другие статичные
   }
+}
+
+}  // namespace
+
+uint32_t overlay_clock(Overlay o, uint32_t t, uint32_t* wait) {
+  const Timing tm = timing(o);
+  *wait = 0;
+  if (tm.still && t >= tm.still) return tm.still;  // значок замер
+  if (!tm.cycle && !tm.step) return 0;             // статичный значок
+  const uint32_t c = tm.cycle ? t % tm.cycle : t;
+  if (tm.step) {
+    const uint32_t q = c - c % tm.step;
+    const uint32_t end = tm.cycle ? tm.cycle : tm.still;
+    const uint32_t next = q + tm.step < end ? q + tm.step : end;
+    *wait = next - c;
+    return q;
+  }
+  int i = 0;
+  while (i + 1 < 5 && tm.edges[i + 1] && tm.edges[i + 1] <= c) ++i;
+  const uint32_t next = i + 1 < 5 && tm.edges[i + 1] ? tm.edges[i + 1] : tm.cycle;
+  *wait = next - c;
+  return tm.edges[i];
 }
 
 void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, float t) {
@@ -229,7 +257,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
         const int side = i == 0 ? 1 : -1;
         const float ccx = a.ex[i] - side * (a.ew[i] * 0.5f - 1.0f), ccy = a.ey[i];
         const float base = side > 0 ? kPi : 0.0f;
-        const float ph = frac(t * 1.4f);
+        const float ph = frac(t / 0.714f);
         for (int k = 0; k < 3; ++k) {
           // Волны приходят снаружи: сначала дальняя, потом ближе.
           float vis = ph * 4.0f - (2 - k);
@@ -305,7 +333,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     case Overlay::DizzyStars: {
       const float ccx = cx, ccy = fmin_(ly - lh * 0.5f, ry - rh * 0.5f) - 4.0f;
       for (int i = 0; i < 3; ++i) {
-        const float ang = t * 3.2f + kTau * i / 3.0f;
+        const float ang = t * kPi + kTau * i / 3.0f;  // оборот за 2 с
         const float depth = 0.5f + 0.5f * fsin(ang);
         const float x = ccx + 30.0f * fcos(ang);
         const float y = ccy + 3.5f * fsin(ang);
@@ -361,11 +389,12 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     case Overlay::Snow: {
       const float pts[2][2] = {{fmax_(kL + 5.0f, lx - lw * 0.5f - 8.0f), kT + 7.0f},
                                {fmin_(kR - 5.0f, rx + rw * 0.5f + 8.0f), kT + 12.0f}};
+      // Покачивание — за 4 с, поворот снежинки — на 60° за 4/3 с: картинка повторяется ровно через 4 с.
       for (int i = 0; i < 2; ++i) {
-        const float x = pts[i][0], y = pts[i][1] + 2.0f * fsin(t * 1.5f + i);
+        const float x = pts[i][0], y = pts[i][1] + 2.0f * fsin(t * kTau * 0.25f + i);
         const float r = 4.0f * s;
         for (int k = 0; k < 3; ++k) {
-          float ang = t * 0.8f + kPi * (float)k / 3.0f;
+          float ang = t * kTau * 0.125f + kPi * (float)k / 3.0f;
           capsule(fb, x - r * fcos(ang), y - r * fsin(ang), x + r * fcos(ang), y + r * fsin(ang), 2.0f);
         }
       }
@@ -479,7 +508,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
           // Щетина — редкие точки 2×2 по хэшу, без регулярной штриховки и без однопиксельной пыли.
           const int xr = x - ox, yr = y - oy;
           if ((yr % 3) || (xr % 3)) continue;
-          uint32_t hsh = (uint32_t)(xr * 73856093) ^ (uint32_t)(yr * 19349663);
+          uint32_t hsh = (uint32_t)xr * 73856093u ^ (uint32_t)yr * 19349663u;
           hsh ^= hsh >> 13;
           hsh *= 0x5bd1e995u;
           hsh ^= hsh >> 15;
@@ -494,7 +523,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Stick: {
-      const float sway = 1.5f * fsin(t * 2.2f);
+      const float sway = 1.5f * fsin(t * kTau / 2.8f);
       const float x0 = a.mx + 1.0f, y0 = a.my + 1.0f, x1 = x0 + sway, y1 = fmin_(y0 + 12.0f * s, kB - 8.0f);
       capsule(fb, x0, y0, x1, y1, 2.5f);
       fill_ellipse(fb, x1, y1 + 2.5f, 3.2f * s, 4.2f * s);
@@ -530,8 +559,9 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Bat: {
-      const float ph = frac(t / 3.0f);
-      const float x = -10.0f + ph * 148.0f, y = kT + 7.0f + 2.0f * fsin(t * 6.0f);
+      // Летает туда и обратно за 6 с. Крылья (7·s по бокам) не заходят в поле у краёв.
+      const float ph = frac(t / 6.0f), there = ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f;
+      const float x = kL + 9.0f + (kR - kL - 18.0f) * there, y = kT + 7.0f + 2.0f * fsin(t * kTau);
       const bool up = frac(t * 4.0f) < 0.5f;
       fill_ellipse(fb, x, y, 2.0f * s, 2.5f * s);
       const float wy = up ? -4.0f : 3.0f;

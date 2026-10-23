@@ -69,46 +69,43 @@ bool Ssd1306::begin(TwoWire& wire, uint8_t addr, bool sh1106) {
     return false;
   }
   addr_ = addr;
-  if (sh1106_)
-    cmds(kInitSh1106, sizeof(kInitSh1106));
-  else
-    cmds(kInitSsd1306, sizeof(kInitSsd1306));
+  const bool ok = sh1106_ ? cmds(kInitSh1106, sizeof(kInitSh1106)) : cmds(kInitSsd1306, sizeof(kInitSsd1306));
   face::Framebuffer blank;
   blank.clear();
-  send_full(blank);
-  return true;
+  return ok && send_full(blank);
 }
 
-void Ssd1306::cmd(uint8_t c) { cmds(&c, 1); }
+bool Ssd1306::cmd(uint8_t c) { return cmds(&c, 1); }
 
-void Ssd1306::cmds(const uint8_t* c, size_t n) {
+bool Ssd1306::cmds(const uint8_t* c, size_t n) {
   while (n) {
     const size_t k = n < kChunk ? n : kChunk;
     wire_->beginTransmission(addr_);
     wire_->write((uint8_t)0x00);  // дальше идут команды
     wire_->write(c, k);
-    wire_->endTransmission();
+    if (wire_->endTransmission() != 0) return false;
     c += k;
     n -= k;
   }
+  return true;
 }
 
-void Ssd1306::contrast(uint8_t v) {
+bool Ssd1306::contrast(uint8_t v) {
   const uint8_t c[2] = {0x81, v};
-  cmds(c, 2);
+  return cmds(c, 2);
 }
 
-void Ssd1306::power(bool on) { cmd(on ? 0xAF : 0xAE); }
+bool Ssd1306::power(bool on) { return cmd(on ? 0xAF : 0xAE); }
 
-void Ssd1306::send_window(const face::Framebuffer& fb, uint8_t page, uint8_t x0, uint8_t x1) {
+bool Ssd1306::send_window(const face::Framebuffer& fb, uint8_t page, uint8_t x0, uint8_t x1) {
   if (sh1106_) {
     // У SH1106 память на 132 столбца, видимая часть начинается со 2-го.
     const uint8_t col = (uint8_t)(x0 + 2);
     const uint8_t c[3] = {(uint8_t)(0xB0 | page), (uint8_t)(0x00 | (col & 0x0F)), (uint8_t)(0x10 | (col >> 4))};
-    cmds(c, 3);
+    if (!cmds(c, 3)) return false;
   } else {
     const uint8_t c[6] = {0x21, x0, x1, 0x22, page, page};
-    cmds(c, 6);
+    if (!cmds(c, 6)) return false;
   }
   const uint8_t* data = fb.data + page * face::kWidth + x0;
   size_t n = (size_t)(x1 - x0 + 1);
@@ -117,12 +114,15 @@ void Ssd1306::send_window(const face::Framebuffer& fb, uint8_t page, uint8_t x0,
     wire_->beginTransmission(addr_);
     wire_->write((uint8_t)0x40);  // дальше идут данные
     wire_->write(data, k);
-    wire_->endTransmission();
+    if (wire_->endTransmission() != 0) return false;
     data += k;
     n -= k;
   }
+  return true;
 }
 
-void Ssd1306::send_full(const face::Framebuffer& fb) {
-  for (uint8_t p = 0; p < face::kPages; ++p) send_window(fb, p, 0, face::kWidth - 1);
+bool Ssd1306::send_full(const face::Framebuffer& fb) {
+  for (uint8_t p = 0; p < face::kPages; ++p)
+    if (!send_window(fb, p, 0, face::kWidth - 1)) return false;
+  return true;
 }
