@@ -20,6 +20,8 @@ class GifWriter {
   bool open(const std::string& path, int w, int h, const std::vector<Rgb>& palette, bool loop = true);
   // pixels — индексы палитры, w*h байт. delay_cs — задержка в сотых долях секунды.
   void frame(const std::vector<uint8_t>& pixels, int delay_cs);
+  // Индекс палитры, который рисуется прозрачным (-1 — без прозрачности).
+  void set_transparent(int index) { transparent_ = index; }
   bool close();
 
  private:
@@ -35,6 +37,7 @@ class GifWriter {
   int w_ = 0, h_ = 0, bits_ = 1;
   std::vector<uint8_t> prev_, pending_;
   int pending_delay_ = 0;
+  int transparent_ = -1;
   bool has_prev_ = false, has_pending_ = false;
   int px0_ = 0, py0_ = 0, px1_ = 0, py1_ = 0;
 };

@@ -7,7 +7,7 @@
 //   facegen sheet out.gif [--scale 2] [--cols 6] [--anim] [--seconds 4] [--cat N]
 //   facegen trans <from> <to> out.gif [--scale 4]
 //   facegen clip <emotion> <clip> out.gif [--scale 4]
-//   facegen demo out.gif [--scale 3] [--per 2.5]
+//   facegen demo out.gif [--scale 3] [--per 2.5] [--ids a,b] [--module]
 //   facegen bench [--seconds 60]
 //   facegen catalog [docs/emotions.md]
 #include <chrono>
@@ -37,7 +37,8 @@ struct Args {
   bool raw = false;
   bool anim = false;
   bool drift = false;
-  std::string ids;  // --ids a,b,c — свой набор эмоций для листа
+  std::string ids;      // --ids a,b,c — свой набор эмоций
+  bool module = false;  // --module — кадр в виде модуля SSD1306 на синей плате
 };
 
 Args parse(int argc, char** argv) {
@@ -65,6 +66,8 @@ Args parse(int argc, char** argv) {
       a.drift = true;
     else if (s == "--ids")
       a.ids = next();
+    else if (s == "--module")
+      a.module = true;
     else
       a.pos.push_back(s);
   }
@@ -99,6 +102,25 @@ struct Screen {
 void draw_screen(Canvas& cv, const Framebuffer& fb, const Screen& s, int ox, int oy, bool raw) {
   cv.rect(ox, oy, s.w(), s.h(), sim::kBezel);
   sim::draw_oled(cv, fb, ox + s.pad, oy + s.pad, s.scale, raw);
+}
+
+// Разбирает --ids a,b,c; пустой список — все эмоции (или одна категория).
+std::vector<Expr> expr_list(const Args& a) {
+  std::vector<Expr> list;
+  if (!a.ids.empty()) {
+    size_t p = 0;
+    while (p <= a.ids.size()) {
+      size_t q = a.ids.find(',', p);
+      if (q == std::string::npos) q = a.ids.size();
+      Expr e;
+      if (q > p && find_expr(a.ids.substr(p, q - p), &e)) list.push_back(e);
+      p = q + 1;
+    }
+  } else {
+    for (int i = 0; i < kExprCount; ++i)
+      if (a.cat < 0 || (int)expression((Expr)i).cat == a.cat) list.push_back((Expr)i);
+  }
+  return list;
 }
 
 // Устоявшийся кадр эмоции: без моргания, взгляда и дрейфа.
@@ -177,21 +199,29 @@ int cmd_still(const Args& a) {
 
 // Проигрывает движок и пишет GIF. script вызывается перед каждым кадром.
 template <typename Script>
-int record(const std::string& path, float seconds, int scale, bool raw, uint32_t seed, bool drift, Script script) {
+int record(const std::string& path, float seconds, int scale, bool raw, uint32_t seed, bool drift, Script script,
+           bool module = false) {
   FaceEngine eng;
   eng.options().drift = drift;
   eng.init(seed, 0);
   Screen s{scale, scale * 2};
   Canvas cv;
-  cv.init(s.w(), s.h());
+  if (module)
+    cv.init(sim::module_w(scale), sim::module_h(scale));
+  else
+    cv.init(s.w(), s.h());
   sim::GifWriter g;
   if (!g.open(path, cv.w, cv.h, sim::oled_palette(), true)) return 1;
+  if (module) g.set_transparent(sim::kBg);  // фон вокруг платы прозрачный: смотрится в любой теме
   const uint32_t step = 20;  // GIF хранит задержки в сотых, шаг 20 мс
   const uint32_t total = (uint32_t)(seconds * 1000.0f);
   for (uint32_t t = 0; t < total; t += step) {
     script(eng, t);
     eng.update(t);
-    draw_screen(cv, eng.frame(), s, 0, 0, raw);
+    if (module)
+      sim::draw_module(cv, eng.frame(), 0, 0, scale, raw);
+    else
+      draw_screen(cv, eng.frame(), s, 0, 0, raw);
     g.frame(cv.px, (int)(step / 10));
   }
   g.close();
@@ -203,10 +233,12 @@ int cmd_anim(const Args& a) {
   Expr e;
   if (!find_expr(a.pos[0], &e)) return 1;
   float sec = a.seconds > 0 ? a.seconds : 4.0f;
-  return record(a.pos[1], sec, a.scale > 0 ? a.scale : 4, a.raw, (uint32_t)a.seed, a.drift,
-                [&](FaceEngine& eng, uint32_t t) {
-                  if (t == 0) eng.set_expression(e, 0, 0);
-                });
+  return record(
+      a.pos[1], sec, a.scale > 0 ? a.scale : 4, a.raw, (uint32_t)a.seed, a.drift,
+      [&](FaceEngine& eng, uint32_t t) {
+        if (t == 0) eng.set_expression(e, 0, 0);
+      },
+      a.module);
 }
 
 int cmd_trans(const Args& a) {
@@ -236,37 +268,24 @@ int cmd_clip(const Args& a) {
 
 int cmd_demo(const Args& a) {
   if (a.pos.empty()) return 2;
-  // Сценарий: обход каталога с клипами между эмоциями.
-  std::vector<Expr> order;
-  for (int i = 0; i < kExprCount; ++i)
-    if (a.cat < 0 || (int)expression((Expr)i).cat == a.cat) order.push_back((Expr)i);
+  // Сценарий: обход эмоций по очереди (весь каталог, категория или --ids).
+  const std::vector<Expr> order = expr_list(a);
   const uint32_t per = (uint32_t)(a.per * 1000.0f);
   const float sec = (float)(order.size() * per) / 1000.0f;
-  return record(a.pos[0], sec, a.scale > 0 ? a.scale : 3, a.raw, (uint32_t)a.seed, false,
-                [&](FaceEngine& eng, uint32_t t) {
-                  if (t % per == 0) {
-                    size_t i = t / per;
-                    if (i < order.size()) eng.set_expression(order[i], t);
-                  }
-                });
+  return record(
+      a.pos[0], sec, a.scale > 0 ? a.scale : 3, a.raw, (uint32_t)a.seed, false,
+      [&](FaceEngine& eng, uint32_t t) {
+        if (t % per == 0) {
+          size_t i = t / per;
+          if (i < order.size()) eng.set_expression(order[i], t);
+        }
+      },
+      a.module);
 }
 
 int cmd_sheet(const Args& a) {
   if (a.pos.empty()) return 2;
-  std::vector<Expr> list;
-  if (!a.ids.empty()) {
-    size_t p = 0;
-    while (p <= a.ids.size()) {
-      size_t q = a.ids.find(',', p);
-      if (q == std::string::npos) q = a.ids.size();
-      Expr e;
-      if (q > p && find_expr(a.ids.substr(p, q - p), &e)) list.push_back(e);
-      p = q + 1;
-    }
-  } else {
-    for (int i = 0; i < kExprCount; ++i)
-      if (a.cat < 0 || (int)expression((Expr)i).cat == a.cat) list.push_back((Expr)i);
-  }
+  const std::vector<Expr> list = expr_list(a);
   const int scale = a.scale > 0 ? a.scale : 2;
   const int cols = a.cols > 0 ? a.cols : 6;
   const int rows = ((int)list.size() + cols - 1) / cols;
@@ -364,7 +383,7 @@ void usage() {
       "facegen sheet out.gif [--scale 2] [--cols 6] [--anim] [--seconds 4] [--cat N] [--ids a,b] [--raw]\n"
       "facegen trans <from> <to> out.gif [--scale 4]\n"
       "facegen clip <emotion> <clip> out.gif [--scale 4]\n"
-      "facegen demo out.gif [--scale 3] [--per 2.5] [--cat N]\n"
+      "facegen demo out.gif [--scale 3] [--per 2.5] [--cat N] [--ids a,b] [--module]\n"
       "facegen bench [--seconds 60]\n"
       "facegen catalog [docs/emotions.md]\n");
 }

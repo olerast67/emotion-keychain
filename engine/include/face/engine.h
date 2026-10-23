@@ -54,7 +54,7 @@ uint16_t clip_duration_ms(Clip c);
 struct EngineOptions {
   bool drift = true;         // медленный дрейф лица против выгорания
   bool idle_motion = true;   // моргание и взгляд
-  bool scanlines = false;    // построчный режим, как у Cozmo
+  bool scanlines = false;    // ретро-режим: горит каждая вторая строка
   bool upside_down = false;  // повернуть кадр на 180°
   uint16_t frame_ms = 33;    // период кадров во время анимации (~30 fps)
 };

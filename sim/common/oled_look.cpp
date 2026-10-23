@@ -12,7 +12,54 @@ std::vector<Rgb> oled_palette() {
       {0xE8, 0xEC, 0xF2},  // kTextHi
       {0x1E, 0x22, 0x29},  // kBezel
       {0x5A, 0x2A, 0x2A},  // kDirty
+      {0x1D, 0x3F, 0x8F},  // kPcb
+      {0x14, 0x2F, 0x6C},  // kPcbEdge
+      {0xC7, 0xA3, 0x5A},  // kPin
+      {0xE8, 0xEE, 0xF7},  // kSilk
+      {0x03, 0x04, 0x05},  // kGlass
   };
+}
+
+int module_w(int scale) { return (face::kWidth + 18) * scale; }
+int module_h(int scale) { return (face::kHeight + 25) * scale; }
+
+void draw_module(Canvas& cv, const face::Framebuffer& fb, int ox, int oy, int s, bool raw) {
+  const int w = module_w(s), h = module_h(s);
+  const int r = 2 * s;
+  // Плата со скруглёнными углами и тёмной кромкой.
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const int cx = x < r ? r - x : (x >= w - r ? x - (w - r - 1) : 0);
+      const int cy = y < r ? r - y : (y >= h - r ? y - (h - r - 1) : 0);
+      if (cx * cx + cy * cy > r * r) continue;
+      const bool edge = x < 2 || y < 2 || x >= w - 2 || y >= h - 2 || cx * cx + cy * cy > (r - 2) * (r - 2);
+      cv.set(ox + x, oy + y, edge ? kPcbEdge : kPcb);
+    }
+  }
+  // Крепёжные отверстия с позолоченным ободком.
+  const int hr = (int)(2.2f * s), hc = (int)(3.6f * s);
+  const int holes[4][2] = {{hc, hc}, {w - hc, hc}, {hc, h - hc}, {w - hc, h - hc}};
+  for (const auto& p : holes) {
+    for (int y = -hr - 1; y <= hr + 1; ++y)
+      for (int x = -hr - 1; x <= hr + 1; ++x) {
+        const int d = x * x + y * y;
+        if (d <= hr * hr) cv.set(ox + p[0] + x, oy + p[1] + y, d <= (hr - s) * (hr - s) ? kBg : kPin);
+      }
+  }
+  // Пины GND VCC SCL SDA с подписями.
+  const char* labels[4] = {"GND", "VCC", "SCL", "SDA"};
+  const int ts = s >= 4 ? s / 2 : 1;
+  const int step = 7 * s, x0 = w / 2 - step * 3 / 2;
+  for (int i = 0; i < 4; ++i) {
+    const int px = ox + x0 + i * step, py = oy + 2 * s;
+    cv.rect(px - s, py, 2 * s, 2 * s, kPin);
+    const std::string lb = labels[i];
+    draw_text(cv, px - text_width(lb, ts) / 2, py + 3 * s, lb, ts, kSilk);
+  }
+  // Стекло и активная область.
+  const int gx = ox + 6 * s, gy = oy + 11 * s;
+  cv.rect(gx, gy, (face::kWidth + 6) * s, (face::kHeight + 6) * s, kGlass);
+  draw_oled(cv, fb, gx + 3 * s, gy + 3 * s, s, raw);
 }
 
 void draw_oled(Canvas& cv, const face::Framebuffer& fb, int ox, int oy, int scale, bool raw) {

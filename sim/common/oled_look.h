@@ -17,8 +17,13 @@ enum Pal : uint8_t {
   kLitEdge = 3,  // край горящего пикселя (скругление)
   kText = 4,     // подписи
   kTextHi = 5,
-  kBezel = 6,  // рамка экрана
-  kDirty = 7,  // подсветка изменённых окон
+  kBezel = 6,    // рамка экрана
+  kDirty = 7,    // подсветка изменённых окон
+  kPcb = 8,      // плата модуля
+  kPcbEdge = 9,  // кромка платы
+  kPin = 10,     // позолота пинов и отверстий
+  kSilk = 11,    // шелкография
+  kGlass = 12,   // стекло вокруг активной области
 };
 
 std::vector<Rgb> oled_palette();
@@ -40,6 +45,12 @@ struct Canvas {
       for (int i = 0; i < rw; ++i) set(x + i, y + j, c);
   }
 };
+
+// Модуль SSD1306 целиком: синяя плата, отверстия, пины с подписями, стекло.
+// Размер: 146×89 при scale = 1 (умножается на scale).
+int module_w(int scale);
+int module_h(int scale);
+void draw_module(Canvas& cv, const face::Framebuffer& fb, int ox, int oy, int scale, bool raw = false);
 
 // raw = true — чистые квадраты без сетки (для чёткого просмотра).
 void draw_oled(Canvas& cv, const face::Framebuffer& fb, int ox, int oy, int scale, bool raw = false);

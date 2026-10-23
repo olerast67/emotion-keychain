@@ -1,0 +1,31 @@
+name: Ошибка
+description: Что-то рисуется или ведёт себя не так
+title: "Ошибка: "
+labels: ["ошибка"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Что случилось
+      description: Какая эмоция или событие, что видно на экране
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Как должно быть
+  - type: dropdown
+    id: where
+    attributes:
+      label: Где
+      options:
+        - Веб-симулятор
+        - facegen / facesim
+        - Прототип на железе
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Как повторить
+      description: Например, команда facegen или последовательность событий в симуляторе

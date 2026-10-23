@@ -13,7 +13,7 @@ using O = Overlay;
 
 // Повторяющиеся детали.
 constexpr Eye kRing = ring(30, 4);
-constexpr Eye kLook = ring(30, 4).pupil(3, -3, 4);  // базовый взгляд, как на референсе
+constexpr Eye kLook = ring(30, 4).pupil(3, -3, 4);  // базовый взгляд: зрачки к носу и чуть вверх
 constexpr Brow kSadBrow = brow(16, 16, 0);
 constexpr Brow kAngryBrow = brow(18, -22, 0).at(0, 2);
 constexpr Brow kWorryBrow = brow(16, 18, 1);
@@ -1636,7 +1636,7 @@ const Expression kExpressions[] = {
      .accent_ms = 4000,
      .when = "Разбудили ночью, мало сна, утро после бессонной ночи."},
 
-    // ---------------- Из исследования эмоций ----------------
+    // ---------------- Датчики, общение, пасхалки ----------------
     {.id = "bliss",
      .name = "Блаженство",
      .cat = Category::Positive,

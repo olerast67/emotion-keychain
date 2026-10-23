@@ -153,9 +153,9 @@ void GifWriter::write_image(const std::vector<uint8_t>& px, int x0, int y0, int 
   put(0x21);
   put(0xF9);
   put(4);
-  put(0x04);
+  put((uint8_t)(0x04 | (transparent_ >= 0 ? 0x01 : 0x00)));
   put16(delay_cs > 0xFFFF ? 0xFFFF : delay_cs);
-  put(0);
+  put((uint8_t)(transparent_ >= 0 ? transparent_ : 0));
   put(0);
   const int w = x1 - x0 + 1, h = y1 - y0 + 1;
   put(0x2C);
