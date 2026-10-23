@@ -30,6 +30,7 @@ add_test(NAME face_tests COMMAND face_tests)
 add_executable(firmware_tests firmware/host/stand_test.cpp firmware/src/ssd1306.cpp)
 target_include_directories(firmware_tests PRIVATE firmware/host firmware/src)
 target_compile_options(firmware_tests PRIVATE -Wall -Wextra)
+target_compile_definitions(firmware_tests PRIVATE PIN_BUZZER=5)
 target_link_libraries(firmware_tests PRIVATE face_engine)
 add_test(NAME firmware_tests COMMAND firmware_tests)
 

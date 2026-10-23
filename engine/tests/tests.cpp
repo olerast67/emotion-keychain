@@ -5,6 +5,13 @@
 
 #include "face/behavior.h"
 #include "face/engine.h"
+#include "face/friends.h"
+#include "face/identity.h"
+#include "face/progress.h"
+#include "face/render.h"
+#include "face/scenes.h"
+#include "face/sound.h"
+#include "face/text.h"
 
 using namespace face;
 
@@ -96,8 +103,6 @@ static void test_every_expression_renders() {
 static void test_safe_area_and_strokes() {
   for (int i = 0; i < kExprCount; ++i) {
     const Expr e = (Expr)i;
-    // Летучая мышь по задумке пролетает через весь экран.
-    const bool crosses = expression(e).overlays & ov(Overlay::Bat);
     FaceEngine eng;
     eng.init(1234 + i, 0);
     eng.set_expression(e, 0, 0);
@@ -117,7 +122,7 @@ static void test_safe_area_and_strokes() {
           if ((!f.get(x - 1, y) && !f.get(x + 1, y)) || (!f.get(x, y - 1) && !f.get(x, y + 1))) ++thin;
         }
     }
-    if (!crosses) CHECK(margin >= kSafeMargin - 1, "%s: до края %d px", expression(e).id, margin);
+    CHECK(margin >= kSafeMargin - 1, "%s: до края %d px", expression(e).id, margin);
     CHECK(lit == 0 || thin * 100 < lit * 10, "%s: однопиксельных пикселей %ld%%", expression(e).id,
           lit ? thin * 100 / lit : 0);
   }
@@ -301,6 +306,1501 @@ static void test_behavior_day() {
   CHECK(fps < 12.0, "в среднем %.2f кадра/с", fps);
 }
 
+static void test_identity() {
+  const Identity a = make_identity(123456789ull), b = make_identity(123456789ull), c = make_identity(123456790ull);
+  CHECK(a.hash == b.hash && a.archetype == b.archetype && a.quirks.spacing == b.quirks.spacing,
+        "один номер — один персонаж");
+  CHECK(a.hash != c.hash, "соседние номера — разные персонажи");
+  CHECK(a.code[2] == '-' && a.code[7] == 0, "позывной вида XX-XXXX: %s", a.code);
+  int arch[(int)Archetype::Count] = {}, rare = 0, legend = 0;
+  const int n = 20000;
+  bool ranges = true;
+  for (int i = 0; i < n; ++i) {
+    const Identity id = make_identity((uint64_t)i * 7919ull + 17ull);
+    ++arch[(int)id.archetype];
+    rare += id.rarity == Rarity::Rare;
+    legend += id.rarity == Rarity::Legendary;
+    const Quirks& q = id.quirks;
+    if (fabs_(q.spacing) > 4.0f || q.eye_scale < 0.94f || q.eye_scale > 1.06f || q.pupil_scale < 0.84f ||
+        q.pupil_scale > 1.31f || q.blink_rate < 0.59f || q.blink_rate > 1.45f ||
+        q.cyber_eye != (id.rarity == Rarity::Legendary))
+      ranges = false;
+  }
+  CHECK(ranges, "особенности внешности в своих пределах");
+  // Каждый характер встречается не реже, чем в его доле весов, с запасом.
+  float wsum = 0;
+  for (int i = 0; i < kArchetypeCount; ++i) wsum += temperament((Archetype)i).weight;
+  for (int i = 0; i < kArchetypeCount; ++i) {
+    const float share = temperament((Archetype)i).weight / wsum;
+    CHECK(arch[i] > (int)(n * share * 0.8f) && arch[i] < (int)(n * share * 1.2f), "архетип %s встречается: %d",
+          archetype_id((Archetype)i), arch[i]);
+  }
+  // По хэшу из рекламного пакета сосед узнаёт тот же характер и позывной.
+  const Identity peer = identity_from_hash(a.hash);
+  CHECK(peer.archetype == a.archetype && !strcmp(peer.code, a.code) && peer.rarity == a.rarity,
+        "характер соседа по хэшу совпадает");
+  CHECK(legend > n / 200 && legend < n / 60, "легендарных около 1%%: %d из %d", legend, n);
+  CHECK(rare > n / 14 && rare < n / 8, "редких около 10%%: %d из %d", rare, n);
+}
+
+static void test_progress() {
+  Progress p;
+  p.reset();
+  const int base = p.unlocked_count();
+  CHECK(base >= 38 && base <= 50, "на старте открыто около 40 эмоций: %d", base);
+  CHECK(p.is_unlocked(Expr::sleeping) && p.is_unlocked(Expr::charging) && p.is_unlocked(Expr::low_battery),
+        "без сна, зарядки и батареи персонаж не живёт");
+  for (int i = 1; i < implant_count(); ++i) CHECK(implant(i).xp > implant(i - 1).xp, "импланты по возрастанию опыта");
+  // Каждая эмоция ровно в одном импланте: по мере роста открывается ровно то, что в нём числится.
+  int total = base;
+  for (int i = 1; i < implant_count(); ++i) {
+    const int before = p.unlocked_count();
+    const int got = p.add_xp(implant(i).xp - p.xp);
+    int listed = 0;
+    for (int e = 0; e < kExprCount; ++e) listed += implant_of((Expr)e) == i;
+    CHECK(got == i, "имплант %d установился (%d)", i, got);
+    CHECK(p.unlocked_count() - before == listed, "имплант %s открыл %d из %d", implant(i).tag,
+          p.unlocked_count() - before, listed);
+    total += listed;
+  }
+  CHECK(total == kExprCount && p.unlocked_count() == kExprCount, "все %d эмоции открываются: %d", kExprCount,
+        p.unlocked_count());
+  CHECK(p.xp_to_next() == 0 && p.add_xp(1000) == -1, "после последнего импланта ставить нечего");
+
+  // Касания и шаги ограничены за день.
+  Progress q;
+  q.reset();
+  for (int i = 0; i < 500; ++i) q.touch();
+  q.add_steps(100000);
+  const XpRules r;
+  CHECK(q.xp == (uint32_t)(r.touch_day_cap + r.steps_day_cap), "дневной предел: %u", q.xp);
+  q.new_day();
+  q.touch();
+  CHECK(q.xp == (uint32_t)(r.touch_day_cap + r.steps_day_cap + r.day + r.touch), "новый день снимает предел");
+  // Обычный день ≈ день + касания + шаги: полный набор — за несколько недель.
+  const uint32_t per_day = r.day + r.touch_day_cap + r.steps_day_cap;
+  const uint32_t days = implant(implant_count() - 1).xp / per_day;
+  CHECK(days >= 21 && days <= 60, "всё открывается за %u дней активной носки", days);
+
+  // Флеш: контрольная сумма ловит порчу.
+  q.seal();
+  CHECK(q.valid(), "целая запись проходит проверку");
+  Progress broken = q;
+  broken.xp ^= 1;
+  CHECK(!broken.valid(), "испорченная запись не проходит");
+
+  // Дуэль: досрочно открывается эмоция из ближайшего импланта.
+  Progress d;
+  d.reset();
+  Rng rng;
+  rng.seed(3);
+  const Expr e = d.steal_one(rng);
+  CHECK(e != Expr::Count && d.is_unlocked(e) && implant_of(e) == 1, "выигранная эмоция — из следующего импланта");
+}
+
+static void test_scenes() {
+  for (int i = 0; i < kSceneCount; ++i) {
+    const Scene s = (Scene)i;
+    Scene back;
+    CHECK(scene_from_id(scene_id(s), &back) && back == s, "id сцены %s", scene_id(s));
+    FaceEngine eng;
+    eng.init(5, 0);
+    SceneParams p;
+    p.set_text("K7-3F2A");
+    eng.play_scene(s, 0, p);
+    int margin = 99, frames = 0;
+    uint32_t t = 0;
+    for (; t < 20000 && eng.scene() != Scene::None; t += 20) {
+      if (eng.update(t)) ++frames;
+      const Framebuffer& f = eng.frame();
+      for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kWidth; ++x)
+          if (f.get(x, y)) margin = imin(margin, imin(imin(x, kWidth - 1 - x), imin(y, kHeight - 1 - y)));
+    }
+    CHECK(eng.scene() == Scene::None && t <= scene_duration_ms(s) + 40u, "сцена %s заканчивается сама", scene_id(s));
+    CHECK(frames > 3, "сцена %s анимирована: %d кадров", scene_id(s), frames);
+    // В прятках лицо уходит за нижний край — так задумано.
+    if (s != Scene::hide) CHECK(margin >= kSafeMargin - 1, "сцена %s: до края %d px", scene_id(s), margin);
+  }
+  CHECK(text_width("ABC") == 22 && text_height() == 10, "размер надписи");
+}
+
+static void test_cyber_theme_and_tilt() {
+  // Кибер-тема и кибер-глаз не выводят эмоции за безопасное поле.
+  Quirks q;
+  q.cyber_eye = true;
+  for (int i = 0; i < kExprCount; ++i) {
+    const Expr e = (Expr)i;
+    FaceEngine eng;
+    eng.options().drift = false;
+    eng.options().theme = Theme::Cyber;
+    eng.init(77 + i, 0);
+    eng.set_quirks(q, 0);
+    eng.set_expression(e, 0, 0);
+    int margin = 99;
+    for (uint32_t t = 0; t < 6000; t += 50) {
+      eng.update(t);
+      if (eng.expression() != e) eng.set_expression(e, t, 0);
+      const Framebuffer& f = eng.frame();
+      for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kWidth; ++x)
+          if (f.get(x, y)) margin = imin(margin, imin(imin(x, kWidth - 1 - x), imin(y, kHeight - 1 - y)));
+    }
+    CHECK(margin >= kSafeMargin - 1, "кибер-тема, %s: до края %d px", expression(e).id, margin);
+  }
+  // Наклон: зрачки уходят в нижнюю сторону.
+  FaceEngine eng;
+  eng.options().idle_motion = false;
+  eng.init(1, 0);
+  eng.set_tilt(1.0f, 0.0f);
+  for (uint32_t t = 0; t < 1000; t += 33) eng.update(t);
+  CHECK(eng.face().gx > 0.6f, "наклон вправо — взгляд вправо: %.2f", eng.face().gx);
+  eng.set_tilt(0.0f, 0.0f);
+  for (uint32_t t = 1000; t < 2500; t += 33) eng.update(t);
+  CHECK(fabs_(eng.face().gx) < 0.1f, "выровняли — взгляд вернулся: %.2f", eng.face().gx);
+}
+
+// Прицел кибер-темы: только на «цепких» эмоциях, сам гаснет, в классике его нет.
+static void test_reticle() {
+  for (int theme = 0; theme < 2; ++theme) {
+    FaceEngine eng;
+    eng.options().theme = theme ? Theme::Cyber : Theme::Classic;
+    eng.init(5, 0);
+    bool seen = false;
+    for (uint32_t t = 0; t < 5000; t += 50) {
+      eng.update(t);
+      seen |= eng.reticle_visible();
+    }
+    CHECK(!seen, "тема %d: на спокойном лице прицела нет", theme);
+    eng.set_expression(Expr::focused, 5000, 0);
+    eng.update(5000);
+    eng.update(5400);
+    CHECK(eng.reticle_visible() == (theme == 1), "тема %d: сосредоточенность берёт цель", theme);
+    eng.update(5000 + FaceEngine::kReticleMs + 100);
+    CHECK(!eng.reticle_visible(), "тема %d: прицел гаснет сам", theme);
+  }
+  // Изредка сканирует и без повода: раз в 3–8 минут.
+  FaceEngine eng;
+  eng.options().theme = Theme::Cyber;
+  eng.init(6, 0);
+  int scans = 0;
+  uint32_t last_seen = 0;
+  for (uint32_t t = 0; t < 30u * 60000u; t += 50) {
+    eng.update(t);
+    if (!eng.reticle_visible()) continue;
+    if (!scans || t - last_seen > 1000u) ++scans;  // мигание в конце — тот же скан
+    last_seen = t;
+  }
+  CHECK(scans >= 3 && scans <= 10, "за полчаса %d сканирований", scans);
+}
+
+// Кибер-глаз: правый зрачок квадратный, левый — круглый.
+static void test_cyber_pupil() {
+  Face f;
+  expression_face(Expr::neutral, &f);
+  Framebuffer a, b;
+  a.clear(), b.clear();
+  render_face(a, f, nullptr);
+  f.eye[1].sq = true;
+  render_face(b, f, nullptr);
+  int left_diff = 0, right_diff = 0;
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 0; x < kWidth; ++x) (x < kWidth / 2 ? left_diff : right_diff) += a.get(x, y) != b.get(x, y);
+  CHECK(right_diff > 8, "правый зрачок другой формы: %d пикселей", right_diff);
+  CHECK(left_diff == 0, "левый глаз не меняется: %d пикселей", left_diff);
+}
+
+// Характеры заметно разные: у каждого своё лицо в покое и свои ответы на касания,
+// даже у нового брелока, у которого открыта только база.
+static void test_temperaments() {
+  static float hist[kArchetypeCount][kExprCount];
+  for (int a = 0; a < kArchetypeCount; ++a) {
+    const Temperament& t = temperament((Archetype)a);
+    FaceEngine eng;
+    Behavior bh;
+    Progress p;
+    p.reset();
+    eng.init(40 + a, 0);
+    bh.init(&eng, 40 + a, 0);
+    bh.attach_progress(&p);
+    bh.set_temperament(&t);
+    bh.set_surprise_interval(7u * 24u * 3600000u, 7u * 24u * 3600000u, 0);
+    int rest_ms = 0, tap_hits = 0, taps = 0;
+    for (uint32_t ms = 0; ms < 3u * 3600000u; ms += 500) {
+      bh.set_clock((uint16_t)(10 * 60 + ms / 60000u));
+      if (ms % 300000u == 150000u) {
+        bh.on_event(Event::tap, ms);
+        ++taps;
+        bh.update(ms);
+        eng.update(ms);
+        for (Expr x : t.tap) tap_hits += eng.expression() == x;
+      }
+      bh.update(ms);
+      eng.update(ms);
+      hist[a][(int)eng.expression()] += 0.5f;
+      rest_ms += eng.expression() == t.rest ? 500 : 0;
+    }
+    CHECK(rest_ms > 3600000 * 3 / 5, "%s: лицо в покое (%s) — %d%% времени", t.tag, expression(t.rest).id,
+          rest_ms / 108000);
+    CHECK(tap_hits * 10 >= taps * 6, "%s: касание отвечает по-своему %d из %d", t.tag, tap_hits, taps);
+  }
+  // Попарно: распределения эмоций пересекаются меньше чем наполовину.
+  int same = 0;
+  for (int a = 0; a < kArchetypeCount; ++a)
+    for (int b = a + 1; b < kArchetypeCount; ++b) {
+      float inter = 0, total = 0;
+      for (int e = 0; e < kExprCount; ++e) inter += fmin_(hist[a][e], hist[b][e]), total += hist[a][e];
+      if (inter > total * 0.5f) ++same;
+    }
+  CHECK(same == 0, "похожих пар характеров: %d", same);
+}
+
+// Встреча зависит от пары характеров: близнецы радуются, скромник смущается, ворчун ворчит.
+static uint32_t hash_of(Archetype a) {
+  for (uint32_t h = 1;; ++h)
+    if (archetype_from_hash(h) == a) return h;
+}
+
+static void test_meet_pairs() {
+  struct Case {
+    Archetype me, other;
+    Expr expect[3];
+    const char* sub;
+  };
+  const Case cases[] = {
+      {Archetype::shy, Archetype::grumpy, {Expr::flustered, Expr::embarrassed, Expr::shy}, "GRUMPY"},
+      {Archetype::playful, Archetype::playful, {Expr::pog, Expr::excited, Expr::happy}, "TWIN!"},
+      {Archetype::grumpy, Archetype::playful, {Expr::unamused, Expr::annoyed, Expr::Count}, "PLAYFUL"},
+      {Archetype::sweet, Archetype::chill, {Expr::love, Expr::adoring, Expr::Count}, "CHILL"},
+  };
+  for (const Case& c : cases) {
+    FaceEngine eng;
+    Behavior bh;
+    eng.init(3, 0);
+    bh.init(&eng, 3, 0);
+    bh.set_temperament(&temperament(c.me));
+    bh.meet("AB-CDEF", true, 1000, hash_of(c.other));
+    bool sub_ok = false, after_ok = false;
+    for (uint32_t t = 1000; t < 9000; t += 50) {
+      bh.update(t);
+      eng.update(t);
+      if (eng.scene() == Scene::greet) sub_ok |= !strcmp(eng.scene_params().sub, c.sub);
+      if (eng.scene() == Scene::None && t > 4500)
+        for (Expr x : c.expect) after_ok |= x == eng.expression();
+    }
+    CHECK(sub_ok, "%s встречает %s: подпись %s", temperament(c.me).tag, temperament(c.other).tag, c.sub);
+    CHECK(after_ok, "%s встречает %s: эмоция после — %s", temperament(c.me).tag, temperament(c.other).tag,
+          expression(eng.expression()).id);
+  }
+}
+
+static void test_growth_behavior() {
+  // С новым прогрессом персонаж сутки показывает только открытые эмоции.
+  FaceEngine eng;
+  Behavior bh;
+  Progress p;
+  p.reset();
+  eng.init(9, 0);
+  bh.init(&eng, 9, 0);
+  bh.attach_progress(&p);
+  bh.set_surprise_interval(3600000u, 7200000u, 0);
+  bool ok = true;
+  Expr bad = Expr::Count;
+  int scenes = 0;
+  Scene last = Scene::None;
+  for (uint32_t t = 0; t < 24u * 3600000u; t += 1000) {
+    bh.set_clock((uint16_t)((t / 60000u + 12 * 60) % 1440));
+    if (t % 600000u == 0) bh.on_event(Event::tap, t);
+    bh.update(t);
+    eng.update(t);
+    if (eng.scene() != last && eng.scene() != Scene::None) ++scenes;
+    last = eng.scene();
+    if (eng.scene() == Scene::None && !p.is_unlocked(eng.expression())) ok = false, bad = eng.expression();
+  }
+  CHECK(ok, "показана закрытая эмоция: %s", bad == Expr::Count ? "-" : expression(bad).id);
+  CHECK(scenes >= 5, "за сутки были сюрпризы и апгрейды: %d сцен", scenes);
+  CHECK(p.touches > 100 && p.xp > 0, "касания дают опыт: %u", p.xp);
+
+  // Встреча и дуэль.
+  bh.meet("K7-3F2A", true, 100000000u);
+  eng.update(100000000u);
+  CHECK(eng.scene() == Scene::greet, "встреча — сцена приветствия");
+  const int before = p.unlocked_count();
+  uint32_t t = 100000000u;
+  for (; t < 100060000u; t += 50) {
+    bh.update(t);
+    eng.update(t);
+  }
+  bh.duel("K7-3F2A", true, t);
+  for (uint32_t end = t + 30000u; t < end; t += 50) {
+    bh.update(t);
+    eng.update(t);
+  }
+  CHECK(p.unlocked_count() > before, "победа в дуэли открыла эмоцию: %d → %d", before, p.unlocked_count());
+  CHECK(p.duels_won == 1 && p.friends == 1, "счётчики встреч и дуэлей");
+
+  // Праздник — один раз за дату.
+  FaceEngine e2;
+  Behavior b2;
+  e2.init(4, 0);
+  b2.init(&e2, 4, 0);
+  b2.set_date(2026, 12, 31);
+  int ny = 0;
+  Scene prev = Scene::None;
+  for (uint32_t tt = 0; tt < 120000; tt += 100) {
+    b2.update(tt);
+    e2.update(tt);
+    if (e2.scene() == Scene::new_year && prev != Scene::new_year) ++ny;
+    prev = e2.scene();
+  }
+  CHECK(ny == 1, "Новый год показан ровно раз: %d", ny);
+  b2.set_birthday(5, 14);
+  b2.set_date(2027, 5, 14);
+  bool bday = false;
+  for (uint32_t tt = 120000; tt < 140000; tt += 100) {
+    b2.update(tt);
+    e2.update(tt);
+    bday |= e2.scene() == Scene::birthday;
+  }
+  CHECK(bday, "день рождения хозяина");
+}
+
+// ---------------------------------------------------------------- время, батарея, устойчивость
+
+// Цикл как в прошивке: опрос раз в 1 мс, а отправка изменённых окон по I2C на 400 кГц
+// занимает ~23 мкс на байт плюс команды окна. Время 64-битное, в движок идёт uint32.
+struct FirmwareLoop {
+  FaceEngine* eng;
+  Behavior* bh;
+  uint64_t t;
+  uint64_t last_eng = 0, last_bh = 0, max_eng_gap = 0, max_bh_gap = 0;
+  uint32_t eng_updates = 0, bh_updates = 0, frames = 0, max_ahead = 0;
+  void reset_stats() {
+    last_eng = last_bh = t;
+    max_eng_gap = max_bh_gap = 0;
+    eng_updates = bh_updates = frames = 0;
+  }
+  void step() {
+    const uint32_t now = (uint32_t)t;
+    uint32_t cost_us = 1000;
+    if (bh && time_reached(now, bh->next_update_ms())) {
+      bh->update(now);
+      ++bh_updates;
+      if (t - last_bh > max_bh_gap) max_bh_gap = t - last_bh;
+      last_bh = t;
+      max_ahead = imax((int)max_ahead, (int)time_left(now, bh->next_update_ms()));
+    }
+    if (time_reached(now, eng->next_update_ms())) {
+      if (eng->update(now)) {
+        DirtyWindow w[kPages];
+        const int n = eng->dirty(w);
+        cost_us += (uint32_t)dirty_bytes(w, n) * 23u + (uint32_t)n * 300u;
+        ++frames;
+      }
+      ++eng_updates;
+      if (t - last_eng > max_eng_gap) max_eng_gap = t - last_eng;
+      last_eng = t;
+      max_ahead = imax((int)max_ahead, (int)time_left(now, eng->next_update_ms()));
+    }
+    t += (cost_us + 999u) / 1000u;
+  }
+  void run_until(uint64_t end) {
+    while (t < end) step();
+  }
+};
+
+// millis() переполняется раз в 49.7 суток. Лицо и характер живут дальше во всех состояниях:
+// не замирают, не крутятся вхолостую по 1 мс перед переполнением и не засыпают на полтора месяца.
+static void test_millis_wrap() {
+  const uint64_t W = 1ull << 32;
+  struct Case {
+    const char* name;
+    Event ev;
+    bool manual;
+  };
+  const Case cases[] = {{"ручной режим", Event::Count, true},
+                        {"на зарядке", Event::charge_start, false},
+                        {"во сне в темноте", Event::dark, false},
+                        {"бодрствует", Event::Count, false}};
+  for (const Case& c : cases) {
+    for (uint32_t phase = 0; phase < 4; ++phase) {
+      FaceEngine eng;
+      Behavior bh;
+      const uint64_t t0 = W - 150000u - phase * 7919u;
+      eng.init(11 + phase, (uint32_t)t0);
+      bh.init(&eng, 11 + phase, (uint32_t)t0);
+      bh.set_clock(c.ev == Event::dark ? 23 * 60 : 12 * 60);
+      if (c.manual) {
+        bh.set_auto(false);
+        eng.set_expression(Expr::neutral, (uint32_t)t0);
+      }
+      if (c.ev != Event::Count) bh.on_event(c.ev, (uint32_t)t0);
+      FirmwareLoop lp{&eng, &bh, t0};
+      lp.run_until(W - 30000u);
+      lp.reset_stats();
+      lp.run_until(W);
+      const uint32_t before = lp.eng_updates;
+      lp.reset_stats();
+      lp.run_until(W + 180000u);
+      CHECK(before < 2000, "%s, фаза %u: перед переполнением %u обновлений за 30 с — холостой цикл", c.name, phase,
+            before);
+      CHECK(lp.max_eng_gap <= kMaxSleepMs + kWakeMergeMs + 50, "%s, фаза %u: лицо замерло на %.1f с после переполнения",
+            c.name, phase, lp.max_eng_gap / 1000.0);
+      CHECK(lp.frames >= 5, "%s, фаза %u: после переполнения всего %u кадров", c.name, phase, lp.frames);
+      CHECK(lp.bh_updates >= 3 && lp.max_bh_gap <= kMaxSleepMs + 50,
+            "%s, фаза %u: характер замер (%u обновлений, пауза %.1f с)", c.name, phase, lp.bh_updates,
+            lp.max_bh_gap / 1000.0);
+      CHECK(lp.max_ahead <= kMaxSleepMs + kWakeMergeMs, "%s, фаза %u: расписание на %u мс вперёд", c.name, phase,
+            lp.max_ahead);
+    }
+  }
+
+  // Сюрпризы рядом с переполнением идут по расписанию, а не подряд.
+  FaceEngine eng;
+  Behavior bh;
+  const uint64_t t0 = W - 3u * 3600000u;
+  eng.init(5, (uint32_t)t0);
+  bh.init(&eng, 5, (uint32_t)t0);
+  bh.set_surprise_interval(3600000u, 7200000u, (uint32_t)t0);
+  int scenes = 0;
+  Scene last = Scene::None;
+  for (uint64_t t = t0; t < W + 3600000u;) {
+    const uint32_t now = (uint32_t)t;
+    bh.set_clock(12 * 60);
+    if (time_reached(now, bh.next_update_ms())) bh.update(now);
+    if (time_reached(now, eng.next_update_ms())) eng.update(now);
+    if (eng.scene() != last && eng.scene() != Scene::None) ++scenes;
+    last = eng.scene();
+    const uint32_t wait = imin((int)time_left(now, bh.next_update_ms()), (int)time_left(now, eng.next_update_ms()));
+    t += wait ? wait : 1;
+  }
+  CHECK(scenes >= 1 && scenes <= 4, "за 4 часа у переполнения %d сюрпризов (раз в 1–2 часа)", scenes);
+}
+
+static int lit_now(const FaceEngine& eng) { return eng.frame().count_lit(); }
+
+// Чих, испуг и «тык» не отменяют моргание навсегда, даже если начались посреди него.
+static void test_blink_survives_clips() {
+  const Clip clips[] = {Clip::sneeze, Clip::startle, Clip::boop};
+  int lost = 0, total = 0;
+  for (uint32_t seed = 1; seed <= 30; ++seed) {
+    for (Clip c : clips) {
+      FaceEngine eng;
+      eng.options().drift = false;
+      eng.init(seed, 0);
+      uint32_t t = 0;
+      eng.set_expression(Expr::neutral, t, 0);
+      eng.update(t);
+      // Открытые глаза — самый «светлый» кадр последних секунд: в момент клипа
+      // лицо может как раз моргать.
+      int open = 0;
+      while (t < 8000u + seed * 37u) {
+        t = eng.next_update_ms();
+        eng.update(t);
+        if (t + 3000u > 8000u + seed * 37u) open = imax(open, lit_now(eng));
+      }
+      eng.play_clip(c, t);
+      const uint32_t clip_end = t + clip_duration_ms(c) + 100u;
+      bool blinked = false;
+      while (t < clip_end + 20000u && !blinked) {
+        t = eng.next_update_ms();
+        eng.update(t);
+        if (t > clip_end && lit_now(eng) < open * 6 / 10) blinked = true;
+      }
+      ++total;
+      lost += !blinked;
+    }
+  }
+  CHECK(lost == 0, "после клипа моргание пропало в %d случаях из %d", lost, total);
+}
+
+// NaN и бесконечности снаружи не ломают лицо: ни взгляд, ни наклон, ни внешность.
+static void test_nonfinite_inputs() {
+  const float nan = __builtin_nanf(""), inf = __builtin_inff();
+  FaceEngine eng;
+  eng.init(3, 0);
+  uint32_t t = 0;
+  settle(eng, Expr::neutral, t);
+  auto run = [&](uint32_t ms) {
+    for (const uint32_t end = t + ms; t < end; t += 33) eng.update(t);
+  };
+  eng.jerk(inf, 0.0f, t);
+  eng.jerk(-inf, 1.0f, t);
+  run(1500);
+  CHECK(lit_now(eng) > 80 && finitef(eng.face().gx), "рывок с бесконечностью: %d пикселей", lit_now(eng));
+  eng.set_tilt(nan, 0.5f);
+  run(1500);
+  CHECK(lit_now(eng) > 80 && finitef(eng.face().gx) && finitef(eng.face().gy), "наклон с NaN: %d пикселей",
+        lit_now(eng));
+  eng.look_at(nan, inf, t, 1000);
+  run(1500);
+  CHECK(lit_now(eng) > 80 && finitef(eng.face().gx), "взгляд с NaN");
+  Quirks q;
+  q.spacing = nan, q.eye_scale = inf, q.pupil_scale = -inf, q.blink_rate = nan, q.brow_lift = nan;
+  eng.set_quirks(q, t);
+  run(3000);
+  CHECK(lit_now(eng) > 80 && finitef(eng.quirks().eye_scale) && finitef(eng.quirks().blink_rate), "внешность с NaN");
+  eng.set_tilt(0.8f, 0.0f);
+  run(1500);
+  CHECK(eng.face().gx > 0.5f, "после NaN наклон снова работает: %.2f", eng.face().gx);
+
+  Behavior bh;
+  bh.init(&eng, 3, t);
+  bh.personality().playful = nan;
+  bh.personality().sleepy = inf;
+  for (int i = 0; i < 20; ++i) {
+    bh.on_event(Event::tap, t);
+    bh.update(t);
+    run(500);
+  }
+  CHECK(finitef(bh.mood().energy) && finitef(bh.personality().playful) && lit_now(eng) > 80, "характер с NaN");
+}
+
+static uint32_t tilt_renders_per_min(bool feed, float noise) {
+  FaceEngine eng;
+  eng.init(3, 0);
+  uint32_t t = 0;
+  eng.set_expression(Expr::neutral, t, 0);
+  eng.update(t);
+  Rng r;
+  r.seed(99);
+  uint32_t next_imu = 0;
+  uint32_t renders0 = 0;
+  bool started = false;
+  while (t < 65000) {
+    if (!started && t >= 5000) started = true, renders0 = eng.stats().renders;
+    if (feed && time_reached(t, next_imu)) {
+      eng.set_tilt(0.4f + r.range(-noise, noise), 0.3f + r.range(-noise, noise));
+      next_imu = t + 20;  // акселерометр 50 Гц
+    }
+    if (time_reached(t, eng.next_update_ms())) eng.update(t);
+    uint32_t n = imin((int)time_left(t, eng.next_update_ms()), feed ? (int)time_left(t, next_imu) : 1 << 30);
+    t += n ? n : 1;
+  }
+  return eng.stats().renders - renders0;
+}
+
+// Шум акселерометра не будит движок и не дёргает зрачки, а настоящий наклон работает.
+static void test_tilt_noise() {
+  const uint32_t still = tilt_renders_per_min(false, 0.0f), noisy = tilt_renders_per_min(true, 0.01f);
+  CHECK(noisy <= still * 13 / 10 + 30, "наклон с шумом 50 Гц: %u отрисовок/мин против %u без него", noisy, still);
+  printf("  наклон с шумом ±0.01 на 50 Гц: %u отрисовок/мин, без наклона %u\n", noisy, still);
+
+  // Рывок в ту же сторону только продлевает взгляд, не будит движок заново.
+  FaceEngine eng;
+  eng.init(3, 0);
+  uint32_t t = 0;
+  settle(eng, Expr::neutral, t);
+  eng.jerk(1.0f, 0.0f, t);
+  for (int i = 0; i < 5; ++i) eng.update(t += 33);
+  const uint32_t next = eng.next_update_ms();
+  eng.jerk(1.0f, 0.02f, t + 10);
+  CHECK(eng.next_update_ms() == next, "повторный рывок в ту же сторону разбудил движок");
+}
+
+static uint32_t wakes_per_min(Expr e, uint32_t* renders = nullptr, uint32_t* frames = nullptr) {
+  FaceEngine eng;
+  eng.init(7, 0);
+  uint32_t t = 0;
+  eng.set_expression(e, t, 0);
+  eng.update(t);
+  while (t < 5000) {
+    t = eng.next_update_ms();
+    eng.update(t);
+  }
+  const EngineStats s0 = eng.stats();
+  uint32_t wakes = 0;
+  while (t < 65000) {
+    t = eng.next_update_ms();
+    eng.update(t);
+    ++wakes;
+  }
+  if (renders) *renders = eng.stats().renders - s0.renders;
+  if (frames) *frames = eng.stats().frames - s0.frames;
+  return wakes;
+}
+
+// Дрожь от холода — приступами 1 с из 4, и между приступами процессор спит.
+static void test_shiver_wakes() {
+  const uint32_t w = wakes_per_min(Expr::cold);
+  CHECK(w < 900, "холод: %u пробуждений в минуту", w);
+}
+
+// Значки будят процессор, только когда меняется их картинка.
+static void test_overlay_clocks() {
+  uint32_t w = 0;
+  CHECK(overlay_clock(Overlay::Ellipsis, 300, &w) == 289 && w == 577 - 300, "многоточие: шаги по точкам");
+  CHECK(overlay_clock(Overlay::BatteryLow, 10, &w) == 1 && w == 771, "батарейка мигает дважды за цикл");
+  CHECK(overlay_clock(Overlay::Exclaim, 700, &w) == 600 && w == 0, "«!» замирает после встряски");
+  CHECK(overlay_clock(Overlay::Sweat, 12345, &w) == 0 && w == 0, "капля пота статична");
+  CHECK(overlay_clock(Overlay::Zzz, 30u * 86400000u + 123u, &w) < 3200, "время Zzz не растёт дальше цикла");
+  uint32_t r_low = 0, r_bored = 0, r_listen = 0;
+  wakes_per_min(Expr::low_battery, &r_low);
+  wakes_per_min(Expr::bored, &r_bored);
+  wakes_per_min(Expr::listening, &r_listen);
+  CHECK(r_low < 520, "мало заряда: %u отрисовок/мин", r_low);
+  CHECK(r_bored < 650, "скука: %u отрисовок/мин", r_bored);
+  CHECK(r_listen < 800, "слушает: %u отрисовок/мин", r_listen);
+}
+
+static uint32_t crc32_ref(const uint8_t* p, uint32_t n) {
+  uint32_t c = 0xFFFFFFFFu;
+  for (uint32_t i = 0; i < n; ++i) {
+    c ^= p[i];
+    for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+  }
+  return ~c;
+}
+
+// Запись роста не зависит от порядка каталога и переносится со старой версии.
+static void test_progress_format() {
+  bool keys_ok = true;
+  for (int i = 0; i < kExprCount; ++i) {
+    if (!Progress::key((Expr)i)) keys_ok = false;
+    for (int j = 0; j < i; ++j)
+      if (Progress::key((Expr)i) == Progress::key((Expr)j)) keys_ok = false;
+  }
+  CHECK(keys_ok, "ключи эмоций разные и не нулевые");
+
+  // Дуэль кладёт эмоцию в список дополнительных, имплант потом освобождает место.
+  Progress p;
+  p.reset();
+  Rng rng;
+  rng.seed(7);
+  const Expr won = p.steal_one(rng);
+  CHECK(won != Expr::Count && p.is_unlocked(won) && p.extra_count() == 1, "выигранная эмоция в списке дополнительных");
+  p.add_xp(implant(1).xp);
+  CHECK(p.is_unlocked(won) && p.extra_count() == 0, "имплант открыл её и освободил место");
+  int filled = 0;
+  for (int i = 0; i < kExprCount; ++i)
+    if (!p.is_unlocked((Expr)i) && p.unlock((Expr)i)) ++filled;
+  CHECK(filled == Progress::kExtraSlots && p.steal_one(rng) == Expr::Count, "в список влезает %d, не больше", filled);
+  Progress all;
+  all.reset();
+  all.unlock_all();
+  CHECK(all.unlocked_count() == kExprCount, "«открыть всё» — флагом");
+
+  // Своя версия: запись → чтение без потерь; порча и чужая версия не проходят.
+  p.seal();
+  Progress back;
+  CHECK(back.load(&p, sizeof p) && memcmp(&back, &p, sizeof p) == 0, "запись читается без потерь");
+  Progress bad = p;
+  bad.xp ^= 1;
+  CHECK(!back.load(&bad, sizeof bad), "испорченная запись не читается");
+  Progress future = p;
+  future.version = Progress::kVersion + 1;
+  future.seal();
+  CHECK(!back.load(&future, sizeof future), "запись более новой версии не читается");
+
+  // Версия 1: битовая карта по номерам каталога. Сверх имплантов открыто «рыдание» — выиграно в дуэли.
+  uint8_t v1[56] = {};
+  auto put16 = [&](int o, uint32_t v) { v1[o] = (uint8_t)v, v1[o + 1] = (uint8_t)(v >> 8); };
+  auto put32 = [&](int o, uint32_t v) { put16(o, v & 0xFFFF), put16(o + 2, v >> 16); };
+  put32(0, Progress::kMagic), put16(4, 1), put16(6, 17), put32(8, 700), put32(12, 321), put32(16, 54321);
+  put16(20, 3), put16(22, 2), put16(24, 1), put16(26, 8), put16(28, 10), put16(30, 42), v1[32] = 3;
+  for (int i = 0; i < kExprCount; ++i)
+    if (implant_of((Expr)i) <= 3) v1[34 + i / 8] |= (uint8_t)(1u << (i % 8));
+  v1[34 + (int)Expr::sobbing / 8] |= (uint8_t)(1u << ((int)Expr::sobbing % 8));
+  put32(52, crc32_ref(v1, 52));
+  Progress m;
+  CHECK(m.load(v1, sizeof v1) && m.valid() && m.version == Progress::kVersion, "запись версии 1 переносится");
+  CHECK(m.days == 17 && m.xp == 700 && m.touches == 321 && m.steps == 54321 && m.friends == 3 && m.implant == 3 &&
+            m.step_rest == 42,
+        "поля версии 1 на месте");
+  CHECK(m.is_unlocked(Expr::sobbing) && !m.is_unlocked(Expr::furious) && m.extra_count() == 1,
+        "выигранная в версии 1 эмоция осталась открытой");
+  v1[10] ^= 1;
+  CHECK(!m.load(v1, sizeof v1), "испорченная запись версии 1 не читается");
+}
+
+// Цепочка движка «смех → радость» доигрывает: радость видна, характер её не перебивает.
+// А цепочка, которая замкнулась на себя (закрытая эмоция подменилась той же), не вечна.
+static void test_chain_follow_up() {
+  FaceEngine eng;
+  Behavior bh;
+  eng.init(9, 0);
+  bh.init(&eng, 9, 0);
+  uint64_t t = 1000;
+  FirmwareLoop lp{&eng, &bh, t};
+  lp.run_until(20000);
+  bh.queue_scene(Scene::boot, SceneParams{}, Expr::laugh, (uint32_t)lp.t, "тест");
+  bool laughed = false;
+  uint32_t happy_ms = 0;
+  for (const uint64_t end = lp.t + 16000; lp.t < end;) {
+    const uint64_t before = lp.t;
+    lp.step();
+    if (eng.scene() != Scene::None) continue;
+    if (eng.expression() == Expr::laugh) laughed = true;
+    if (laughed && eng.expression() == Expr::happy) happy_ms += (uint32_t)(lp.t - before);
+  }
+  CHECK(laughed && happy_ms >= 2000, "после смеха радость была видна %u мс", happy_ms);
+
+  Progress fresh;
+  fresh.reset();
+  bh.attach_progress(&fresh);
+  CHECK(!fresh.is_unlocked(Expr::adoring) && bh.allowed(Expr::adoring) == Expr::love,
+        "love → adoring замыкается на love");
+  bh.queue_scene(Scene::boot, SceneParams{}, Expr::love, (uint32_t)lp.t, "тест");
+  lp.run_until(lp.t + 6000);
+  bool left = false;
+  for (const uint64_t end = lp.t + 40000; lp.t < end; lp.step()) left |= eng.expression() != Expr::love;
+  CHECK(left, "замкнутая цепочка love держится вечно");
+}
+
+// Значок появляется с «пружинкой», даже если лицо перед этим долго стояло.
+static void test_overlay_pop_after_idle() {
+  FaceEngine eng;
+  eng.options().drift = false;
+  eng.options().idle_motion = false;
+  eng.init(2, 0);
+  eng.set_expression(Expr::neutral, 0, 0);
+  eng.update(0);
+  eng.set_expression(Expr::nervous, 3000, 0);  // капля пота
+  eng.update(3000);
+  const int first = lit_now(eng);
+  for (uint32_t t = 3033; t < 3500; t += 33) eng.update(t);
+  CHECK(first < lit_now(eng), "капля появилась сразу целиком: %d → %d пикселей", first, lit_now(eng));
+}
+
+// Движение и значки через месяц на одной эмоции идут так же, как в первые секунды.
+static void test_long_hold_precision() {
+  FaceEngine eng;
+  eng.init(4, 0);
+  eng.set_expression(Expr::charging, 0, 0);
+  auto frames = [&](uint32_t from) {
+    uint32_t t = from;
+    eng.update(t);
+    const uint32_t f0 = eng.stats().frames;
+    while (t < from + 10000) {
+      t = eng.next_update_ms();
+      eng.update(t);
+    }
+    return eng.stats().frames - f0;
+  };
+  const uint32_t early = frames(5000);
+  uint32_t t = 15000;
+  for (; t < 30u * 86400000u; t += 59000u) eng.update(t);
+  const uint32_t late = frames(t);
+  CHECK(late * 4 >= early * 3 && late * 4 <= early * 5, "кадров за 10 с: в начале %u, через месяц %u", early, late);
+}
+
+// Удар без падения — не падение; «перевернули обратно» без переворота — не головокружение.
+static void test_behavior_fresh_state() {
+  FaceEngine eng;
+  Behavior bh;
+  eng.init(1, 1000);
+  bh.init(&eng, 1, 1000);
+  bh.on_event(Event::impact, 1500);
+  CHECK(strcmp(bh.last_reason(), "стукнули") == 0, "удар сразу после старта: «%s»", bh.last_reason());
+  bh.on_event(Event::upright, 30000);
+  CHECK(eng.expression() != Expr::dizzy && strcmp(bh.last_reason(), "стукнули") == 0,
+        "upright без переворота: %s, «%s»", expr_id(eng.expression()), bh.last_reason());
+  bh.on_event(Event::free_fall, 40000);
+  bh.on_event(Event::impact, 40500);
+  CHECK(strcmp(bh.last_reason(), "упал и ударился") == 0, "падение и удар: «%s»", bh.last_reason());
+
+  // Автоматика выключена надолго, потом включена — характер сразу в деле.
+  for (uint32_t tt = 50000; tt < 50000u + 3600000u; tt += 20000) {
+    if (tt == 50000) bh.set_auto(false);
+    bh.update(tt);
+  }
+  bh.set_auto(true);
+  CHECK(time_reached(50000u + 3600000u, bh.next_update_ms()), "после включения автоматики поведение ждёт");
+}
+
+// Оскал рисуется без однопиксельных линий и щелей.
+static void test_teeth_strokes() {
+  for (int i = 0; i < kExprCount; ++i) {
+    const Expression& x = expression((Expr)i);
+    if (x.mouth.kind != MouthKind::Teeth) continue;
+    Face f;
+    expression_face((Expr)i, &f);
+    for (int k = 0; k < 2; ++k) f.eye[k] = no_eye(), f.brow[k].len = 0;
+    Framebuffer fb;
+    fb.clear();
+    render_face(fb, f, nullptr);
+    int lonely = 0;
+    for (int y = 0; y < kHeight; ++y)
+      for (int x2 = 0; x2 < kWidth; ++x2) {
+        if (!fb.get(x2, y)) continue;
+        bool in_block = false;
+        for (int dy = -1; dy <= 0 && !in_block; ++dy)
+          for (int dx = -1; dx <= 0 && !in_block; ++dx)
+            in_block = fb.get(x2 + dx, y + dy) && fb.get(x2 + dx + 1, y + dy) && fb.get(x2 + dx, y + dy + 1) &&
+                       fb.get(x2 + dx + 1, y + dy + 1);
+        lonely += !in_block;
+      }
+    CHECK(lonely == 0, "%s: в оскале %d однопиксельных пикселей", x.id, lonely);
+  }
+}
+
+// Щетина привязана к лицу: сдвиг лица сдвигает точки, в том числе левее нуля.
+static void test_stubble_follows_face() {
+  Face f;
+  expression_face(Expr::soy_scream, &f);
+  Framebuffer a, b;
+  a.clear(), b.clear();
+  Anchors an;
+  f.ox = -3.0f;
+  render_face(a, f, &an);
+  a.clear();
+  render_overlay(a, Overlay::Stubble, an, 1.0f, 0.0f);
+  f.ox = 0.0f;
+  render_face(b, f, &an);
+  b.clear();
+  render_overlay(b, Overlay::Stubble, an, 1.0f, 0.0f);
+  int diff = 0, lit = 0;
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 12; x < 112; ++x) diff += a.get(x - 3, y) != b.get(x, y), lit += b.get(x, y);
+  CHECK(lit > 20 && diff == 0, "щетина не следует за лицом: %d расхождений из %d", diff, lit);
+}
+
+// Пробуждения, выпавшие ближе 20 мс друг к другу, сливаются; а дальше минуты движок не спит.
+static void test_wake_merge_and_horizon() {
+  FaceEngine eng;
+  eng.init(6, 0);
+  eng.options().drift = true;
+  uint32_t t = 0;
+  eng.set_expression(Expr::neutral, t, 0);
+  eng.update(t);
+  int idle_short = 0, wakes = 0;
+  bool prev_changed = true;
+  uint32_t longest = 0;
+  while (t < 600000) {
+    const uint32_t n = eng.next_update_ms();
+    if (n - t < kWakeMergeMs && !prev_changed) ++idle_short;
+    longest = n - t > longest ? n - t : longest;
+    t = n;
+    prev_changed = eng.update(t);
+    ++wakes;
+  }
+  CHECK(idle_short == 0, "%d пробуждений ближе %u мс без анимации", idle_short, kWakeMergeMs);
+  CHECK(longest <= kMaxSleepMs + kWakeMergeMs, "движок проспал %u мс", longest);
+}
+
+// Через несколько минут без внимания лицо успокаивается: жесты реже, кадров меньше.
+static void test_calm_breathing() {
+  FaceEngine eng;
+  eng.init(8, 0);
+  uint32_t t = 0;
+  eng.set_expression(Expr::neutral, t, 0);
+  eng.update(t);
+  auto frames = [&](uint32_t to) {
+    const uint32_t f0 = eng.stats().frames;
+    while (t < to) {
+      t = eng.next_update_ms();
+      eng.update(t);
+    }
+    return eng.stats().frames - f0;
+  };
+  frames(10000);
+  const uint32_t lively = frames(70000);
+  frames(250000);
+  const uint32_t calm = frames(310000);
+  CHECK(eng.calm() && calm * 10 < lively * 7, "спокойное лицо: %u кадров/мин против %u", calm, lively);
+  eng.note_activity(t);
+  CHECK(!eng.calm(), "внимание возвращает живость");
+  printf("  нейтральное лицо: %u кадров/мин, успокоившись — %u\n", lively, calm);
+}
+
+// Яркость: темно — минимум, ночь и сон — приглушённо, иначе обычная.
+static void test_brightness_levels() {
+  FaceEngine eng;
+  Behavior bh;
+  eng.init(1, 0);
+  bh.init(&eng, 1, 0);
+  bh.set_clock(12 * 60);
+  CHECK(bh.brightness() == Brightness::Normal, "днём — обычная яркость");
+  bh.on_event(Event::dark, 1000);
+  CHECK(bh.brightness() == Brightness::Dark, "в темноте — минимум");
+  bh.on_event(Event::light, 2000);
+  CHECK(bh.brightness() == Brightness::Normal, "свет — снова обычная");
+  bh.set_clock(23 * 60 + 30);
+  CHECK(bh.brightness() == Brightness::Dim, "ночью — приглушённо");
+  bh.set_clock(12 * 60);
+  eng.set_expression(Expr::sleeping, 3000);
+  CHECK(bh.brightness() == Brightness::Dim, "во сне — приглушённо");
+}
+
+// ---------------------------------------------------------------- звук
+
+static uint32_t voice_ms(const Voice& v) {
+  uint32_t s = 0;
+  for (int i = 0; i < v.length(); ++i) s += v.note(i).ms;
+  return s;
+}
+
+static void test_sound_cues() {
+  for (int c = 0; c < kCueCount; ++c) {
+    Cue back;
+    CHECK(cue_from_id(cue_id((Cue)c), &back) && back == (Cue)c, "id реплики %s", cue_id((Cue)c));
+  }
+  for (int a = 0; a < kArchetypeCount; ++a) {
+    const Temperament& t = temperament((Archetype)a);
+    CHECK(t.talk > 0.0f && t.talk <= 1.0f, "%s: разговорчивость %.2f", t.tag, t.talk);
+    for (int c = 0; c < kCueCount; ++c) {
+      Voice v;
+      v.init(&t, 7);
+      CHECK(v.say((Cue)c, 0), "%s говорит %s", t.tag, cue_id((Cue)c));
+      bool audible = true, sound = false;
+      for (int i = 0; i < v.length(); ++i) {
+        const Note& n = v.note(i);
+        if (n.hz) audible &= n.hz >= 600 && n.hz <= 5400, sound = true;
+      }
+      const uint32_t ms = voice_ms(v);
+      CHECK(sound && audible, "%s/%s: ноты в слышимом для пьезо диапазоне", t.tag, cue_id((Cue)c));
+      CHECK(ms >= 60 && ms <= 2500, "%s/%s: длина %u мс", t.tag, cue_id((Cue)c), (unsigned)ms);
+    }
+  }
+  // Одна реплика у разных характеров звучит по-разному.
+  int distinct = 0;
+  for (int a = 1; a < kArchetypeCount; ++a) {
+    Voice x, y;
+    x.init(&temperament((Archetype)0), 7);
+    y.init(&temperament((Archetype)a), 7);
+    x.say(Cue::laugh, 0);
+    y.say(Cue::laugh, 0);
+    bool same = x.length() == y.length();
+    for (int i = 0; same && i < x.length(); ++i) same = x.note(i).hz == y.note(i).hz && x.note(i).ms == y.note(i).ms;
+    distinct += !same;
+  }
+  CHECK(distinct == kArchetypeCount - 1, "смех у всех характеров свой: %d из %d", distinct, kArchetypeCount - 1);
+  // Скромник не договаривает и говорит тихо.
+  Voice shy, play;
+  shy.init(&temperament(Archetype::shy), 1);
+  play.init(&temperament(Archetype::playful), 1);
+  shy.say(Cue::level_up, 0);
+  play.say(Cue::level_up, 0);
+  CHECK(voice_ms(shy) < voice_ms(play) && shy.soft() && !play.soft(), "скромник короче и тише");
+  CHECK(cue_for(Expr::laugh) == Cue::laugh && cue_for(Expr::calm) == Cue::Count, "реплики по эмоциям");
+}
+
+static void test_sound_playback() {
+  Voice v;
+  v.init(&temperament(Archetype::curious), 3);
+  const uint32_t t0 = 0xFFFFFF00u;  // и через переполнение millis()
+  CHECK(v.say(Cue::hello, t0), "говорит");
+  CHECK(v.tone(t0) == v.note(0).hz && v.next_change_ms() == t0 + v.note(0).ms, "первая нота и её конец");
+  uint32_t at = t0;
+  for (int i = 0; i < v.length(); ++i) {
+    CHECK(v.tone(at) == v.note(i).hz, "нота %d звучит вовремя", i);
+    at += v.note(i).ms;
+  }
+  CHECK(!v.busy(at) && v.tone(at) == 0, "после конца — тишина");
+  CHECK(time_left(at, v.next_change_ms()) == kMaxSleepMs, "тихий голос не будит процессор раньше горизонта");
+  // Пока идёт реплика, обычная не перебивает, важная — перебивает.
+  v.say(Cue::laugh, 1000);
+  CHECK(!v.say(Cue::boop, 1010), "обычная реплика ждёт");
+  CHECK(v.say(Cue::charge_start, 1020) && v.last_cue() == Cue::charge_start, "зарядка перебивает болтовню");
+  // Ночью — только важное, и тихо.
+  v.stop();
+  v.set_quiet(true);
+  CHECK(!v.say(Cue::laugh, 5000), "ночью не смеётся вслух");
+  CHECK(v.say(Cue::battery_low, 5000) && v.soft(), "о батарее скажет и ночью, но тихо");
+  v.set_quiet(false);
+  v.set_enabled(false);
+  CHECK(!v.say(Cue::battery_low, 9000) && v.tone(9000) == 0, "выключенная пищалка молчит");
+}
+
+static void test_scene_music() {
+  for (int a = 0; a < kArchetypeCount; ++a) {
+    for (int i = 0; i < kSceneCount; ++i) {
+      Voice v;
+      v.init(&temperament((Archetype)a), 5);
+      SceneParams p;
+      p.value = 1;
+      p.key = 12345;
+      v.scene((Scene)i, p, 0);
+      CHECK(voice_ms(v) <= scene_duration_ms((Scene)i), "%s/%s: музыка %u мс длиннее сцены", temperament((Archetype)a).tag,
+            scene_id((Scene)i), (unsigned)voice_ms(v));
+      for (int k = 0; k < v.length(); ++k)
+        CHECK(!v.note(k).hz || (v.note(k).hz >= 600 && v.note(k).hz <= 5400), "%s: нота %u Гц",
+              scene_id((Scene)i), v.note(k).hz);
+    }
+  }
+  // Исход дуэли звучит, когда он появляется на экране (4.6 с).
+  Voice v;
+  v.init(&temperament(Archetype::playful), 5);
+  SceneParams p;
+  p.value = 0;
+  v.scene(Scene::duel, p, 0);
+  uint32_t at = 0;
+  int first_after = -1;
+  for (int i = 0; i < v.length(); ++i) {
+    if (at >= 4600 && v.note(i).hz && first_after < 0) first_after = (int)at;
+    at += v.note(i).ms;
+  }
+  CHECK(first_after >= 4600 && first_after < 4700, "проигрыш звучит вместе с LOST: %d мс", first_after);
+}
+
+static void test_chat_sync() {
+  const uint32_t ha = 0x1234567u, hb = 0x89ABCDEFu, nonce = 77;
+  const uint32_t key = chat_key(ha, hb, nonce);
+  CHECK(key == chat_key(hb, ha, nonce) && key != chat_key(ha, hb, nonce + 1), "ключ общий и зависит от сеанса");
+  CHECK(chat_first(ha, hb) != chat_first(hb, ha), "начинает ровно один");
+  Voice a, b;
+  a.init(&temperament(Archetype::grumpy), 1);
+  b.init(&temperament(Archetype::sweet), 2);
+  a.chat(key, chat_first(ha, hb), 0);
+  b.chat(key, chat_first(hb, ha), 0);
+  CHECK(voice_ms(a) <= kChatMs && voice_ms(b) <= kChatMs, "разговор укладывается в %u мс", (unsigned)kChatMs);
+  int overlap = 0, silent_lines = 0;
+  for (int line = 0; line < kChatLines; ++line) {
+    int a_on = 0, b_on = 0;
+    for (uint32_t t = line * kChatLineMs; t < (line + 1) * kChatLineMs; t += 5) {
+      const bool x = a.tone(t) != 0, y = b.tone(t) != 0;
+      a_on += x, b_on += y, overlap += x && y;
+    }
+    silent_lines += !a_on && !b_on;
+    uint8_t g[kChatGlyphs];
+    const bool by_first = chat_line(key, line, g);
+    const bool a_says = by_first == chat_first(ha, hb);
+    CHECK(a_says ? (a_on > 0 && b_on == 0) : (b_on > 0 && a_on == 0), "реплику %d говорит только свой брелок", line);
+  }
+  CHECK(!overlap && !silent_lines, "брелоки не перебивают друг друга: %d, пустых реплик %d", overlap, silent_lines);
+  // Знаки на экране появляются вместе с нотами: число нот реплики = числу знаков.
+  uint8_t g[kChatGlyphs];
+  chat_line(key, 0, g);
+  uint32_t sum = 0;
+  for (uint8_t x : g) {
+    sum += chat_glyph_ms(x);
+    CHECK(x < kChatRunes, "знак %u", x);
+  }
+  CHECK(sum < kChatLineMs, "реплика короче паузы между репликами");
+  CHECK(chat_phrase(key)[0] && text_width(chat_phrase(key)) <= kWidth - 2 * kSafeMargin, "фраза влезает");
+  // Для стенда с одним брелоком: обе стороны одной пищалкой.
+  Voice both;
+  both.init(&temperament(Archetype::grumpy), 1);
+  both.chat(key, true, 0, &temperament(Archetype::sweet));
+  int lines_heard = 0;
+  for (int line = 0; line < kChatLines; ++line) {
+    bool heard = false;
+    for (uint32_t t = line * kChatLineMs; t < line * kChatLineMs + 1200; t += 5) heard |= both.tone(t) != 0;
+    lines_heard += heard;
+  }
+  CHECK(lines_heard == kChatLines, "демо: слышны все %d реплики", lines_heard);
+}
+
+static void test_behavior_voice() {
+  FaceEngine eng;
+  Behavior bh;
+  Voice v;
+  eng.init(4, 0);
+  bh.init(&eng, 4, 0);
+  bh.set_temperament(&temperament(Archetype::dramatic));
+  v.init(&temperament(Archetype::dramatic), 4);
+  bh.attach_voice(&v);
+  bh.set_clock(12 * 60);
+  bh.update(0);
+  bh.on_event(Event::charge_start, 1000);
+  CHECK(v.started() == 1 && v.last_cue() == Cue::charge_start, "зарядка — всегда вслух");
+  // Тапы: иногда отвечает, но не чаще раза в 1.5 с.
+  uint32_t said = v.started(), t = 10000;
+  for (int i = 0; i < 40; ++i, t += 400) {
+    bh.on_event(Event::tap, t);
+    bh.update(t);
+    eng.update(t);
+    v.tone(t);
+  }
+  const uint32_t talk = v.started() - said;
+  CHECK(talk >= 2 && talk <= 11, "на 40 тапов за 16 с — %u реплик", (unsigned)talk);
+  // Ночью — тишина, кроме важного.
+  bh.set_clock(2 * 60);
+  bh.update(t);
+  said = v.started();
+  for (int i = 0; i < 10; ++i, t += 2000) bh.on_event(Event::double_tap, t);
+  CHECK(v.started() == said, "ночью на тапы молчит");
+  bh.on_event(Event::battery_low, t += 3000);
+  CHECK(v.started() == said + 1 && v.soft(), "ночью о батарее — тихо");
+}
+
+static void test_duel_then_chat() {
+  // Два брелока после дуэли: разговор начинается у обоих в одно время, ключ общий, начинает один.
+  const uint32_t ha = hash_of(Archetype::trickster), hb = hash_of(Archetype::shy);
+  FaceEngine ea, eb;
+  Behavior a, b;
+  Voice va, vb;
+  ea.init(1, 0), eb.init(2, 0);
+  a.init(&ea, 1, 0), b.init(&eb, 2, 0);
+  a.set_temperament(&temperament(Archetype::trickster)), b.set_temperament(&temperament(Archetype::shy));
+  a.set_identity_hash(ha), b.set_identity_hash(hb);
+  va.init(&temperament(Archetype::trickster), 1), vb.init(&temperament(Archetype::shy), 2);
+  a.attach_voice(&va), b.attach_voice(&vb);
+  a.duel("SH-0001", true, 1000, hb, 99);
+  b.duel("TR-0002", false, 1000, ha, 99);
+  uint32_t chat_a = 0, chat_b = 0;
+  for (uint32_t t = 1000; t < 30000; t += 20) {
+    // Касание посреди паузы не сдвигает разговор: у соседа его не было.
+    if (t == 8600) a.on_event(Event::tap, t);
+    a.update(t), b.update(t), ea.update(t), eb.update(t);
+    if (!chat_a && ea.scene() == Scene::chat) chat_a = t;
+    if (!chat_b && eb.scene() == Scene::chat) chat_b = t;
+  }
+  CHECK(chat_a && chat_a == chat_b, "разговор начался одновременно: %u и %u", (unsigned)chat_a, (unsigned)chat_b);
+  CHECK(chat_a >= 1000 + scene_duration_ms(Scene::duel), "сначала дуэль");
+  CHECK(ea.scene_params().key == eb.scene_params().key && ea.scene_params().value != eb.scene_params().value,
+        "ключ общий, начинает один");
+  CHECK(ea.expression() == Expr::innocent || ea.expression() == Expr::smug || ea.expression() == Expr::mischievous,
+        "после разговора — невинное лицо: %s", expression(ea.expression()).id);
+}
+
+// ---------------------------------------------------------------- рост 2: серии, достижения, друзья
+
+static void test_streak_and_achievements() {
+  Progress p;
+  p.reset();
+  p.new_day();
+  CHECK(p.streak == 0, "первый день ещё не серия");
+  for (int d = 0; d < 3; ++d) {
+    p.touch();
+    p.new_day();
+  }
+  CHECK(p.streak == 3 && p.best_streak == 3, "три дня с касаниями — серия 3: %u", p.streak);
+  p.new_day();  // день без хозяина
+  CHECK(p.streak == 0 && p.best_streak == 3, "день без касаний обнуляет серию, рекорд остаётся");
+  // Достижения за счётчики — по одному, каждое один раз.
+  Progress q;
+  q.reset();
+  CHECK(q.next_achievement() == Ach::Count, "у нового брелока достижений нет");
+  q.met_friend(true);
+  CHECK(q.next_achievement() == Ach::first_friend && q.next_achievement() == Ach::Count, "первый друг — один раз");
+  for (int i = 0; i < 100; ++i) q.touch();
+  CHECK(q.next_achievement() == Ach::petted, "сто касаний");
+  CHECK(q.earn(Ach::knock) && !q.earn(Ach::knock) && q.earned(Ach::knock), "достижение за событие — один раз");
+  CHECK(q.achievement_count() == 3, "всего %d", q.achievement_count());
+  for (int i = 0; i < kAchCount; ++i) {
+    const Achievement& a = achievement((Ach)i);
+    CHECK(a.tag[0] && text_width(a.tag) <= kWidth - 2 * kSafeMargin && a.xp > 0, "достижение %s влезает", a.id);
+  }
+  // Голодного покормили: счётчик каждый раз, опыт раз в день.
+  Progress f;
+  f.reset();
+  const uint32_t xp0 = f.xp;
+  f.feed();
+  f.feed();
+  CHECK(f.feeds == 2 && f.xp == xp0 + XpRules{}.care, "опыт за заботу раз в день: %u", f.xp - xp0);
+  f.new_day();
+  f.feed();
+  CHECK(f.xp == xp0 + 2u * XpRules{}.care + XpRules{}.day, "на следующий день — снова");
+}
+
+static void test_progress_v2_migration() {
+  // Запись версии 2 — та же раскладка с нулями в запасе. После чтения — версия 3, всё на месте.
+  Progress v2;
+  v2.reset();
+  v2.days = 12, v2.xp = 640, v2.friends = 4, v2.implant = 3;
+  v2.version = 2;
+  v2.seal();
+  Progress m;
+  CHECK(m.load(&v2, sizeof v2) && m.version == Progress::kVersion && m.valid(), "запись версии 2 переносится");
+  CHECK(m.days == 12 && m.xp == 640 && m.friends == 4 && m.implant == 3 && m.streak == 0 && !m.achievements,
+        "поля версии 2 на месте, новые — нули");
+  v2.xp ^= 1;
+  CHECK(!m.load(&v2, sizeof v2), "испорченная запись версии 2 не читается");
+}
+
+static void test_friends_table() {
+  Friends f;
+  f.reset();
+  int before = 7;
+  bool first = false;
+  CHECK(f.meet(0xABCu, 1, &before, &first) == 0 && before == -1 && first, "новый знакомый");
+  CHECK(f.meet(0xABCu, 1, &before, &first) == 0 && before == 0 && !first, "в тот же день дружба не растёт");
+  int lvl = 0;
+  for (uint16_t d = 2; d <= 30; ++d) lvl = f.meet(0xABCu, d);
+  CHECK(lvl == kFriendLevels - 1 && !strcmp(friend_level_tag(lvl), "BFF"), "30 дней встреч — BFF");
+  CHECK(f.level(0xABCu) == 4 && f.level(0x123u) == -1, "уровень знакомого и незнакомого");
+  for (uint32_t h = 1; h <= (uint32_t)Friends::kSlots + 3; ++h) f.meet(0x10000u + h, 31);
+  CHECK(f.count() == Friends::kSlots && f.level(0xABCu) == 4, "места кончились, лучший друг не вытеснен");
+  for (int l = 1; l < kFriendLevels; ++l) CHECK(friend_level_days(l) > friend_level_days(l - 1), "уровни по возрастанию");
+  f.seal();
+  Friends g;
+  CHECK(g.load(&f, sizeof f) && g.level(0xABCu) == 4, "таблица переживает флеш");
+  Friends bad = f;
+  bad.f[0].days ^= 1;
+  CHECK(!g.load(&bad, sizeof bad), "испорченная таблица не читается");
+}
+
+static void test_retro_theme() {
+  Theme t;
+  CHECK(theme_from_id("retro", &t) && t == Theme::Retro && !strcmp(theme_id(Theme::Cyber), "cyber"), "темы по имени");
+  FaceEngine eng;
+  eng.init(9, 0);
+  eng.options().theme = Theme::Retro;
+  eng.options().drift = false;
+  uint32_t now = 0;
+  int blocky = 0;
+  for (int i = 0; i < kExprCount; ++i) {
+    settle(eng, (Expr)i, now);
+    const Framebuffer& f = eng.frame();
+    bool ok = true;
+    int margin = 99;
+    for (int y = 1; y + 1 < kHeight; y += 2)
+      for (int x = 1; x + 1 < kWidth; x += 2) {
+        const bool a = f.get(x, y);
+        ok &= a == f.get(x + 1, y) && a == f.get(x, y + 1) && a == f.get(x + 1, y + 1);
+      }
+    for (int y = 0; y < kHeight; ++y)
+      for (int x = 0; x < kWidth; ++x)
+        if (f.get(x, y)) margin = imin(margin, imin(imin(x, kWidth - 1 - x), imin(y, kHeight - 1 - y)));
+    blocky += ok;
+    CHECK(margin >= kSafeMargin - 1, "ретро %s: до края %d px", expression((Expr)i).id, margin);
+    CHECK(f.count_lit() > 40, "ретро %s: лицо не пропало", expression((Expr)i).id);
+  }
+  CHECK(blocky == kExprCount, "все эмоции — квадратами 2×2: %d из %d", blocky, kExprCount);
+}
+
+static void test_badge() {
+  FaceEngine eng;
+  eng.init(2, 0);
+  uint32_t now = 0;
+  settle(eng, Expr::happy, now);
+  eng.badge("NEW", now);
+  eng.update(now);
+  CHECK(eng.badge_visible(), "надпись видна сразу");
+  bool seen_off = false;
+  for (uint32_t t = now; t < now + 600; t += 20) {
+    eng.update(t);
+    seen_off |= !eng.badge_visible();
+  }
+  CHECK(seen_off, "сначала мигает");
+  eng.update(now + 1500);
+  CHECK(eng.badge_visible() && eng.frame().get(kSafeMargin + 1, kSafeMargin + 1), "потом горит в углу");
+  eng.update(now + FaceEngine::kBadgeMs + 50);
+  CHECK(!eng.badge_visible(), "и гаснет сама");
+  eng.badge("NEW", now + 4000);
+  eng.play_scene(Scene::boot, now + 4000);
+  eng.update(now + 4100);
+  CHECK(!eng.badge_visible(), "поверх сцены не рисуется");
+}
+
+// Прогнать поведение и движок до момента t и собрать, какие сцены показались.
+struct SceneLog {
+  Scene seen[16];
+  SceneParams params[16];
+  int n = 0;
+  bool has(Scene s) const {
+    for (int i = 0; i < n; ++i)
+      if (seen[i] == s) return true;
+    return false;
+  }
+  const SceneParams* find(Scene s) const {
+    for (int i = 0; i < n; ++i)
+      if (seen[i] == s) return &params[i];
+    return nullptr;
+  }
+};
+
+static void run_log(Behavior& bh, FaceEngine& eng, uint32_t from, uint32_t to, SceneLog& log, uint32_t step = 20) {
+  Scene last = Scene::None;
+  for (uint32_t t = from; t < to; t += step) {
+    bh.update(t);
+    eng.update(t);
+    if (eng.scene() != last) {
+      last = eng.scene();
+      if (last != Scene::None && log.n < 16) log.seen[log.n] = last, log.params[log.n++] = eng.scene_params();
+    }
+  }
+}
+
+static void test_date_and_time_eggs() {
+  struct Case {
+    uint16_t y;
+    uint8_t m, d;
+    const char* text;
+  };
+  const Case cases[] = {{2026, 3, 14, "PI DAY"},      {2026, 5, 4, "MAY THE 4TH"},  {2026, 4, 12, "POEKHALI!"},
+                        {2026, 5, 25, "DONT PANIC"},  {2026, 2, 13, "FRIDAY 13"},   {2028, 2, 29, "FEB 29"},
+                        {2026, 9, 13, "HELLO WORLD"}, {2028, 9, 12, "HELLO WORLD"}, {2026, 4, 1, "GOTCHA!"}};
+  for (const Case& c : cases) {
+    FaceEngine eng;
+    Behavior bh;
+    eng.init(1, 0);
+    bh.init(&eng, 1, 0);
+    bh.set_clock(12 * 60);
+    bh.set_date(c.y, c.m, c.d);
+    SceneLog log;
+    run_log(bh, eng, 0, 20000, log);
+    const SceneParams* p = log.find(Scene::banner);
+    CHECK(p && !strcmp(p->text, c.text), "%04u-%02u-%02u: пасхалка «%s»", c.y, c.m, c.d, c.text);
+    if (c.m == 4 && c.d == 1) CHECK(log.n >= 2 && log.seen[0] == Scene::bsod, "1 апреля сначала «падает»");
+  }
+  // Обычный день — без пасхалки; та же дата второй раз — тоже.
+  {
+    FaceEngine eng;
+    Behavior bh;
+    eng.init(1, 0);
+    bh.init(&eng, 1, 0);
+    bh.set_date(2026, 6, 17);
+    SceneLog log;
+    run_log(bh, eng, 0, 8000, log);
+    CHECK(!log.has(Scene::banner), "17 июня — без пасхалки");
+  }
+  // Время: 13:37 — «1337» и достижение, 04:04 — ERROR 404 «TIME NOT FOUND».
+  FaceEngine eng;
+  Behavior bh;
+  Progress pr;
+  pr.reset();
+  eng.init(1, 0);
+  bh.init(&eng, 1, 0);
+  bh.attach_progress(&pr);
+  bh.set_clock(13 * 60 + 37);
+  SceneLog log;
+  run_log(bh, eng, 0, 15000, log);
+  const SceneParams* p = log.find(Scene::banner);
+  CHECK(p && !strcmp(p->text, "1337") && pr.earned(Ach::leet) && log.has(Scene::achievement), "13:37 — 1337 и хакер");
+  SceneLog again;
+  run_log(bh, eng, 15000, 30000, again);
+  CHECK(!again.has(Scene::banner), "в ту же минуту второй раз не показывается");
+  bh.set_clock(4 * 60 + 4);
+  SceneLog e404;
+  run_log(bh, eng, 30000, 40000, e404);
+  const SceneParams* q = e404.find(Scene::error404);
+  CHECK(q && !strcmp(q->sub, "TIME NOT FOUND"), "04:04 — время не найдено");
+}
+
+static void test_knock_code() {
+  FaceEngine eng;
+  Behavior bh;
+  Voice v;
+  Progress pr;
+  pr.reset();
+  eng.init(3, 0);
+  bh.init(&eng, 3, 0);
+  bh.attach_progress(&pr);
+  bh.set_temperament(&temperament(Archetype::playful));
+  v.init(&temperament(Archetype::playful), 3);
+  bh.attach_voice(&v);
+  bh.set_clock(12 * 60);
+  bh.update(0);
+  // «Та, та-та, та, та» с восьмой 250 мс.
+  const uint32_t t0 = 20000, at[5] = {0, 500, 750, 1000, 1500};
+  for (uint32_t a : at) {
+    bh.on_event(Event::tap, t0 + a);
+    bh.update(t0 + a);
+    eng.update(t0 + a);
+  }
+  CHECK(pr.earned(Ach::knock) && v.last_cue() == Cue::two_bits, "на секретный стук — «two bits»: %s",
+        cue_id(v.last_cue()));
+  // Просто пять быстрых тапов — не стук.
+  Progress p2;
+  p2.reset();
+  bh.attach_progress(&p2);
+  for (int i = 0; i < 5; ++i) bh.on_event(Event::tap, 40000u + (uint32_t)i * 200u);
+  CHECK(!p2.earned(Ach::knock), "ровные тапы — не стук");
+}
+
+static void test_battery_care() {
+  FaceEngine eng;
+  Behavior bh;
+  Progress pr;
+  pr.reset();
+  eng.init(5, 0);
+  bh.init(&eng, 5, 0);
+  bh.attach_progress(&pr);
+  bh.set_clock(12 * 60);
+  const uint16_t frame0 = eng.options().frame_ms;
+  bh.on_event(Event::battery_low, 1000);
+  CHECK(bh.eco() && eng.options().frame_ms >= 50, "мало заряда — экорежим: кадр %u мс", eng.options().frame_ms);
+  bh.set_battery_percent(12);
+  const uint32_t xp0 = pr.xp;
+  bh.on_event(Event::charge_start, 5000);
+  CHECK(!bh.eco() && eng.options().frame_ms == frame0, "на зарядке экорежим снят");
+  CHECK(eng.scene() == Scene::charge && eng.scene_params().value == 12, "сцена зарядки с процентом");
+  CHECK(pr.feeds == 1 && pr.xp >= xp0 + XpRules{}.care, "голодного покормили — опыт");
+  // Долго на зарядке без внимания — заставка, один раз.
+  SceneLog log;
+  run_log(bh, eng, 5000, 5000 + 12u * 60000u, log, 50);
+  CHECK(log.has(Scene::screensaver), "на зарядке — заставка");
+  // Выключение: сцена, потом сон до касания.
+  bh.power_off(800000);
+  SceneLog off;
+  run_log(bh, eng, 800000, 820000, off, 50);
+  CHECK(off.has(Scene::shutdown) && eng.expression() == Expr::sleeping, "выключился и спит: %s",
+        expression(eng.expression()).id);
+  bh.on_event(Event::charge_stop, 820000);
+  bh.on_event(Event::button, 821000);
+  run_log(bh, eng, 821000, 830000, off, 50);
+  CHECK(eng.expression() != Expr::sleeping, "кнопка будит: %s", expression(eng.expression()).id);
+}
+
+static void test_friendship_and_gifts() {
+  FaceEngine eng;
+  Behavior bh;
+  Progress pr;
+  Friends fr;
+  pr.reset();
+  fr.reset();
+  eng.init(6, 0);
+  bh.init(&eng, 6, 0);
+  bh.attach_progress(&pr);
+  bh.attach_friends(&fr);
+  bh.set_clock(12 * 60);
+  const uint32_t peer = 0x5151u;
+  uint32_t t = 1000;
+  SceneLog log;
+  for (int day = 0; day < 7; ++day) {
+    bh.new_day(t);
+    bh.meet("PE-0001", day == 0, t, peer);
+    run_log(bh, eng, t, t + 40000, log, 50);
+    t += 40000;
+  }
+  bool buddy = false, friends = false;
+  for (int i = 0; i < log.n; ++i)
+    if (log.seen[i] == Scene::banner) {
+      buddy |= !strcmp(log.params[i].text, "BUDDY");
+      friends |= !strcmp(log.params[i].text, "FRIENDS");
+    }
+  CHECK(buddy && friends && fr.level(peer) == 2, "дружба растёт по дням: BUDDY и FRIENDS (уровень %d)", fr.level(peer));
+  // Старший брелок дарит эмоцию: сцена GIFT, после неё в углу — NEW.
+  const int unlocked = pr.unlocked_count();
+  bh.meet("OL-0002", true, t, 0x7777u, (uint8_t)(pr.implant + 3));
+  bool gift = false, badge = false;
+  for (uint32_t u = t; u < t + 60000; u += 20) {
+    bh.update(u);
+    eng.update(u);
+    gift |= eng.scene() == Scene::banner && !strcmp(eng.scene_params().text, "GIFT");
+    badge |= gift && eng.badge_visible();
+  }
+  CHECK(gift && badge && pr.unlocked_count() > unlocked, "подарок старшего: GIFT и NEW, открыто +%d",
+        pr.unlocked_count() - unlocked);
+}
+
+static void test_whisper_sync() {
+  // Старые знакомые шепчутся, если так решил общий ключ: у обоих одинаково, и шёпот сразу за приветствием.
+  const uint32_t ha = hash_of(Archetype::curious), hb = hash_of(Archetype::chill);
+  uint32_t nonce = 1;
+  while (chat_key(ha, hb, nonce) % 4u) ++nonce;
+  FaceEngine ea, eb;
+  Behavior a, b;
+  ea.init(1, 0), eb.init(2, 0);
+  a.init(&ea, 1, 0), b.init(&eb, 2, 0);
+  a.set_identity_hash(ha), b.set_identity_hash(hb);
+  a.meet("CH-0001", false, 1000, hb, 0, nonce);
+  b.meet("CU-0002", false, 1000, ha, 0, nonce);
+  uint32_t ca = 0, cb = 0;
+  for (uint32_t t = 1000; t < 20000; t += 20) {
+    a.update(t), b.update(t), ea.update(t), eb.update(t);
+    if (!ca && ea.scene() == Scene::chat) ca = t;
+    if (!cb && eb.scene() == Scene::chat) cb = t;
+  }
+  CHECK(ca && ca == cb, "шёпот у обоих одновременно: %u и %u", (unsigned)ca, (unsigned)cb);
+  FaceEngine ec;
+  Behavior c;
+  ec.init(3, 0);
+  c.init(&ec, 3, 0);
+  c.set_identity_hash(ha);
+  uint32_t other = nonce + 1;
+  while (chat_key(ha, hb, other) % 4u == 0) ++other;
+  c.meet("CH-0001", false, 1000, hb, 0, other);
+  bool chat = false;
+  for (uint32_t t = 1000; t < 20000; t += 20) {
+    c.update(t), ec.update(t);
+    chat |= ec.scene() == Scene::chat;
+  }
+  CHECK(!chat, "в другой сеанс ключ решил иначе — без шёпота");
+}
+
 int main() {
   test_framebuffer();
   test_catalog();
@@ -313,6 +1813,47 @@ int main() {
   test_clips_finish();
   test_behavior_reactions();
   test_behavior_day();
+  test_identity();
+  test_progress();
+  test_scenes();
+  test_cyber_theme_and_tilt();
+  test_reticle();
+  test_cyber_pupil();
+  test_growth_behavior();
+  test_temperaments();
+  test_meet_pairs();
+  test_millis_wrap();
+  test_blink_survives_clips();
+  test_nonfinite_inputs();
+  test_tilt_noise();
+  test_shiver_wakes();
+  test_overlay_clocks();
+  test_progress_format();
+  test_chain_follow_up();
+  test_overlay_pop_after_idle();
+  test_long_hold_precision();
+  test_behavior_fresh_state();
+  test_teeth_strokes();
+  test_stubble_follows_face();
+  test_wake_merge_and_horizon();
+  test_calm_breathing();
+  test_brightness_levels();
+  test_sound_cues();
+  test_sound_playback();
+  test_scene_music();
+  test_chat_sync();
+  test_behavior_voice();
+  test_duel_then_chat();
+  test_streak_and_achievements();
+  test_progress_v2_migration();
+  test_friends_table();
+  test_retro_theme();
+  test_badge();
+  test_date_and_time_eggs();
+  test_knock_code();
+  test_battery_care();
+  test_friendship_and_gifts();
+  test_whisper_sync();
   printf("%d проверок, %d ошибок\n", g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

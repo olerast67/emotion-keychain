@@ -19,6 +19,26 @@ inline uint32_t micros() { return (uint32_t)host::now_us; }
 inline void delay(uint32_t ms) { host::now_us += (uint64_t)ms * 1000; }
 inline uint32_t esp_random() { return 0x12345678u; }
 
+struct EspClass {
+  uint64_t efuse_mac = 0xA1B2C3D4E5F6ull;
+  uint64_t getEfuseMac() const { return efuse_mac; }
+};
+extern EspClass ESP;
+
+// ШИМ LEDC (ядро 3.x): тест видит, какой тон и скважность сейчас на пищалке.
+namespace host {
+extern int ledc_pin;
+extern uint32_t ledc_hz, ledc_duty, ledc_tones;
+}  // namespace host
+inline bool ledcAttach(int pin, uint32_t, uint8_t) { return host::ledc_pin = pin, true; }
+inline uint32_t ledcWriteTone(int, uint32_t hz) {
+  host::ledc_hz = hz;
+  host::ledc_duty = hz ? 512 : 0;
+  if (hz) ++host::ledc_tones;
+  return hz;
+}
+inline bool ledcWrite(int, uint32_t duty) { return host::ledc_duty = duty, true; }
+
 constexpr int LOW = 0, HIGH = 1;
 constexpr int INPUT = 0, INPUT_PULLUP = 1, INPUT_PULLDOWN = 2;
 inline void pinMode(int pin, int mode) { host::pins[pin] = mode == INPUT_PULLUP ? HIGH : LOW; }

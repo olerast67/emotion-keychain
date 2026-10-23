@@ -1,5 +1,6 @@
 // Драйвер SSD1306/SH1106 128×64 по I2C на Arduino Wire.
 // Умеет отправлять только изменённые окна страниц — те, что отдаёт FaceEngine::dirty().
+// Каждая отправка сообщает, дошла ли она: false — экран не ответил или шина сбоит.
 #pragma once
 
 #include <Arduino.h>
@@ -14,15 +15,15 @@ class Ssd1306 {
   uint8_t address() const { return addr_; }
   bool sh1106() const { return sh1106_; }
 
-  void contrast(uint8_t v);
-  void power(bool on);
+  bool contrast(uint8_t v);
+  bool power(bool on);
   // Отправить часть страницы: столбцы x0..x1 включительно.
-  void send_window(const face::Framebuffer& fb, uint8_t page, uint8_t x0, uint8_t x1);
-  void send_full(const face::Framebuffer& fb);
+  bool send_window(const face::Framebuffer& fb, uint8_t page, uint8_t x0, uint8_t x1);
+  bool send_full(const face::Framebuffer& fb);
 
  private:
-  void cmd(uint8_t c);
-  void cmds(const uint8_t* c, size_t n);
+  bool cmd(uint8_t c);
+  bool cmds(const uint8_t* c, size_t n);
 
   TwoWire* wire_ = nullptr;
   uint8_t addr_ = 0x3C;

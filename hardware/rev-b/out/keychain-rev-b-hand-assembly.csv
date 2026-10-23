@@ -1,0 +1,10 @@
+Designator,Value,Footprint,Note
+BT1,LiPo 402025,LiPo_Pads_20x25mm,"ячейка 3.7 В 150–200 мА·ч с платой защиты, провода на площадки; паяется руками"
+J2,"OLED 0.96"" I2C",OLED_SSD1306_0.96in_I2C_Module,белый модуль SSD1306 128×64 на 4 штырях; паяется руками
+J3,SWD,Tag-Connect_TC2030-IDC-NL_2x03_P1.27mm_Vertical,площадки под кабель Tag-Connect TC2030: первая прошивка загрузчика; сброс не нужен
+M1,вибромотор 0820,VibroMotor_Coin_D8mm,"мотор-монетка 8×2 мм, 3 В, на клейкий слой; провода на площадки; паяется руками"
+R17,0R,R_0402_1005Metric,не ставится: для модулей «VCC GND»
+R19,0R,R_0402_1005Metric,не ставится: для модулей «VCC GND»
+TP1,VDD,TestPoint_Pad_D1.0mm,контроль 3.3 В
+TP2,VSYS,TestPoint_Pad_D1.0mm,контроль питания системы
+TP3,GND,TestPoint_Pad_D1.0mm,

@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
     // Если эмоция сама сменилась (hold/next), следуем за ней.
     cur = eng.expression();
 
-    if (now >= eng.next_update_ms() && eng.update(now)) {
+    if (time_reached(now, eng.next_update_ms()) && eng.update(now)) {
       last_dirty_n = eng.dirty(last_dirty);
       last_flash = now;
     }

@@ -19,6 +19,7 @@ struct OledEmu {
   uint8_t pend[4];
   int pend_n = 0, pend_need = 0;
   uint32_t transactions = 0, bytes = 0, overflows = 0, stray = 0;
+  uint32_t fail_next = 0;  // столько следующих транзакций сорвётся (помеха на шине)
 
   void command(uint8_t c);
   void data(uint8_t d);

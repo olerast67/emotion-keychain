@@ -3,6 +3,7 @@
 #include "face/engine.h"
 #include "face/raster.h"
 #include "face/render.h"
+#include "face/text.h"
 
 namespace face {
 
@@ -34,31 +35,6 @@ void note(Framebuffer& fb, float x, float y, float s) {
   float sx = x + 1.8f * s;
   capsule(fb, sx, y, sx, y - 7.0f * s, 1.6f);
   capsule(fb, sx, y - 7.0f * s, sx + 3.0f * s, y - 4.5f * s, 1.6f);
-}
-
-// Шрифт 3×5 для надписей-пасхалок (только нужные буквы), каждый пиксель
-// рисуется квадратом 2×2: однопиксельные буквы на 0.96″ не читаются.
-void text3x5(Framebuffer& fb, int x, int y, const char* s) {
-  struct G {
-    char c;
-    uint8_t rows[5];
-  };
-  static const G kGlyphs[] = {{'G', {3, 4, 5, 5, 3}}, {'A', {2, 5, 7, 5, 5}}, {'M', {5, 7, 7, 5, 5}},
-                              {'E', {7, 4, 6, 4, 7}}, {'O', {2, 5, 5, 5, 2}}, {'V', {5, 5, 5, 5, 2}},
-                              {'R', {6, 5, 6, 5, 5}}, {'H', {5, 5, 7, 5, 5}}, {'I', {7, 2, 2, 2, 7}},
-                              {'U', {5, 5, 5, 5, 7}}, {'P', {6, 5, 6, 4, 4}}, {'0', {7, 5, 5, 5, 7}},
-                              {'1', {2, 6, 2, 2, 7}}, {'4', {5, 5, 7, 1, 1}}};
-  for (int i = 0; s[i]; ++i) {
-    for (const G& g : kGlyphs) {
-      if (g.c != s[i]) continue;
-      for (int r = 0; r < 5; ++r)
-        for (int c = 0; c < 3; ++c)
-          if (g.rows[r] & (4 >> c)) {
-            const int px = x + (i * 4 + c) * 2, py = y + r * 2;
-            fb.set(px, py), fb.set(px + 1, py), fb.set(px, py + 1), fb.set(px + 1, py + 1);
-          }
-    }
-  }
 }
 
 void sparkle_at(Framebuffer& fb, float x, float y, float r) {
@@ -98,44 +74,72 @@ bool overlay_screen_space(Overlay o) {
   }
 }
 
-uint16_t overlay_frame_ms(Overlay o) {
-  // Длительные состояния (сон, усталость, мало заряда) должны быть дешёвыми:
-  // их значки статичны или обновляются редко.
+namespace {
+
+// Как значок меняется во времени:
+//   cycle — через сколько мс анимация повторяется (0 — не повторяется);
+//   step  — шаг кадров плавного движения, мс: примерно на пиксель сдвига;
+//   still — с этого момента значок неподвижен (0 — не замирает);
+//   edges — у мигающих значков: первая мс каждого состояния внутри цикла.
+//           Картинка между границами одна и та же, кадры нужны только на них.
+// У статичных значков всё по нулям: кадр нужен только при появлении.
+// Длительные состояния (сон, скука, мало заряда, зарядка) поэтому почти не будят процессор.
+struct Timing {
+  uint16_t cycle, step, still;
+  uint16_t edges[5];
+};
+
+Timing timing(Overlay o) {
   switch (o) {
-    case Overlay::BlushLines:
-    case Overlay::BlushDither:
-    case Overlay::Shades:
-    case Overlay::Horns:
-    case Overlay::Gloom:
-    case Overlay::Sweat:
-    case Overlay::Glasses:
-    case Overlay::Nose:
-    case Overlay::Stubble:
-    case Overlay::EyeBags:
-    case Overlay::ShrugArms:
-    case Overlay::GameOver:
-    case Overlay::QueasyLines: return 0;
-    case Overlay::Bat: return 66;
-    case Overlay::Explosion: return 50;
-    case Overlay::Stick: return 120;
-    case Overlay::TearStream:
-    case Overlay::DizzyStars:
-    case Overlay::SpeedLines:
-    case Overlay::Vein:
-    case Overlay::Rays: return 50;
-    case Overlay::Sparkles:
-    case Overlay::SoundWaves:
-    case Overlay::Steam:
-    case Overlay::Tear: return 66;
-    case Overlay::Hearts:
-    case Overlay::Notes: return 80;
-    case Overlay::Exclaim:
-    case Overlay::Question:
-    case Overlay::Bulb:
-    case Overlay::Bolt: return 100;
-    case Overlay::Zzz: return 200;
-    default: return 150;
+    case Overlay::Vein: return {500, 50, 0, {}};
+    case Overlay::Tear: return {1300, 65, 0, {}};
+    case Overlay::TearStream: return {225, 45, 0, {}};
+    case Overlay::Zzz: return {3200, 200, 0, {}};
+    case Overlay::Hearts: return {2400, 80, 0, {}};
+    case Overlay::Sparkles: return {10000, 66, 0, {}};
+    case Overlay::SoundWaves: return {714, 0, 0, {1, 179, 358, 465, 643}};
+    case Overlay::Notes: return {2200, 80, 0, {}};
+    case Overlay::Question: return {1250, 125, 0, {}};
+    case Overlay::Exclaim: return {0, 50, 600, {}};
+    case Overlay::Ellipsis: return {1600, 0, 0, {1, 289, 577, 865}};
+    case Overlay::Steam: return {1100, 66, 0, {}};
+    case Overlay::DizzyStars: return {2000, 50, 0, {}};
+    case Overlay::Bulb: return {400, 0, 0, {1, 241}};
+    case Overlay::Bolt: return {2000, 125, 0, {}};
+    case Overlay::Snow: return {4000, 200, 0, {}};
+    case Overlay::Drool: return {2400, 200, 0, {}};
+    case Overlay::Rays: return {400, 50, 0, {}};
+    case Overlay::BatteryLow: return {1200, 0, 0, {1, 781}};
+    case Overlay::SpeedLines: return {400, 50, 0, {}};
+    case Overlay::Bubble: return {3000, 120, 0, {}};
+    case Overlay::Halo: return {2000, 250, 0, {}};
+    case Overlay::Stick: return {2800, 140, 0, {}};
+    case Overlay::Explosion: return {600, 50, 0, {}};
+    case Overlay::Bat: return {6000, 66, 0, {}};
+    default: return {0, 0, 0, {}};  // румянец, капля, очки, нос, щетина и другие статичные
   }
+}
+
+}  // namespace
+
+uint32_t overlay_clock(Overlay o, uint32_t t, uint32_t* wait) {
+  const Timing tm = timing(o);
+  *wait = 0;
+  if (tm.still && t >= tm.still) return tm.still;  // значок замер
+  if (!tm.cycle && !tm.step) return 0;             // статичный значок
+  const uint32_t c = tm.cycle ? t % tm.cycle : t;
+  if (tm.step) {
+    const uint32_t q = c - c % tm.step;
+    const uint32_t end = tm.cycle ? tm.cycle : tm.still;
+    const uint32_t next = q + tm.step < end ? q + tm.step : end;
+    *wait = next - c;
+    return q;
+  }
+  int i = 0;
+  while (i + 1 < 5 && tm.edges[i + 1] && tm.edges[i + 1] <= c) ++i;
+  const uint32_t next = i + 1 < 5 && tm.edges[i + 1] ? tm.edges[i + 1] : tm.cycle;
+  *wait = next - c;
+  return tm.edges[i];
 }
 
 void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, float t) {
@@ -253,7 +257,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
         const int side = i == 0 ? 1 : -1;
         const float ccx = a.ex[i] - side * (a.ew[i] * 0.5f - 1.0f), ccy = a.ey[i];
         const float base = side > 0 ? kPi : 0.0f;
-        const float ph = frac(t * 1.4f);
+        const float ph = frac(t / 0.714f);
         for (int k = 0; k < 3; ++k) {
           // Волны приходят снаружи: сначала дальняя, потом ближе.
           float vis = ph * 4.0f - (2 - k);
@@ -276,8 +280,9 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Question: {
+      // Знак висит у правого глаза, но с поля не уходит, даже когда глаз уехал за взглядом.
       const float bob = fsin(t * kTau * 0.8f) * 1.5f;
-      const float x = rx + rw * 0.5f + 9.0f, y = ry - rh * 0.5f + 1.0f + bob;
+      const float x = fmin_(rx + rw * 0.5f + 9.0f, kR - 5.5f), y = fmax_(ry - rh * 0.5f + 1.0f + bob, kT + 9.0f);
       const float k = s;
       arc(fb, x, y - 4.0f * k, 3.6f * k, 3.6f * k, kPi * 1.0f, kPi * 2.45f, 2.0f);
       capsule(fb, x + 0.5f * k, y, x + 0.5f * k, y + 2.5f * k, 2.0f);
@@ -286,7 +291,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     }
     case Overlay::Exclaim: {
       const float jig = fsin(t * kTau * 3.0f) * (t < 0.6f ? 1.0f : 0.0f);
-      const float x = lx - lw * 0.5f - 9.0f + jig, y = ly - lh * 0.5f + 2.0f;
+      const float x = fmax_(lx - lw * 0.5f - 9.0f + jig, kL + 2.5f), y = fmax_(ly - lh * 0.5f + 2.0f, kT + 8.0f);
       const float k = s;
       capsule(fb, x, y - 6.0f * k, x, y + 2.0f * k, 3.0f);
       fill_circle(fb, x, y + 6.5f * k, 1.7f * k);
@@ -316,20 +321,25 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Gloom: {
-      const int xa = iround(lx - lw * 0.5f), xb = iround(rx + rw * 0.5f);
-      const int ytop = iround(fmin_(ly - lh * 0.5f, ry - rh * 0.5f));
-      int k = 0;
-      for (int x = xa; x <= xb; x += 4, ++k) {
-        // Полосы не доходят до глаз: между ними живут брови.
-        const int len = iround((float)(ytop - 8 - (int)kT) * s * ((k & 1) ? 0.6f : 1.0f));
-        for (int y = (int)kT; y < (int)kT + len; ++y) fb.hspan(y, x, x + 1, Ink::Set);
+      // Тучка уныния, как в манге: по три вертикальные черты у верхних углов,
+      // снаружи от глаз. Над глазами им места нет — там брови.
+      // Длины разные и заметно длиннее ширины промежутков: так черты не складываются в букву.
+      static const float kLen[3] = {19.0f, 13.0f, 16.0f};
+      for (int side = 0; side < 2; ++side) {
+        const float edge = side == 0 ? lx - lw * 0.5f - 4.0f : rx + rw * 0.5f + 4.0f;
+        for (int k = 0; k < 3; ++k) {
+          const int x = iround(side == 0 ? edge - 2.0f - (float)k * 6.0f : edge + (float)k * 6.0f);
+          if (x < (int)kL || x + 1 > (int)kR - 1) continue;
+          const int len = iround(kLen[k] * s);
+          for (int y = (int)kT; y < (int)kT + len; ++y) fb.hspan(y, x, x + 1, Ink::Set);
+        }
       }
       return;
     }
     case Overlay::DizzyStars: {
       const float ccx = cx, ccy = fmin_(ly - lh * 0.5f, ry - rh * 0.5f) - 4.0f;
       for (int i = 0; i < 3; ++i) {
-        const float ang = t * 3.2f + kTau * i / 3.0f;
+        const float ang = t * kPi + kTau * i / 3.0f;  // оборот за 2 с
         const float depth = 0.5f + 0.5f * fsin(ang);
         const float x = ccx + 30.0f * fcos(ang);
         const float y = ccy + 3.5f * fsin(ang);
@@ -339,7 +349,8 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Bulb: {
-      const float x = rx + rw * 0.5f + 8.0f, y = ry - rh * 0.5f - 1.0f;
+      // Лампочка с лучами крупная: её место у правого глаза, но не ближе поля к краю.
+      const float x = fmin_(rx + rw * 0.5f + 8.0f, kR - 10.0f), y = fmax_(ry - rh * 0.5f - 1.0f, kT + 9.5f);
       const float k = s;
       fill_circle(fb, x, y, 4.0f * k);
       capsule(fb, x - 1.5f * k, y + 5.0f * k, x + 1.5f * k, y + 5.0f * k, 1.5f);
@@ -385,11 +396,12 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     case Overlay::Snow: {
       const float pts[2][2] = {{fmax_(kL + 5.0f, lx - lw * 0.5f - 8.0f), kT + 7.0f},
                                {fmin_(kR - 5.0f, rx + rw * 0.5f + 8.0f), kT + 12.0f}};
+      // Покачивание — за 4 с, поворот снежинки — на 60° за 4/3 с: картинка повторяется ровно через 4 с.
       for (int i = 0; i < 2; ++i) {
-        const float x = pts[i][0], y = pts[i][1] + 2.0f * fsin(t * 1.5f + i);
+        const float x = pts[i][0], y = pts[i][1] + 2.0f * fsin(t * kTau * 0.25f + i);
         const float r = 4.0f * s;
         for (int k = 0; k < 3; ++k) {
-          float ang = t * 0.8f + kPi * (float)k / 3.0f;
+          float ang = t * kTau * 0.125f + kPi * (float)k / 3.0f;
           capsule(fb, x - r * fcos(ang), y - r * fsin(ang), x + r * fcos(ang), y + r * fsin(ang), 2.0f);
         }
       }
@@ -491,34 +503,30 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Stubble: {
-      const int ox = iround(a.ox), oy = iround(a.oy);
-      const float ecx = a.mx, ecy = a.my - 16.0f;
-      for (int y = imax(iround(a.my - 8.0f), (int)kT); y < (int)kB - 1; ++y) {
-        for (int x = (int)kL; x < (int)kR - 1; ++x) {
-          const float dx = (float)x - ecx, dy = (float)y - ecy;
-          const bool jaw = in_ellipse(dx, dy, 60.0f, 34.0f) && !in_ellipse(dx, dy, 44.0f, 18.0f);
-          const bool chin = fabs_(dx) < 16.0f && (float)y > a.my + 7.0f;
-          if (!jaw && !chin) continue;
-          if (fabs_((float)x - a.mx) < a.mw * 0.5f + 4.0f && fabs_((float)y - a.my) < 7.0f) continue;
-          // Щетина — редкие точки 2×2 по хэшу, без регулярной штриховки и без однопиксельной пыли.
-          const int xr = x - ox, yr = y - oy;
-          if ((yr % 3) || (xr % 3)) continue;
-          uint32_t hsh = (uint32_t)(xr * 73856093) ^ (uint32_t)(yr * 19349663);
-          hsh ^= hsh >> 13;
-          hsh *= 0x5bd1e995u;
-          hsh ^= hsh >> 15;
-          if ((hsh & 255u) < (uint32_t)(90.0f * s)) {
-            fb.set(x, y);
-            fb.set(x + 1, y);
-            fb.set(x, y + 1);
-            fb.set(x + 1, y + 1);
-          }
+      // Щетина — ровный пунктир точками 2×2 по линии челюсти: две дуги под ртом от щеки
+      // до щеки, внутренняя со сдвигом на полшага. Регулярный узор читается как борода,
+      // а не как пыль на экране, и едет вместе с лицом.
+      const float jx = a.mx, jy = a.my - 7.0f;
+      for (int row = 0; row < 2; ++row) {
+        const float ax = 40.0f - 7.0f * (float)row, ay = 17.0f - 5.0f * (float)row;
+        const int n = 16 - 3 * row;
+        for (int i = 0; i <= n; ++i) {
+          const float k = ((float)i + 0.5f * (float)row) / (float)n;
+          if (k > 1.0f) continue;
+          const float ang = kPi * (0.06f + 0.88f * k);
+          const int x = iround(jx + ax * s * fcos(ang)), y = iround(jy + ay * s * fsin(ang));
+          if (x < (int)kL || x + 1 > (int)kR - 1 || y < (int)kT || y + 1 > (int)kB - 1) continue;
+          if (fabs_((float)x - a.mx) < a.mw * 0.5f + 3.0f && fabs_((float)y - a.my) < 7.0f) continue;  // рот
+          fb.set(x, y);
+          fb.set(x + 1, y);
+          fb.set(x, y + 1);
+          fb.set(x + 1, y + 1);
         }
       }
       return;
     }
     case Overlay::Stick: {
-      const float sway = 1.5f * fsin(t * 2.2f);
+      const float sway = 1.5f * fsin(t * kTau / 2.8f);
       const float x0 = a.mx + 1.0f, y0 = a.my + 1.0f, x1 = x0 + sway, y1 = fmin_(y0 + 12.0f * s, kB - 8.0f);
       capsule(fb, x0, y0, x1, y1, 2.5f);
       fill_ellipse(fb, x1, y1 + 2.5f, 3.2f * s, 4.2f * s);
@@ -554,8 +562,9 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Bat: {
-      const float ph = frac(t / 3.0f);
-      const float x = -10.0f + ph * 148.0f, y = kT + 7.0f + 2.0f * fsin(t * 6.0f);
+      // Летает туда и обратно за 6 с. Крылья (7·s по бокам) не заходят в поле у краёв.
+      const float ph = frac(t / 6.0f), there = ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f;
+      const float x = kL + 9.0f + (kR - kL - 18.0f) * there, y = kT + 7.0f + 2.0f * fsin(t * kTau);
       const bool up = frac(t * 4.0f) < 0.5f;
       fill_ellipse(fb, x, y, 2.0f * s, 2.5f * s);
       const float wy = up ? -4.0f : 3.0f;
@@ -567,7 +576,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     }
     case Overlay::GameOver: {
       if (s < 0.5f) return;
-      text3x5(fb, iround(cx) - 35, (int)kB - 10, "GAME OVER");
+      draw_text_centered(fb, iround(cx), (int)kB - 10, "GAME OVER");
       return;
     }
     case Overlay::QueasyLines: {
@@ -583,6 +592,52 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Count: return;
+  }
+}
+
+namespace {
+
+void corner_rect(Framebuffer& fb, int x0, int y0, int x1, int y1) {
+  for (int y = y0; y <= y1; ++y) fb.hspan(y, x0, x1, Ink::Set);
+}
+
+}  // namespace
+
+void render_theme(Framebuffer& fb, const Anchors& a, float reticle, bool cyber_eye, bool glint) {
+  const int lo_x = kSafeMargin, hi_x = kWidth - 1 - kSafeMargin, lo_y = kSafeMargin, hi_y = kHeight - 1 - kSafeMargin;
+  if (reticle >= 0.0f) {
+    // Прицел вокруг всего лица: уголки съезжаются к нему — «цель захвачена».
+    const float pad = 3.0f + 10.0f * (1.0f - clampf(reticle, 0.0f, 1.0f));
+    float fx0 = a.mx - a.mw * 0.5f, fx1 = a.mx + a.mw * 0.5f, fy0 = a.my, fy1 = a.my + 6.0f;
+    for (int i = 0; i < 2; ++i) {
+      fx0 = fmin_(fx0, a.ex[i] - a.ew[i] * 0.5f), fx1 = fmax_(fx1, a.ex[i] + a.ew[i] * 0.5f);
+      fy0 = fmin_(fy0, a.ey[i] - fmax_(a.eh[i] * 0.5f, 6.0f) - 6.0f);  // место под брови
+    }
+    const int x0 = imax(iround(fx0 - pad - 6.0f), lo_x), x1 = imin(iround(fx1 + pad + 6.0f), hi_x);
+    const int y0 = imax(iround(fy0 - pad), lo_y), y1 = imin(iround(fy1 + pad), hi_y);
+    const int len = 7;
+    corner_rect(fb, x0, y0, x0 + len, y0 + 1);
+    corner_rect(fb, x0, y0, x0 + 1, y0 + len);
+    corner_rect(fb, x1 - len, y0, x1, y0 + 1);
+    corner_rect(fb, x1 - 1, y0, x1, y0 + len);
+    corner_rect(fb, x0, y1 - 1, x0 + len, y1);
+    corner_rect(fb, x0, y1 - len, x0 + 1, y1);
+    corner_rect(fb, x1 - len, y1 - 1, x1, y1);
+    corner_rect(fb, x1 - 1, y1 - len, x1, y1);
+  }
+  if (cyber_eye) {
+    // Кибер-глаз: квадратный зрачок рисует само лицо, здесь — вспышка раз в 5 с
+    // и риски вокруг глаза, пока он «сканирует» вместе с прицелом.
+    const float ex = a.ex[1], ey = a.ey[1];
+    const float rx = a.ew[1] * 0.5f + 3.0f, ry = fmax_(a.eh[1] * 0.5f, 5.0f) + 3.0f;
+    if (reticle >= 0.0f) {
+      const int cx = iround(ex), cy = iround(ey);
+      corner_rect(fb, cx - 1, imax(iround(ey - ry) - 3, lo_y), cx, iround(ey - ry));
+      corner_rect(fb, imax(iround(ex - rx) - 3, lo_x), cy - 1, iround(ex - rx), cy);
+      corner_rect(fb, iround(ex + rx), cy - 1, imin(iround(ex + rx) + 3, hi_x), cy);
+    }
+    if (glint)
+      sparkle_at(fb, fmin_(ex + rx + 2.0f, (float)hi_x - 4.0f), fmax_(ey - ry - 1.0f, (float)lo_y + 4.0f), 4.0f);
   }
 }
 

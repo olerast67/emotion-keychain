@@ -207,13 +207,15 @@
           <button data-speed="4" aria-pressed="false">×4</button>
           <button data-speed="16" aria-pressed="false">×16</button>
         </div>
-        <label class="clock">Время суток <input id="clock" type="range" min="0" max="1425" step="15"><output id="clockOut">12:00</output></label>
+        <label class="clock">Время суток <input id="clock" type="range" min="0" max="1439" step="1"><output id="clockOut">12:00</output></label>
+        <button class="chip event" id="sound" aria-pressed="false">Пищалка: выкл</button>
       </div>
 
       <div class="tabs" role="tablist">
         <button role="tab" data-tab="events" aria-selected="true">Ситуации</button>
         <button role="tab" data-tab="emotions" aria-selected="false">Эмоции <span id="exprCount"></span></button>
         <button role="tab" data-tab="clips" aria-selected="false">Жесты</button>
+        <button role="tab" data-tab="persona" aria-selected="false">Характер и сцены</button>
         <button role="tab" data-tab="settings" aria-selected="false">Настройки</button>
       </div>
 
@@ -226,6 +228,45 @@
         <div id="paneEmotions"></div>
       </div>
       <div data-pane="clips" hidden><div class="chips" id="paneClips"></div></div>
+      <div data-pane="persona" hidden>
+        <div class="row" style="margin-bottom:12px">
+          <div class="seg" role="group" aria-label="Тема">
+            <button data-theme-id="0" aria-pressed="true">Классика</button>
+            <button data-theme-id="1" aria-pressed="false">Киберпанк</button>
+            <button data-theme-id="2" aria-pressed="false">Ретро</button>
+          </div>
+          <button class="chip event" id="newSerial">Другой брелок</button>
+          <span class="count" id="idText"></span>
+        </div>
+        <label class="clock" style="margin-bottom:12px">Наклон <input id="tilt" type="range" min="-100" max="100" step="5" value="0"><output id="tiltOut">0</output></label>
+        <div class="group">
+          <h3>Рост</h3>
+          <div class="row">
+            <div class="seg" role="group" aria-label="Рост">
+              <button id="growAll" aria-pressed="true">Всё открыто</button>
+              <button id="growNew" aria-pressed="false">С нуля</button>
+            </div>
+            <button class="chip event" id="newDay">Новый день</button>
+            <button class="chip event" id="addXp">+100 опыта</button>
+            <span class="count" id="growText"></span>
+          </div>
+        </div>
+        <div class="group">
+          <h3>Достижения <span id="achCount"></span></h3>
+          <div class="chips" id="paneAch"></div>
+        </div>
+        <div class="group">
+          <h3>Календарь и пасхалки</h3>
+          <div class="row">
+            <label class="clock">Дата <input id="date" type="date"></label>
+            <div class="chips" id="eggTimes"></div>
+          </div>
+        </div>
+        <div class="group">
+          <h3>Сцены</h3>
+          <div class="chips" id="paneScenes"></div>
+        </div>
+      </div>
       <div data-pane="settings" hidden>
         <div class="checks">
           <label><input type="checkbox" id="optDrift" checked><span>Дрейф против выгорания<small>Лицо сдвигается на 1 px раз в 20–40 секунд, чтобы пиксели не выгорали.</small></span></label>
@@ -322,6 +363,34 @@
   // Тап по экрану.
   cv.addEventListener("pointerdown", () => { E.fe_event(evIndex.tap, now()); due = 0; });
 
+  // ---- Пищалка: меандр через WebAudio, как пьезо на ШИМ. Браузер разрешает звук только после нажатия ----
+  let actx = null, osc = null, amp = null, lastHz = -1;
+  let soundOn = false;
+  const btnSound = document.getElementById("sound");
+  function audioStart() {
+    if (actx) return actx.resume();
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    actx = new AC();
+    osc = actx.createOscillator(); osc.type = "square";
+    const lp = actx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 6000;  // пьезо не звенит выше
+    amp = actx.createGain(); amp.gain.value = 0;
+    osc.connect(lp); lp.connect(amp); amp.connect(actx.destination); osc.start();
+  }
+  function setTone(hz, soft) {
+    if (!actx) return;
+    const t = actx.currentTime;
+    if (hz > 0 && soundOn) { osc.frequency.setValueAtTime(hz, t); amp.gain.setTargetAtTime(soft ? 0.025 : 0.06, t, 0.002); }
+    else amp.gain.setTargetAtTime(0, t, 0.003);
+  }
+  function setSound(v) {
+    soundOn = v;
+    if (v) audioStart();
+    btnSound.setAttribute("aria-pressed", v); btnSound.textContent = v ? "Пищалка: вкл" : "Пищалка: выкл";
+    if (!v) setTone(0, false);
+  }
+  btnSound.onclick = () => setSound(!soundOn);
+
   // ---- Режим, скорость, часы ----
   let auto = true;
   const btnAuto = document.getElementById("modeAuto"), btnManual = document.getElementById("modeManual");
@@ -355,21 +424,32 @@
 
   // ---- Ситуации ----
   const groups = [
-    ["Касания", ["tap", "double_tap", "button", "button_long"]],
+    ["Касания", ["tap", "double_tap", "button", "button_long", "*knock"]],
     ["Движение", ["pick_up", "walk", "run", "still", "shake", "shake_hard", "free_fall", "impact", "upside_down", "upright"]],
     ["Звук", ["speech", "music", "loud", "quiet"]],
     ["Свет", ["dark", "light", "bright"]],
     ["Температура", ["cold", "hot", "temp_ok"]],
-    ["Питание", ["charge_start", "charge_full", "charge_stop", "battery_low", "battery_critical"]],
+    ["Питание", ["charge_start", "charge_full", "charge_stop", "battery_low", "battery_critical", "*off"]],
   ];
+  // Особые кнопки: стук выстукивается по времени симуляции, «выключить» — сцена и сон до касания.
+  const special = {
+    knock: ["Секретный стук", () => [0, 500, 750, 1000, 1500].forEach(a => setTimeout(() => { E.fe_event(evIndex.tap, now()); due = 0; }, a / speed))],
+    off: ["Выключить", () => E.fe_power_off(now())],
+  };
   const paneEv = document.getElementById("paneEvents");
   for (const [title, ids] of groups) {
     const g = document.createElement("div"); g.className = "group";
     g.innerHTML = `<h3>${title}</h3>`;
     const chips = document.createElement("div"); chips.className = "chips";
     for (const id of ids) {
+      const b = document.createElement("button"); b.className = "chip event";
+      if (id[0] === "*") {
+        const [title, fn] = special[id.slice(1)];
+        b.textContent = title; b.onclick = () => { fn(); due = 0; };
+        chips.append(b); continue;
+      }
       const e = events[evIndex[id]];
-      const b = document.createElement("button"); b.className = "chip event"; b.textContent = e.name;
+      b.textContent = e.name;
       b.onclick = () => {
         if (id === "free_fall") { E.fe_event(e.i, now()); setTimeout(() => { E.fe_event(evIndex.impact, now()); due = 0; }, 450 / speed); }
         else E.fe_event(e.i, now());
@@ -377,6 +457,40 @@
       };
       chips.append(b);
     }
+    if (title === "Питание") {
+      // Заряд в процентах: его покажет сцена зарядки.
+      const lab = document.createElement("label"); lab.className = "clock";
+      lab.innerHTML = 'Заряд <input type="range" min="0" max="100" step="1" value="35"><output>35%</output>';
+      const [inp, out] = [lab.querySelector("input"), lab.querySelector("output")];
+      const apply = () => { out.textContent = inp.value + "%"; E.fe_set_battery(+inp.value); };
+      inp.oninput = apply; apply();
+      chips.append(lab);
+    }
+    g.append(chips); paneEv.append(g);
+  }
+  // Другой брелок рядом: каждый раз новый сосед со своим характером. После дуэли — разговор шифром.
+  {
+    const g = document.createElement("div"); g.className = "group";
+    g.innerHTML = "<h3>Другой брелок</h3>";
+    const chips = document.createElement("div"); chips.className = "chips";
+    const peerText = document.createElement("span"); peerText.className = "count";
+    const add = (title, fn) => {
+      const b = document.createElement("button"); b.className = "chip event"; b.textContent = title;
+      b.onclick = () => {
+        fn(now());
+        const lvl = E.fe_peer_level();
+        peerText.textContent = "сосед: " + str(E.fe_peer_arch()) + (lvl >= 0 ? " · " + str(E.fe_level_tag(lvl)) : "");
+        due = 0;
+      };
+      chips.append(b);
+    };
+    add("Новый знакомый", t => E.fe_meet(1, t));
+    add("Старый знакомый", t => E.fe_meet(0, t));
+    add("Снова тот же, назавтра", t => E.fe_meet_again(t));
+    add("Старший брелок", t => E.fe_meet_mentor(t));
+    add("Дуэль — победа", t => E.fe_duel(1, t));
+    add("Дуэль — проигрыш", t => E.fe_duel(0, t));
+    chips.append(peerText);
     g.append(chips); paneEv.append(g);
   }
 
@@ -420,6 +534,54 @@
     const b = document.createElement("button"); b.className = "chip event"; b.textContent = clipNames[id] || id;
     b.onclick = () => { E.fe_play_clip(i, now()); due = 0; };
     paneClips.append(b);
+  }
+
+  // ---- Характер и сцены ----
+  const themeBtns = document.querySelectorAll("[data-theme-id]");
+  const setTheme = t => {
+    E.fe_set_theme(t);
+    themeBtns.forEach(b => b.setAttribute("aria-pressed", +b.dataset.themeId === t));
+    store.set("theme", t); due = 0;
+  };
+  themeBtns.forEach(b => b.onclick = () => setTheme(+b.dataset.themeId));
+  setTheme(store.get("theme", 0));
+
+  // ---- Рост и достижения ----
+  const growAll = document.getElementById("growAll"), growNew = document.getElementById("growNew");
+  const setGrow = all => { E.fe_progress_mode(all ? 1 : 0); growAll.setAttribute("aria-pressed", all); growNew.setAttribute("aria-pressed", !all); due = 0; };
+  growAll.onclick = () => setGrow(true); growNew.onclick = () => setGrow(false);
+  document.getElementById("newDay").onclick = () => { E.fe_new_day(now()); due = 0; };
+  document.getElementById("addXp").onclick = () => { E.fe_add_xp(100, now()); due = 0; };
+  const paneAch = document.getElementById("paneAch"), achChips = [];
+  for (let i = 0; i < E.fe_ach_count(); i++) {
+    const b = document.createElement("span"); b.className = "chip"; b.textContent = str(E.fe_ach_name(i));
+    b.title = str(E.fe_ach_tag(i)) + " — " + str(E.fe_ach_how(i)); b.setAttribute("aria-pressed", "false");
+    achChips.push(b); paneAch.append(b);
+  }
+  // ---- Календарь: дата для праздников и пасхалок, время-пасхалки ----
+  const dateEl = document.getElementById("date");
+  dateEl.onchange = () => { const [y, m, d] = dateEl.value.split("-").map(Number); if (y) { E.fe_set_date(y, m, d); due = 0; } };
+  const eggTimes = document.getElementById("eggTimes");
+  for (const hm of ["13:37", "11:11", "12:34", "04:04"]) {
+    const b = document.createElement("button"); b.className = "chip event"; b.textContent = hm;
+    b.onclick = () => { const [h, m] = hm.split(":").map(Number); clock.value = h * 60 + m; setClock(); };
+    eggTimes.append(b);
+  }
+  const idText = document.getElementById("idText");
+  const applySerial = s => {
+    E.fe_identity(s >>> 0, 0, now());
+    idText.textContent = `${str(E.fe_id_code())} · ${str(E.fe_id_arch())} · ${str(E.fe_id_rarity())}` + (E.fe_id_cyber() ? " · золотой кибер-глаз" : "");
+    store.set("serial", s); due = 0;
+  };
+  document.getElementById("newSerial").onclick = () => applySerial(Math.floor(Math.random() * 4294967295));
+  applySerial(store.get("serial", 9));
+  const tilt = document.getElementById("tilt"), tiltOut = document.getElementById("tiltOut");
+  tilt.oninput = () => { E.fe_set_tilt(tilt.value / 100, 0); tiltOut.textContent = tilt.value; due = 0; };
+  const paneScenes = document.getElementById("paneScenes");
+  for (let i = 0; i < E.fe_scene_count(); i++) {
+    const b = document.createElement("button"); b.className = "chip event"; b.textContent = str(E.fe_scene_name(i));
+    b.onclick = () => { E.fe_play_scene(i, now()); due = 0; };
+    paneScenes.append(b);
   }
 
   // ---- Настройки ----
@@ -467,6 +629,10 @@
       else { f.style.left = "0"; f.style.width = (v * 100) + "%"; }
     };
     setBar(0, E.fe_mood(0), true); [2, 3, 4, 5].forEach(n => setBar(n, E.fe_mood(n), false));
+    el("growText").textContent = `день ${E.fe_days()} · серия ${E.fe_streak()} · открыто ${E.fe_unlocked()}/${exprs.length} · имплант ${E.fe_implant()}` + (E.fe_eco() ? " · экорежим" : "");
+    let got = 0;
+    achChips.forEach((b, i) => { const on = E.fe_ach_earned(i) === 1; got += on; b.setAttribute("aria-pressed", on); });
+    el("achCount").textContent = `${got}/${achChips.length}`;
   }
 
   // ---- Главный цикл: как прошивка, просыпаемся только когда движок попросил ----
@@ -485,8 +651,13 @@
         dirtyAt = t;
         draw();
       } else if (showDirty && t - dirtyAt < 200) draw();
-      due = Math.min(E.fe_next(), E.fe_bh_next());
+      // Сроки движка — uint32, а JS видит их знаковыми: считаем, сколько до них осталось, по разности.
+      const ahead = t => Math.max(0, (t - now()) | 0);
+      due = sim + Math.min(ahead(E.fe_next()), ahead(E.fe_bh_next()));
     }
+    // Пищалка: частота меняется только на сменах нот.
+    const hz = E.fe_voice_tone(now());
+    if (hz !== lastHz) { lastHz = hz; setTone(hz, E.fe_voice_soft()); }
     if (t - infoAt > 250) { updateInfo(); infoAt = t; }
     requestAnimationFrame(tick);
   }
