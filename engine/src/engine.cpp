@@ -168,6 +168,7 @@ void FaceEngine::init(uint32_t seed, uint32_t now_ms) {
   clip_active_ = false;
   glitch_ = 0;
   drift_x_ = drift_y_ = 0;
+  fit_from_x_ = fit_from_y_ = fit_to_x_ = fit_to_y_ = fit_x_ = fit_y_ = 0;
   drift_next_ = now_ms + 20000u + (rng_.next() % 20000u);
   gx_ = gy_ = g_from_x_ = g_from_y_ = g_to_x_ = g_to_y_ = 0;
   g_moving_ = false;
@@ -191,6 +192,10 @@ void FaceEngine::set_expression(Expr e, uint32_t now_ms, int transition_ms) {
   tr_active_ = tr_ms_ > 0;
   if (!tr_active_) base_ = to_;
   ov_target_ = preset_->overlays;
+  fit_from_x_ = fit_x_;
+  fit_from_y_ = fit_y_;
+  compute_fit();
+  if (!tr_active_) fit_x_ = fit_to_x_, fit_y_ = fit_to_y_;
   blink_on_ = false;
   schedule_blink(now_ms + tr_ms_);
   g_moving_ = false;
@@ -199,6 +204,122 @@ void FaceEngine::set_expression(Expr e, uint32_t now_ms, int transition_ms) {
   // Первый жест — пораньше, чтобы новая эмоция сразу ожила.
   accent_next_ = now_ms + tr_ms_ + (uint32_t)((float)preset_->accent_ms * rng_.range(0.3f, 0.7f));
   next_update_ = now_ms;
+}
+
+namespace {
+
+// На сколько пикселей жест и движение пресета уводят лицо от его статичной
+// рамки: слева, справа, сверху, снизу.
+struct Pad {
+  float l = 0, r = 0, t = 0, b = 0;
+  void x(float v) { l = fmax_(l, v), r = fmax_(r, v); }
+  void y(float v) { t = fmax_(t, v), b = fmax_(b, v); }
+};
+
+// Взгляд сдвигает глаза с бровями на 5·gx и 3·gy пикселей (см. render_face).
+// Крайние значения взгляда для каждого режима — из update_gaze.
+Pad gaze_pad(const Expression& e) {
+  float x = 0, up = 0, down = 0;
+  switch (e.gaze) {
+    case Gaze::Idle: x = 0.95f, up = 0.5f, down = 0.4f; break;
+    case Gaze::Still: x = 0.12f, up = down = 0.1f; break;
+    case Gaze::Around: x = 1.0f, up = 0.7f, down = 0.5f; break;
+    case Gaze::Up: x = 0.35f, up = 0.95f; break;
+    case Gaze::Down: x = 0.4f, down = 0.95f; break;
+    case Gaze::Left:
+    case Gaze::Right: x = 1.0f, up = down = 0.15f; break;
+    case Gaze::Avert: x = 0.8f, down = 0.75f; break;
+    case Gaze::Dart: x = 1.0f, up = down = 0.6f; break;
+    case Gaze::UpSide: x = 0.9f, up = 0.9f; break;
+  }
+  if (e.accent == Accent::Look) x = 1.0f;
+  Pad p;
+  p.x(5.0f * x);
+  p.t = 3.0f * up;
+  p.b = 3.0f * down;
+  return p;
+}
+
+Pad motion_pad(const Expression& e) {
+  Pad p;
+  const float A = e.motion_amp;
+  switch (e.motion) {
+    case Motion::None:
+    case Motion::Pulse: break;
+    case Motion::Bounce: p.t = A; break;
+    case Motion::Bob: p.y(A); break;
+    case Motion::Tremble: p.x(A), p.y(A); break;
+    case Motion::Shake:
+    case Motion::Shiver: p.x(A); break;
+    case Motion::Sway: p.x(A), p.y(A * 0.5f); break;
+    case Motion::Float: p.y(A), p.x(A * 0.6f); break;
+    case Motion::Nod: p.b = A; break;
+    case Motion::Wobble: p.y(A), p.x(A * 0.4f); break;
+  }
+  if (e.motion == Motion::Pulse) p.x(A * 0.2f), p.y(A * 0.2f);
+  switch (e.accent) {
+    case Accent::Brows: p.t = fmax_(p.t, 3.0f); break;
+    case Accent::Chatter: p.b = fmax_(p.b, 4.0f); break;
+    case Accent::Hop: p.t = fmax_(p.t, 3.0f); break;
+    case Accent::Tilt: p.y(3.0f); break;
+    case Accent::Wiggle:
+    case Accent::Shake:
+    case Accent::Sway: p.x(2.0f); break;
+    case Accent::Nod: p.b = fmax_(p.b, 2.0f); break;
+    case Accent::Bob: p.t = fmax_(p.t, 1.5f); break;
+    case Accent::Pulse: p.x(2.0f), p.y(2.0f); break;
+    case Accent::Grin: p.x(2.0f); break;
+    default: break;
+  }
+  return p;
+}
+
+}  // namespace
+
+void FaceEngine::compute_fit() {
+  // Рисуем целевое лицо со значками в черновой буфер и смотрим, где оказались
+  // крайние пиксели. Значки, привязанные к экрану, а не к лицу, сами держат поле.
+  back_.clear();
+  Face f = to_;
+  f.ox = f.oy = 0;
+  Anchors a;
+  render_face(back_, f, &a);
+  for (int i = 0; i < (int)Overlay::Count; ++i) {
+    if (!((ov_target_ >> i) & 1ull) || overlay_screen_space((Overlay)i)) continue;
+    for (int k = 0; k < 8; ++k) render_overlay(back_, (Overlay)i, a, 1.0f, (float)k * 0.31f);
+  }
+  int x0 = kWidth, x1 = -1, y0 = kHeight, y1 = -1;
+  for (int p = 0; p < kPages; ++p)
+    for (int x = 0; x < kWidth; ++x) {
+      const uint8_t b = back_.data[p * kWidth + x];
+      if (!b) continue;
+      x0 = imin(x0, x), x1 = imax(x1, x);
+      y0 = imin(y0, p * 8 + __builtin_ctz(b)), y1 = imax(y1, p * 8 + 31 - __builtin_clz((uint32_t)b));
+    }
+  back_.clear();
+  if (x1 >= 0) {
+    const Pad m = motion_pad(*preset_), g = gaze_pad(*preset_);
+    x0 -= iceil(m.l + g.l), x1 += iceil(m.r + g.r), y0 -= iceil(m.t + g.t), y1 += iceil(m.b + g.b);
+  }
+  if (x1 < 0) {
+    fit_to_x_ = fit_to_y_ = 0;
+    drift_lo_x_ = -3, drift_hi_x_ = 3, drift_lo_y_ = -2, drift_hi_y_ = 2;
+    return;
+  }
+  auto fit = [](int lo, int hi, int size) {
+    const int m = kSafeMargin;
+    if (hi - lo + 1 > size - 2 * m) return (size - 1 - hi - lo) / 2;  // не влезает — по центру
+    if (lo < m) return m - lo;
+    if (hi > size - 1 - m) return size - 1 - m - hi;
+    return 0;
+  };
+  const int fx = fit(x0, x1, kWidth), fy = fit(y0, y1, kHeight);
+  fit_to_x_ = (float)fx;
+  fit_to_y_ = (float)fy;
+  // Дрейф не подпускает эмоцию к краю ближе, чем на пиксель меньше поля.
+  const int m = kSafeMargin - 1;
+  drift_lo_x_ = imin(0, imax(-3, m - (x0 + fx))), drift_hi_x_ = imax(0, imin(3, kWidth - 1 - m - (x1 + fx)));
+  drift_lo_y_ = imin(0, imax(-2, m - (y0 + fy))), drift_hi_y_ = imax(0, imin(2, kHeight - 1 - m - (y1 + fy)));
 }
 
 void FaceEngine::schedule_accent(uint32_t from) {
@@ -760,6 +881,7 @@ bool FaceEngine::update(uint32_t now) {
     float k = (float)(now - tr_t0_) / (float)tr_ms_;
     if (k >= 1.0f) {
       base_ = to_;
+      fit_x_ = fit_to_x_, fit_y_ = fit_to_y_;
       tr_active_ = false;
     } else {
       const float e = ease_in_out(k);
@@ -795,12 +917,15 @@ bool FaceEngine::update(uint32_t now) {
       base_.layout.eye_y = lerpf(from_.layout.eye_y, to_.layout.eye_y, e);
       base_.layout.mouth_y = lerpf(from_.layout.mouth_y, to_.layout.mouth_y, e);
       base_.layout.tilt = lerpf(from_.layout.tilt, to_.layout.tilt, e);
+      fit_x_ = lerpf(fit_from_x_, fit_to_x_, e);
+      fit_y_ = lerpf(fit_from_y_, fit_to_y_, e);
       want(period, opt_.frame_ms);
     }
   }
 
   composed_ = base_;
-  composed_.ox = composed_.oy = 0;
+  composed_.ox = fit_x_;
+  composed_.oy = fit_y_;
   for (int i = 0; i < 2; ++i) {
     // Спирали крутятся, пока держится эмоция.
     if (composed_.eye[i].kind == EyeKind::Spiral) {
@@ -822,8 +947,8 @@ bool FaceEngine::update(uint32_t now) {
     drift_next_ = now + 20000u + rng_.next() % 20000u;
   }
   if (opt_.drift) {
-    composed_.ox += (float)drift_x_;
-    composed_.oy += (float)drift_y_;
+    composed_.ox += (float)iclamp(drift_x_, drift_lo_x_, drift_hi_x_);
+    composed_.oy += (float)iclamp(drift_y_, drift_lo_y_, drift_hi_y_);
   }
 
   overlays_update(now, period);

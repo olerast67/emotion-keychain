@@ -91,6 +91,38 @@ static void test_every_expression_renders() {
 }
 
 // Симметричные эмоции должны быть зеркальными: иначе лицо «косит».
+// На живой панели 0.96″ эмоции у самого края и однопиксельные линии плохо читаются.
+// Прогоняем каждую эмоцию 12 с со всей анимацией и дрейфом.
+static void test_safe_area_and_strokes() {
+  for (int i = 0; i < kExprCount; ++i) {
+    const Expr e = (Expr)i;
+    // Летучая мышь по задумке пролетает через весь экран.
+    const bool crosses = expression(e).overlays & ov(Overlay::Bat);
+    FaceEngine eng;
+    eng.init(1234 + i, 0);
+    eng.set_expression(e, 0, 0);
+    int margin = 99;
+    long thin = 0, lit = 0;
+    for (uint32_t t = 0; t < 12000; t += 33) {
+      eng.update(t);
+      if (eng.expression() != e) eng.set_expression(e, t, 0);
+      const Framebuffer& f = eng.frame();
+      for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kWidth; ++x) {
+          if (!f.get(x, y)) continue;
+          const int m = imin(imin(x, kWidth - 1 - x), imin(y, kHeight - 1 - y));
+          if (m < margin) margin = m;
+          if (t < 1000) continue;
+          ++lit;
+          if ((!f.get(x - 1, y) && !f.get(x + 1, y)) || (!f.get(x, y - 1) && !f.get(x, y + 1))) ++thin;
+        }
+    }
+    if (!crosses) CHECK(margin >= kSafeMargin - 1, "%s: до края %d px", expression(e).id, margin);
+    CHECK(lit == 0 || thin * 100 < lit * 10, "%s: однопиксельных пикселей %ld%%", expression(e).id,
+          lit ? thin * 100 / lit : 0);
+  }
+}
+
 static void test_symmetry() {
   const Expr sym[] = {Expr::neutral, Expr::happy,     Expr::joy,     Expr::laugh,  Expr::love,    Expr::sad,
                       Expr::angry,   Expr::surprised, Expr::shocked, Expr::sleepy, Expr::sleeping};
@@ -274,6 +306,7 @@ int main() {
   test_catalog();
   test_every_expression_renders();
   test_symmetry();
+  test_safe_area_and_strokes();
   test_transitions_settle();
   test_idle_scheduling();
   test_determinism();

@@ -12,6 +12,9 @@ struct Vec2 {
 };
 
 // Что рисовать: обычная заливка или дизеринг для полупрозрачности.
+// Самая тонкая линия, которую рисуют capsule, polyline, arc и bezier.
+constexpr float kMinStroke = 2.5f;
+
 struct Paint {
   Ink ink = Ink::Set;
   float alpha = 1.0f;  // < 1 включает дизеринг Байера

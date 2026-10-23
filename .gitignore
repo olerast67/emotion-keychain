@@ -2,6 +2,7 @@
 /build/
 /build-*/
 /sim/web/dist/
+.pio/
 *.o
 *.wasm
 

@@ -1,0 +1,15 @@
+{
+  "name": "face-engine",
+  "version": "0.1.0",
+  "description": "Движок лиц брелока: 139 эмоций, переходы, жесты и поведение для монохромного экрана 128×64",
+  "keywords": ["ssd1306", "oled", "face", "emotions", "animation"],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "frameworks": "*",
+  "platforms": "*",
+  "build": {
+    "srcDir": "src",
+    "includeDir": "include",
+    "flags": ["-std=gnu++2a", "-fno-math-errno", "-fno-exceptions", "-fno-rtti"],
+    "unflags": ["-std=gnu++11", "-std=gnu++14", "-std=gnu++17"]
+  }
+}

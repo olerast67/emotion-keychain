@@ -1,5 +1,6 @@
 // Символические значки поверх лица. Каждый рисуется процедурно и привязан
 // к глазам или рту, поэтому едет вместе с лицом.
+#include "face/engine.h"
 #include "face/raster.h"
 #include "face/render.h"
 
@@ -8,6 +9,10 @@ namespace face {
 namespace {
 
 inline float frac(float x) { return x - (float)ifloor(x); }
+
+// Края безопасного поля для значков, привязанных к экрану.
+constexpr float kL = (float)kSafeMargin, kR = (float)(kWidth - kSafeMargin), kT = (float)kSafeMargin,
+                kB = (float)(kHeight - kSafeMargin);
 inline float pop(float a) { return a >= 1.0f ? 1.0f : ease_out_back(clampf(a, 0.0f, 1.0f)); }
 
 // Капля: круг снизу, остриё сверху.
@@ -31,7 +36,8 @@ void note(Framebuffer& fb, float x, float y, float s) {
   capsule(fb, sx, y - 7.0f * s, sx + 3.0f * s, y - 4.5f * s, 1.6f);
 }
 
-// Крошечный шрифт 3×5 для надписей-пасхалок (только нужные буквы).
+// Шрифт 3×5 для надписей-пасхалок (только нужные буквы), каждый пиксель
+// рисуется квадратом 2×2: однопиксельные буквы на 0.96″ не читаются.
 void text3x5(Framebuffer& fb, int x, int y, const char* s) {
   struct G {
     char c;
@@ -47,14 +53,17 @@ void text3x5(Framebuffer& fb, int x, int y, const char* s) {
       if (g.c != s[i]) continue;
       for (int r = 0; r < 5; ++r)
         for (int c = 0; c < 3; ++c)
-          if (g.rows[r] & (4 >> c)) fb.set(x + i * 4 + c, y + r);
+          if (g.rows[r] & (4 >> c)) {
+            const int px = x + (i * 4 + c) * 2, py = y + r * 2;
+            fb.set(px, py), fb.set(px + 1, py), fb.set(px, py + 1), fb.set(px + 1, py + 1);
+          }
     }
   }
 }
 
 void sparkle_at(Framebuffer& fb, float x, float y, float r) {
   if (r < 1.0f) return;
-  fill_star(fb, x, y, r, fmax_(r * 0.32f, 0.8f), 4, 0.0f);
+  fill_star(fb, x, y, r, fmax_(r * 0.36f, 1.3f), 4, 0.0f);
 }
 
 }  // namespace
@@ -68,6 +77,25 @@ const char* overlay_id(Overlay o) {
       "eye_bags",    "shrug_arms",   "explosion", "bat",      "game_over", "queasy_lines"};
   static_assert(sizeof(kIds) / sizeof(kIds[0]) == (int)Overlay::Count, "overlay ids");
   return (int)o < (int)Overlay::Count ? kIds[(int)o] : "?";
+}
+
+bool overlay_screen_space(Overlay o) {
+  switch (o) {
+    case Overlay::TearStream:
+    case Overlay::Hearts:
+    case Overlay::Notes:
+    case Overlay::Gloom:
+    case Overlay::Snow:
+    case Overlay::BatteryLow:
+    case Overlay::SpeedLines:
+    case Overlay::Halo:
+    case Overlay::Stubble:
+    case Overlay::ShrugArms:
+    case Overlay::Explosion:
+    case Overlay::Bat:
+    case Overlay::GameOver: return true;
+    default: return false;
+  }
 }
 
 uint16_t overlay_frame_ms(Overlay o) {
@@ -124,7 +152,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
         const float bx = ex - side * (ew * 0.5f + 3.0f), by = ey + eh * 0.5f + 5.0f;
         for (int k = -1; k <= 1; ++k) {
           float x = bx + k * 4.0f * s;
-          capsule(fb, x - 1.5f * s * side, by + 2.5f * s, x + 1.5f * s * side, by - 2.5f * s, 2.0f);
+          capsule(fb, x - 1.5f * s * side, by + 2.5f * s, x + 1.5f * s * side, by - 2.5f * s, 2.6f);
         }
       }
       return;
@@ -133,7 +161,12 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       for (int i = 0; i < 2; ++i) {
         const int side = i == 0 ? 1 : -1;
         const float bx = a.ex[i] - side * (a.ew[i] * 0.42f), by = a.ey[i] + a.eh[i] * 0.5f + 4.0f;
-        fill_ellipse(fb, bx, by, 7.0f * s, 3.5f * s, Paint{Ink::Set, 0.5f});
+        // Шашка клетками 2×2: читается как румянец и не рассыпается в однопиксельный шум.
+        const float hx = 7.0f * s, hy = 3.5f * s;
+        for (int y = iround(by - hy) - 1; y <= iround(by + hy) + 1; ++y)
+          for (int x = iround(bx - hx) - 1; x <= iround(bx + hx) + 1; ++x)
+            if ((((x >> 1) + (y >> 1)) & 1) && in_ellipse((float)x + 0.5f - bx, (float)y + 0.5f - by, hx, hy))
+              fb.set(x, y);
       }
       return;
     }
@@ -174,7 +207,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
         const float y0 = a.ey[i] + a.eh[i] * 0.25f;
         const float hw = 2.0f * s;
         const float scroll = t * 40.0f;
-        for (int y = iround(y0); y < kHeight; ++y) {
+        for (int y = iround(y0); y < (int)kB; ++y) {
           float k = frac(((float)y - scroll) / 9.0f);
           if (k > 0.72f) continue;
           fb.hspan(y, iround(x - hw), iround(x + hw) - 1, Ink::Set);
@@ -196,8 +229,9 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       for (int i = 0; i < 3; ++i) {
         const float ph = frac(t / 2.4f + i / 3.0f);
         const float side = (i & 1) ? 1.0f : -1.0f;
-        const float x = cx + side * (52.0f + 2.0f * i) + 2.5f * fsin(kTau * (ph * 1.4f + i * 0.3f));
-        const float y = 56.0f - ph * 48.0f;
+        const float x =
+            clampf(cx + side * (50.0f + 2.0f * i) + 2.0f * fsin(kTau * (ph * 1.4f + i * 0.3f)), kL + 4.0f, kR - 4.0f);
+        const float y = kB - 4.0f - ph * 44.0f;
         const float k = s * (ph > 0.8f ? (1.0f - ph) / 0.2f : 1.0f);
         if (k > 0.25f) fill_heart(fb, x, y, 4.0f * k, 3.6f * k);
       }
@@ -234,8 +268,8 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       for (int i = 0; i < 2; ++i) {
         const float ph = frac(t / 2.2f + i * 0.5f);
         const float side = i ? 1.0f : -1.0f;
-        const float x = cx + side * (50.0f - ph * 4.0f) + 2.0f * fsin(kTau * ph * 2.0f);
-        const float y = 54.0f - ph * 40.0f;
+        const float x = clampf(cx + side * (48.0f - ph * 4.0f) + 2.0f * fsin(kTau * ph * 2.0f), kL + 3.0f, kR - 7.0f);
+        const float y = kB - 4.0f - ph * 36.0f;
         const float k = s * (ph > 0.85f ? (1.0f - ph) / 0.15f : 1.0f);
         if (k > 0.3f) note(fb, x, y, k);
       }
@@ -286,8 +320,9 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       const int ytop = iround(fmin_(ly - lh * 0.5f, ry - rh * 0.5f));
       int k = 0;
       for (int x = xa; x <= xb; x += 4, ++k) {
-        const int len = iround((float)(ytop + 3) * s * ((k & 1) ? 0.6f : 1.0f));
-        for (int y = 0; y < len; ++y) fb.set(x, y);
+        // Полосы не доходят до глаз: между ними живут брови.
+        const int len = iround((float)(ytop - 8 - (int)kT) * s * ((k & 1) ? 0.6f : 1.0f));
+        for (int y = (int)kT; y < (int)kT + len; ++y) fb.hspan(y, x, x + 1, Ink::Set);
       }
       return;
     }
@@ -298,8 +333,8 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
         const float depth = 0.5f + 0.5f * fsin(ang);
         const float x = ccx + 30.0f * fcos(ang);
         const float y = ccy + 3.5f * fsin(ang);
-        const float r = (2.2f + 1.6f * depth) * s;
-        fill_star(fb, x, fmax_(y, r), r, r * 0.45f, 5, ang);
+        const float r = (2.8f + 1.6f * depth) * s;
+        fill_star(fb, x, fmax_(y, kT + r), r, r * 0.5f, 5, ang);
       }
       return;
     }
@@ -335,8 +370,8 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
         capsule(fb, ex - hw * 0.45f, top + 9.0f * s, ex - hw * 0.1f, top + 3.0f * s, 1.5f, Paint{Ink::Clear});
       }
       capsule(fb, lx + lw * 0.5f, top + 2.0f, rx - rw * 0.5f, top + 2.0f, 2.5f);
-      capsule(fb, 0.0f, top + 1.0f, lx - lw * 0.5f - 3.0f, top + 1.0f, 2.0f);
-      capsule(fb, rx + rw * 0.5f + 3.0f, top + 1.0f, (float)kWidth, top + 1.0f, 2.0f);
+      capsule(fb, fmax_(kL, lx - lw * 0.5f - 12.0f), top + 1.0f, lx - lw * 0.5f - 3.0f, top + 1.0f, 2.5f);
+      capsule(fb, rx + rw * 0.5f + 3.0f, top + 1.0f, fmin_(kR - 1.0f, rx + rw * 0.5f + 12.0f), top + 1.0f, 2.5f);
       return;
     }
     case Overlay::Bolt: {
@@ -348,13 +383,14 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Snow: {
-      const float pts[2][2] = {{lx - lw * 0.5f - 8.0f, 9.0f}, {rx + rw * 0.5f + 8.0f, 14.0f}};
+      const float pts[2][2] = {{fmax_(kL + 5.0f, lx - lw * 0.5f - 8.0f), kT + 7.0f},
+                               {fmin_(kR - 5.0f, rx + rw * 0.5f + 8.0f), kT + 12.0f}};
       for (int i = 0; i < 2; ++i) {
         const float x = pts[i][0], y = pts[i][1] + 2.0f * fsin(t * 1.5f + i);
         const float r = 4.0f * s;
         for (int k = 0; k < 3; ++k) {
           float ang = t * 0.8f + kPi * (float)k / 3.0f;
-          capsule(fb, x - r * fcos(ang), y - r * fsin(ang), x + r * fcos(ang), y + r * fsin(ang), 1.5f);
+          capsule(fb, x - r * fcos(ang), y - r * fsin(ang), x + r * fcos(ang), y + r * fsin(ang), 2.0f);
         }
       }
       return;
@@ -382,20 +418,19 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     }
     case Overlay::BatteryLow: {
       if (frac(t / 1.2f) > 0.65f) return;
-      const float x = cx, y = 5.0f;
-      const int xa = iround(x - 8 * s), xb = iround(x + 6 * s), ya = iround(y - 3.5f * s), yb = iround(y + 3.5f * s);
-      for (int xx = xa; xx <= xb; ++xx) {
-        fb.set(xx, ya);
-        fb.set(xx, yb);
-      }
+      const float x = cx, y = kT + 4.0f;
+      const int xa = iround(x - 9 * s), xb = iround(x + 7 * s), ya = iround(y - 4.0f * s), yb = iround(y + 4.0f * s);
+      // Корпус батарейки с обводкой в 2 px, контакт и один оставшийся сегмент.
       for (int yy = ya; yy <= yb; ++yy) {
-        fb.set(xa, yy);
-        fb.set(xb, yy);
-      }
-      for (int yy = ya + 2; yy <= yb - 2; ++yy) {
-        fb.set(xb + 1, yy);
-        fb.set(xb + 2, yy);
-        fb.hspan(yy, xa + 2, xa + 3, Ink::Set);
+        const bool edge = yy <= ya + 1 || yy >= yb - 1;
+        if (edge) {
+          fb.hspan(yy, xa, xb, Ink::Set);
+        } else {
+          fb.hspan(yy, xa, xa + 1, Ink::Set);
+          fb.hspan(yy, xb - 1, xb, Ink::Set);
+          fb.hspan(yy, xa + 3, xa + 5, Ink::Set);
+        }
+        if (yy >= ya + 2 && yy <= yb - 2) fb.hspan(yy, xb + 1, xb + 2, Ink::Set);
       }
       return;
     }
@@ -404,8 +439,8 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       for (int k = 0; k < 3; ++k) {
         const float y = 18.0f + 13.0f * k;
         const float off = frac(ph + k * 0.37f) * 10.0f;
-        capsule(fb, 1.0f + off, y, 8.0f + off * 0.5f, y, 1.5f);
-        capsule(fb, 126.0f - off, y, 119.0f - off * 0.5f, y, 1.5f);
+        capsule(fb, kL + off, y, kL + 7.0f + off * 0.5f, y, 2.5f);
+        capsule(fb, kR - 1.0f - off, y, kR - 8.0f - off * 0.5f, y, 2.5f);
       }
       return;
     }
@@ -413,12 +448,12 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       const float ph = frac(t / 3.0f);
       const float r = (2.0f + 6.0f * ease_in_out(ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f)) * s;
       const float x = cx + 7.0f + r * 0.6f, y = (ly + ry) * 0.5f + 9.0f;
-      ellipse_ring(fb, x, y, r, r, 1.5f);
+      ellipse_ring(fb, x, y, r, r, 2.0f);
       return;
     }
     case Overlay::Halo: {
-      const float y = 3.5f + fsin(t * kTau * 0.5f);
-      ellipse_ring(fb, cx, y, 14.0f * s, 3.2f * s, 1.6f);
+      const float y = kT + 4.0f + fsin(t * kTau * 0.5f);
+      ellipse_ring(fb, cx, y, 14.0f * s, 3.5f * s, 2.2f);
       return;
     }
     case Overlay::Horns: {
@@ -444,8 +479,9 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       }
       const float by = fmin_(a.ey[0], a.ey[1]) - 2.0f;
       capsule(fb, a.ex[0] + a.ew[0] * 0.5f + 5.0f * s, by, a.ex[1] - a.ew[1] * 0.5f - 5.0f * s, by, 2.0f);
-      capsule(fb, 0.0f, by - 2.0f, a.ex[0] - a.ew[0] * 0.5f - 5.0f * s, by, 2.0f);
-      capsule(fb, a.ex[1] + a.ew[1] * 0.5f + 5.0f * s, by, (float)kWidth, by - 2.0f, 2.0f);
+      const float lend = a.ex[0] - a.ew[0] * 0.5f - 5.0f * s, rend = a.ex[1] + a.ew[1] * 0.5f + 5.0f * s;
+      capsule(fb, fmax_(kL, lend - 10.0f), by - 2.0f, lend, by, 2.5f);
+      capsule(fb, rend, by, fmin_(kR - 1.0f, rend + 10.0f), by - 2.0f, 2.5f);
       return;
     }
     case Overlay::Nose: {
@@ -457,23 +493,25 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     case Overlay::Stubble: {
       const int ox = iround(a.ox), oy = iround(a.oy);
       const float ecx = a.mx, ecy = a.my - 16.0f;
-      for (int y = imax(iround(a.my - 8.0f), 0); y < kHeight; ++y) {
-        for (int x = 0; x < kWidth; ++x) {
+      for (int y = imax(iround(a.my - 8.0f), (int)kT); y < (int)kB - 1; ++y) {
+        for (int x = (int)kL; x < (int)kR - 1; ++x) {
           const float dx = (float)x - ecx, dy = (float)y - ecy;
           const bool jaw = in_ellipse(dx, dy, 60.0f, 34.0f) && !in_ellipse(dx, dy, 44.0f, 18.0f);
           const bool chin = fabs_(dx) < 16.0f && (float)y > a.my + 7.0f;
           if (!jaw && !chin) continue;
           if (fabs_((float)x - a.mx) < a.mw * 0.5f + 4.0f && fabs_((float)y - a.my) < 7.0f) continue;
-          // Щетина — редкие короткие вертикальные «волоски» по хэшу, без регулярной штриховки.
+          // Щетина — редкие точки 2×2 по хэшу, без регулярной штриховки и без однопиксельной пыли.
           const int xr = x - ox, yr = y - oy;
-          if ((yr & 1) || (xr & 1)) continue;
+          if ((yr % 3) || (xr % 3)) continue;
           uint32_t hsh = (uint32_t)(xr * 73856093) ^ (uint32_t)(yr * 19349663);
           hsh ^= hsh >> 13;
           hsh *= 0x5bd1e995u;
           hsh ^= hsh >> 15;
-          if ((hsh & 255u) < (uint32_t)(70.0f * s)) {
+          if ((hsh & 255u) < (uint32_t)(90.0f * s)) {
             fb.set(x, y);
-            fb.set(x + ((hsh >> 9) & 1u), y + 1);
+            fb.set(x + 1, y);
+            fb.set(x, y + 1);
+            fb.set(x + 1, y + 1);
           }
         }
       }
@@ -481,7 +519,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     }
     case Overlay::Stick: {
       const float sway = 1.5f * fsin(t * 2.2f);
-      const float x0 = a.mx + 1.0f, y0 = a.my + 1.0f, x1 = x0 + sway, y1 = fmin_(y0 + 12.0f * s, 57.0f);
+      const float x0 = a.mx + 1.0f, y0 = a.my + 1.0f, x1 = x0 + sway, y1 = fmin_(y0 + 12.0f * s, kB - 8.0f);
       capsule(fb, x0, y0, x1, y1, 2.5f);
       fill_ellipse(fb, x1, y1 + 2.5f, 3.2f * s, 4.2f * s);
       return;
@@ -489,23 +527,23 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     case Overlay::EyeBags: {
       for (int i = 0; i < 2; ++i) {
         arc(fb, a.ex[i], a.ey[i] + a.eh[i] * 0.5f + 1.0f, a.ew[i] * 0.32f * s, 2.5f * s, 0.15f * kPi, 0.85f * kPi,
-            1.5f);
+            2.5f);
       }
       return;
     }
     case Overlay::ShrugArms: {
       for (int i = 0; i < 2; ++i) {
         const int side = i == 0 ? 1 : -1;
-        const float edge = side > 0 ? 1.0f : (float)kWidth - 2.0f;
+        const float edge = side > 0 ? kL + 1.0f : kR - 2.0f;
         const float yt = fmin_(a.ey[0], a.ey[1]) - 4.0f * s, yb = a.my + 1.0f;
         Vec2 p[4] = {
             {edge, yt}, {edge + side * 8.0f * s, yt}, {edge + side * 17.0f * s, yb}, {edge + side * 25.0f * s, yb}};
-        polyline(fb, p, 4, 2.0f);
+        polyline(fb, p, 4, 2.5f);
       }
       return;
     }
     case Overlay::Explosion: {
-      const float bx = cx, by = 4.0f;
+      const float bx = cx, by = kT + 9.0f;
       const float ph = frac(t / 0.6f);
       for (int k = 0; k < 9; ++k) {
         const float ang = kPi + kPi * (float)k / 8.0f;
@@ -517,7 +555,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     }
     case Overlay::Bat: {
       const float ph = frac(t / 3.0f);
-      const float x = -10.0f + ph * 148.0f, y = 7.0f + 2.0f * fsin(t * 6.0f);
+      const float x = -10.0f + ph * 148.0f, y = kT + 7.0f + 2.0f * fsin(t * 6.0f);
       const bool up = frac(t * 4.0f) < 0.5f;
       fill_ellipse(fb, x, y, 2.0f * s, 2.5f * s);
       const float wy = up ? -4.0f : 3.0f;
@@ -529,7 +567,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     }
     case Overlay::GameOver: {
       if (s < 0.5f) return;
-      text3x5(fb, iround(cx) - 17, kHeight - 6, "GAME OVER");
+      text3x5(fb, iround(cx) - 35, (int)kB - 10, "GAME OVER");
       return;
     }
     case Overlay::QueasyLines: {
@@ -539,7 +577,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
           const float x = a.ex[i] + k * 6.0f;
           Vec2 p[5];
           for (int j = 0; j < 5; ++j) p[j] = Vec2{x + ((j & 1) ? 1.5f : -1.5f), top + j * 2.0f * s};
-          polyline(fb, p, 5, 1.5f);
+          polyline(fb, p, 5, 2.5f);
         }
       }
       return;

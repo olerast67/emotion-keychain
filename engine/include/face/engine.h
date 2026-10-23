@@ -51,6 +51,9 @@ constexpr int kClipCount = (int)Clip::Count;
 const char* clip_id(Clip c);
 uint16_t clip_duration_ms(Clip c);
 
+// Сколько пикселей движок оставляет между эмоцией и краем экрана.
+constexpr int kSafeMargin = 4;
+
 struct EngineOptions {
   bool drift = true;         // медленный дрейф лица против выгорания
   bool idle_motion = true;   // моргание и взгляд
@@ -100,6 +103,7 @@ class FaceEngine {
   void schedule_accent(uint32_t from);
   void apply_clip(uint32_t now, uint32_t& period);
   void overlays_update(uint32_t now, uint32_t& period);
+  void compute_fit();
 
   EngineOptions opt_;
   EngineStats stats_;
@@ -145,6 +149,11 @@ class FaceEngine {
   // Дрейф против выгорания.
   int drift_x_ = 0, drift_y_ = 0;
   uint32_t drift_next_ = 0;
+
+  // Безопасное поле: сдвиг, который держит эмоцию не ближе kSafeMargin к краю,
+  // и сколько места остаётся на дрейф в каждую сторону.
+  float fit_from_x_ = 0, fit_from_y_ = 0, fit_to_x_ = 0, fit_to_y_ = 0, fit_x_ = 0, fit_y_ = 0;
+  int drift_lo_x_ = -3, drift_hi_x_ = 3, drift_lo_y_ = -2, drift_hi_y_ = 2;
 
   // Оверлеи.
   float ov_alpha_[(int)Overlay::Count] = {};

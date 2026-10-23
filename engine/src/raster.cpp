@@ -60,6 +60,7 @@ void fill_circle(Framebuffer& fb, float cx, float cy, float r, Paint p) { fill_e
 
 void ellipse_ring(Framebuffer& fb, float cx, float cy, float rx, float ry, float t, Paint p) {
   if (rx <= 0.0f || ry <= 0.0f) return;
+  t = fmax_(t, 2.0f);
   float irx = rx - t, iry = ry - t;
   bool hollow = irx > 0.0f && iry > 0.0f;
   Box b = clip_box(cx - rx - 1, cy - ry - 1, cx + rx + 1, cy + ry + 1);
@@ -75,7 +76,9 @@ void ellipse_ring(Framebuffer& fb, float cx, float cy, float rx, float ry, float
 }
 
 void capsule(Framebuffer& fb, float x0, float y0, float x1, float y1, float thick, Paint p) {
-  float r = fmax_(thick * 0.5f, 0.5f);
+  // Тоньше 2.5 px линия на диагоналях рассыпается в однопиксельную, а такую
+  // на 0.96″ с расстояния брелока уже не видно.
+  float r = fmax_(thick * 0.5f, kMinStroke * 0.5f);
   float r2 = r * r;
   Box b = clip_box(fmin_(x0, x1) - r, fmin_(y0, y1) - r, fmax_(x0, x1) + r, fmax_(y0, y1) + r);
   for (int y = b.y0; y <= b.y1; ++y) {
