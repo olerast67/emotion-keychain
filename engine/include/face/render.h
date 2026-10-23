@@ -24,5 +24,8 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
 // Как часто оверлею нужны новые кадры: 0 — статичен, иначе желаемый период в мс.
 uint16_t overlay_frame_ms(Overlay o);
 const char* overlay_id(Overlay o);
+// Значок привязан к экрану, а не к глазам и рту (летающие сердечки, надписи):
+// поле от края он держит сам, сдвиг лица на него не влияет.
+bool overlay_screen_space(Overlay o);
 
 }  // namespace face
