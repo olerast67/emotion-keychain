@@ -1,0 +1,162 @@
+"""3D-просмотр собранного брелока: плата, детали, модуль экрана, ячейка и корпус.
+
+Собирает одну страницу out/keychain-3d.html из шаблона viewer.html: текстуры платы
+(чёрная маска, золото площадок, белая шелкография) рисуются из слоёв KiCad, лицо на
+экране — кадр из facegen, детали — коробки по дворам с типовыми высотами, корпус —
+слои из case-model.json (сначала запустите case.py).
+"""
+import base64
+import io
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+import pcbnew
+from PIL import Image, ImageChops
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REV = os.path.dirname(HERE)
+ROOT = os.path.dirname(os.path.dirname(REV))
+sys.path.insert(0, os.path.join(REV, "gen"))
+import footprints  # noqa: E402
+import netlist  # noqa: E402
+
+PCB = os.path.join(REV, "keychain-rev-b.kicad_pcb")
+OUT = os.path.join(HERE, "out")
+PX_PER_MM = 24
+CAIROSVG = os.environ.get("CAIROSVG", "cairosvg")
+
+# Высоты корпусов деталей над платой, мм, и цвет.
+BODY = {
+    "U1": (2.2, "#c8ccd2"), "BZ1": (1.9, "#1b1b1d"), "J1": (3.2, "#b9bec6"), "M1": (2.0, "#a9adb3"),
+    "SW1": (2.0, "#d9d9d9"), "U5": (0.7, "#2a2b2e"), "U6": (1.0, "#b9bec6"), "U4": (1.0, "#202124"),
+    "LED1": (0.6, "#e0473c"), "D1": (1.1, "#1d1d1f"), "D2": (1.0, "#1d1d1f"),
+}
+SKIP = {"H1", "J2", "J3", "TP1", "TP2", "TP3", "BT1"}
+
+
+def body_of(ref, fpname):
+    if ref in BODY:
+        return BODY[ref]
+    if "0402" in fpname:
+        return (0.5, "#b08a5a") if ref.startswith("C") else (0.35, "#1c1c1c")
+    if "0603" in fpname:
+        return (0.8, "#b08a5a") if ref.startswith("C") else (0.45, "#1c1c1c")
+    if "SOT" in fpname:
+        return (1.1, "#1d1d1f")
+    return (0.9, "#202124")
+
+
+def layer_mask(layers, bbox, tmp):
+    """Чёрно-белая маска слоёв KiCad размером платы: 255 там, где есть рисунок."""
+    svg = os.path.join(tmp, "l.svg")
+    png = os.path.join(tmp, "l.png")
+    subprocess.run(["kicad-cli", "pcb", "export", "svg", "--layers", layers + ",Edge.Cuts", "--black-and-white",
+                    "--exclude-drawing-sheet", "--page-size-mode", "2", "-o", svg, PCB],
+                   check=True, capture_output=True)
+    w = int((bbox[2] - bbox[0]) * PX_PER_MM)
+    subprocess.run([CAIROSVG, svg, "-o", png, "--output-width", str(w), "-b", "white"], check=True, capture_output=True)
+    im = Image.open(png).convert("L")
+    return ImageChops.invert(im)
+
+
+def board_texture(side, bbox, tmp):
+    cu, mask, silk = (("F.Cu", "F.Mask", "F.Silkscreen") if side == "F" else ("B.Cu", "B.Mask", "B.Silkscreen"))
+    m_cu = layer_mask(cu, bbox, tmp)
+    m_open = layer_mask(mask, bbox, tmp)
+    m_silk = layer_mask(silk, bbox, tmp)
+    size = m_cu.size
+    img = Image.new("RGB", size, (22, 24, 28))                      # чёрная маска
+    img.paste(Image.new("RGB", size, (40, 44, 50)), mask=m_cu.point(lambda v: 120 if v > 128 else 0))
+    img.paste(Image.new("RGB", size, (214, 173, 92)), mask=m_open.point(lambda v: 255 if v > 128 else 0))
+    img.paste(Image.new("RGB", size, (236, 236, 232)), mask=m_silk.point(lambda v: 255 if v > 128 else 0))
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=88)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def face_texture(tmp, emotion="happy"):
+    gif = os.path.join(tmp, "face.gif")
+    subprocess.run([os.path.join(ROOT, "build", "facegen"), "still", emotion, gif, "--scale", "1", "--raw"],
+                   check=True, capture_output=True)
+    im = Image.open(gif).convert("RGB")
+    w, h = im.size
+    im = im.crop(((w - 128) // 2, (h - 64) // 2, (w - 128) // 2 + 128, (h - 64) // 2 + 64))
+    px = im.load()
+    out = Image.new("RGB", (128, 64))
+    po = out.load()
+    for y in range(64):
+        for x in range(128):
+            on = sum(px[x, y]) > 300
+            po[x, y] = (175, 235, 255) if on else (6, 10, 14)
+    out = out.resize((512, 256), Image.NEAREST)
+    buf = io.BytesIO()
+    out.save(buf, "PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def outline_points(board):
+    s = pcbnew.SHAPE_POLY_SET()
+    board.GetBoardPolygonOutlines(s)
+    res = []
+    for i in range(s.OutlineCount()):
+        rings = [s.COutline(i)] + [s.CHole(i, j) for j in range(s.HoleCount(i))]
+        res.append([[(round(pcbnew.ToMM(r.CPoint(k).x), 3), round(pcbnew.ToMM(r.CPoint(k).y), 3))
+                     for k in range(r.PointCount())] for r in rings])
+    return res
+
+
+def main():
+    board = pcbnew.LoadBoard(PCB)
+    bb = board.GetBoardEdgesBoundingBox()
+    bbox = (pcbnew.ToMM(bb.GetX()), pcbnew.ToMM(bb.GetY()), pcbnew.ToMM(bb.GetRight()), pcbnew.ToMM(bb.GetBottom()))
+    holes = []
+    parts = []
+    for fp in board.GetFootprints():
+        ref = fp.GetReference()
+        for p in fp.Pads():
+            if p.GetDrillSize().x > 0:
+                holes.append((round(pcbnew.ToMM(p.GetPosition().x), 3), round(pcbnew.ToMM(p.GetPosition().y), 3),
+                              round(pcbnew.ToMM(p.GetDrillSize().x), 3)))
+        if ref in SKIP:
+            continue
+        side = "B" if fp.IsFlipped() else "F"
+        c = fp.GetCourtyard(pcbnew.B_CrtYd if side == "B" else pcbnew.F_CrtYd)
+        if not c.OutlineCount():
+            continue
+        cb = c.BBox()
+        x0, y0 = pcbnew.ToMM(cb.GetX()) + 0.25, pcbnew.ToMM(cb.GetY()) + 0.25
+        x1, y1 = pcbnew.ToMM(cb.GetRight()) - 0.25, pcbnew.ToMM(cb.GetBottom()) - 0.25
+        h, color = body_of(ref, str(fp.GetFPID().GetLibItemName()))
+        parts.append({"ref": ref, "side": side, "box": [round(v, 3) for v in (x0, y0, x1, y1)], "h": h,
+                      "color": color, "round": ref == "M1"})
+    j2 = board.FindFootprintByReference("J2")
+    pins = sorted((round(pcbnew.ToMM(p.GetPosition().x), 3), round(pcbnew.ToMM(p.GetPosition().y), 3))
+                  for p in j2.Pads() if p.GetAttribute() == pcbnew.PAD_ATTRIB_PTH)
+    screws = sorted((round(pcbnew.ToMM(p.GetPosition().x), 3), round(pcbnew.ToMM(p.GetPosition().y), 3))
+                    for p in j2.Pads() if p.GetAttribute() == pcbnew.PAD_ATTRIB_NPTH)
+    o = footprints.OLED
+    mod_x0 = pins[0][0] + (pins[-1][0] - pins[0][0]) / 2 - o["w"] / 2
+    mod_y0 = pins[0][1] - o["pin_y"]
+    _, bx, by, _ = netlist.PLACE["BT1"]
+    with tempfile.TemporaryDirectory() as tmp:
+        data = {
+            "bbox": bbox, "outline": outline_points(board), "holes": holes, "parts": parts,
+            "tex_front": board_texture("F", bbox, tmp), "tex_back": board_texture("B", bbox, tmp),
+            "face": face_texture(tmp),
+            "oled": {"x": mod_x0, "y": mod_y0, **o}, "pins": pins, "screws": screws,
+            "cell": {"x": bx - footprints.CELL["w"] / 2, "y": by - footprints.CELL["h"] / 2,
+                     "w": footprints.CELL["w"], "h": footprints.CELL["h"], "t": 4.0},
+            "case": json.load(open(os.path.join(OUT, "case-model.json"))),
+        }
+    html = open(os.path.join(HERE, "viewer.html")).read().replace("/*DATA*/null", json.dumps(data))
+    path = os.path.join(OUT, "keychain-3d.html")
+    with open(path, "w") as f:
+        f.write(html)
+    print(f"{os.path.relpath(path, REV)}: {len(html) // 1024} КБ")
+
+
+if __name__ == "__main__":
+    main()

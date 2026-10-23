@@ -1,0 +1,342 @@
+<title>Брелок в корпусе</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Верстак: сцена слева во всю высоту, справа узкая панель с управлением и стеком слоёв. */
+  :root {
+    --bg: #101317;          /* тёмный верстак */
+    --panel: #171b21;
+    --line: #2a313a;
+    --fg: #e7ebef;
+    --muted: #8d98a5;
+    --accent: #ff7a3d;      /* цвет рамок корпуса */
+    --glass: #9fd8ff;       /* прозрачный акрил */
+    --display: "Unbounded", "Arial Black", system-ui, sans-serif;
+    --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 14px; }
+  .app { display: grid; grid-template-columns: minmax(0, 1fr) 320px; height: 100%; }
+  .stage { position: relative; min-width: 0; min-height: 320px; }
+  #scene { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; }
+  .hint { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: 12px; color: var(--muted);
+          font-family: var(--mono); font-size: 12px; pointer-events: none; }
+  .views { position: absolute; top: 12px; left: max(16px, env(safe-area-inset-left, 0px)); display: flex; gap: 6px; flex-wrap: wrap; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; min-width: 0;
+          padding-block: 20px 24px; padding-left: 20px; padding-right: max(20px, env(safe-area-inset-right, 0px));
+          display: flex; flex-direction: column; gap: 22px; }
+  h1 { font-family: var(--display); font-weight: 700; font-size: 20px; line-height: 1.2; margin: 0; text-wrap: balance; letter-spacing: 0.01em; }
+  .sub { color: var(--muted); margin: 6px 0 0; line-height: 1.5; }
+  h2 { font-family: var(--mono); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em;
+       color: var(--muted); margin: 0 0 10px; }
+  .dims { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .dims div { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .dims b { display: block; font-family: var(--mono); font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .dims span { color: var(--muted); font-size: 12px; }
+  button { font: inherit; color: var(--fg); background: rgba(23, 27, 33, 0.85); border: 1px solid var(--line);
+           border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .toggles { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:last-child { text-align: right; font-family: var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: -1px; }
+  ul { margin: 0; padding-left: 18px; line-height: 1.6; }
+  .note { color: var(--muted); line-height: 1.5; margin: 0; }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: 62vh auto; height: auto; }
+    aside { border-left: 0; border-top: 1px solid var(--line); padding-left: max(16px, env(safe-area-inset-left, 0px));
+            padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  }
+</style>
+
+<div class="app">
+  <div class="stage">
+    <canvas id="scene" aria-label="Трёхмерная модель брелока в корпусе"></canvas>
+    <div class="views" role="group" aria-label="Вид">
+      <button id="v-front" type="button">Лицо</button>
+      <button id="v-back" type="button">Оборот</button>
+      <button id="v-iso" type="button">Сбоку</button>
+      <button id="v-explode" type="button">Разобрать</button>
+    </div>
+    <div class="hint">тяни — вращать · колесо или щипок — масштаб</div>
+  </div>
+  <aside>
+    <div>
+      <h1>Брелок в корпусе</h1>
+      <p class="sub">Плата rev B со всеми деталями, модуль экрана 0.96″, ячейка 402025 и корпус-«бутерброд» из акрила.</p>
+    </div>
+    <div>
+      <h2>Размеры корпуса</h2>
+      <div class="dims">
+        <div><b id="d-w">—</b><span>ширина, мм</span></div>
+        <div><b id="d-h">—</b><span>высота, мм</span></div>
+        <div><b id="d-t">—</b><span>толщина, мм</span></div>
+      </div>
+      <p class="note" style="margin-top:8px">Без ушка платы и выступа толкателя кнопки.</p>
+    </div>
+    <div>
+      <h2>Показать</h2>
+      <div class="row"><label for="explode">Разнести слои</label></div>
+      <input id="explode" type="range" min="0" max="1" step="0.01" value="0" aria-label="Разнести слои">
+      <div class="toggles">
+        <label><input id="t-case" type="checkbox" checked> Корпус</label>
+        <label><input id="t-screws" type="checkbox" checked> Винты и гайки</label>
+        <label><input id="t-module" type="checkbox" checked> Модуль экрана и ячейка</label>
+      </div>
+    </div>
+    <div>
+      <h2>Слои от лица к обороту</h2>
+      <table id="stack"></table>
+    </div>
+    <div>
+      <h2>Что купить к корпусу</h2>
+      <ul>
+        <li>Акрил 2, 3, 4 и 5 мм — резка по файлам <code>case/out</code></li>
+        <li>Винты M2 × 20 — 4 шт.</li>
+        <li>Гайки M2 — 4 шт.</li>
+        <li>Гладкие проставки M2 × 5 (нейлон, Ø 3.5–4) — 4 шт.</li>
+        <li>Двусторонний скотч 0.2 мм на рамки</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const DATA = /*DATA*/null;
+const EXPLODE_STEP = 7; // мм на уровень при полном разносе
+
+const canvas = document.getElementById("scene");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputEncoding = THREE.sRGBEncoding;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#101317");
+const camera = new THREE.PerspectiveCamera(32, 1, 0.5, 2000);
+const controls = new THREE.OrbitControls(camera, canvas);
+controls.enableDamping = true;
+const CENTER = new THREE.Vector3(15, -20, 1);
+controls.target.copy(CENTER);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x30343a, 0.9));
+const key = new THREE.DirectionalLight(0xffffff, 0.9);
+key.position.set(60, 40, 120);
+scene.add(key);
+const rim = new THREE.DirectionalLight(0xffffff, 0.45);
+rim.position.set(-80, -60, -100);
+scene.add(rim);
+
+// Объекты с уровнем разноса и группой для переключателей.
+const items = [];
+function add(mesh, level, group) {
+  mesh.userData.baseZ = mesh.position.z;
+  mesh.userData.level = level;
+  mesh.userData.group = group;
+  scene.add(mesh);
+  items.push(mesh);
+  return mesh;
+}
+
+function inside(pt, ring) {
+  let c = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+
+function shapeFrom(part, circles) {
+  const [outer, ...holes] = part;
+  const s = new THREE.Shape(outer.map(([x, y]) => new THREE.Vector2(x, -y)));
+  for (const h of holes) s.holes.push(new THREE.Path(h.map(([x, y]) => new THREE.Vector2(x, -y))));
+  for (const [x, y, d] of circles) {
+    if (!inside([x, y], outer)) continue;
+    const p = new THREE.Path();
+    p.absarc(x, -y, d / 2, 0, Math.PI * 2, true);
+    s.holes.push(p);
+  }
+  return s;
+}
+
+function box(x0, y0, x1, y1, z0, z1, mat) {
+  const g = new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0);
+  const m = new THREE.Mesh(g, mat);
+  m.position.set((x0 + x1) / 2, -(y0 + y1) / 2, (z0 + z1) / 2);
+  return m;
+}
+
+function cyl(x, y, r, z0, z1, mat, seg = 24) {
+  const g = new THREE.CylinderGeometry(r, r, z1 - z0, seg);
+  g.rotateX(Math.PI / 2);
+  const m = new THREE.Mesh(g, mat);
+  m.position.set(x, -y, (z0 + z1) / 2);
+  return m;
+}
+
+function texture(src) {
+  const t = new THREE.TextureLoader().load(src);
+  t.encoding = THREE.sRGBEncoding;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return t;
+}
+
+// ---------------------------------------------------------------- плата
+const [bx0, by0, bx1, by1] = DATA.bbox;
+const T = 1.6;
+const boardShape = shapeFrom(DATA.outline[0], DATA.holes.filter(h => h[2] >= 0.6));
+const edge = new THREE.Mesh(new THREE.ExtrudeGeometry(boardShape, { depth: T, bevelEnabled: false, curveSegments: 24 }),
+  new THREE.MeshStandardMaterial({ color: 0x2b2f26, roughness: 0.8 }));
+edge.position.z = -T;
+add(edge, 0, "board");
+function cap(src, z) {
+  const g = new THREE.ShapeGeometry(boardShape, 24);
+  const pos = g.attributes.position, uv = g.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    uv.setXY(i, (pos.getX(i) - bx0) / (bx1 - bx0), (pos.getY(i) + by1) / (by1 - by0));
+  }
+  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map: texture(src), roughness: 0.55, metalness: 0.1, side: THREE.DoubleSide }));
+  m.position.z = z;
+  return m;
+}
+add(cap(DATA.tex_front, 0.01), 0, "board");
+add(cap(DATA.tex_back, -T - 0.01), 0, "board");
+
+// ---------------------------------------------------------------- детали
+const mats = {};
+function mat(color, opts = {}) {
+  const k = color + JSON.stringify(opts);
+  if (!mats[k]) mats[k] = new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.2, ...opts });
+  return mats[k];
+}
+for (const p of DATA.parts) {
+  const [x0, y0, x1, y1] = p.box;
+  const z0 = p.side === "F" ? 0 : -T - p.h, z1 = p.side === "F" ? p.h : -T;
+  const metal = /#[a-c][0-9a-f]/i.test(p.color) ? { metalness: 0.7, roughness: 0.35 } : {};
+  const m = p.round ? cyl((x0 + x1) / 2, (y0 + y1) / 2, Math.min(x1 - x0, y1 - y0) / 2, z0, z1, mat(p.color, metal), 32)
+                    : box(x0, y0, x1, y1, z0, z1, mat(p.color, metal));
+  add(m, 0, "board");
+}
+
+// ---------------------------------------------------------------- ячейка, стойки, модуль экрана
+const c = DATA.cell;
+add(box(c.x, c.y, c.x + c.w, c.y + c.h, 0.3, 0.3 + c.t, mat("#c3c8cf", { metalness: 0.6, roughness: 0.4 })), 1, "module");
+for (const [x, y] of DATA.screws) add(cyl(x, y, 1.75, 0, 5, mat("#eceae4", { roughness: 0.8, metalness: 0 })), 1, "module");
+const o = DATA.oled;
+add(box(o.x, o.y, o.x + o.w, o.y + o.h, 5, 6.2, mat("#1f4e9a", { roughness: 0.7, metalness: 0 })), 2, "module");
+const gx = o.x + (o.w - o.glass_w) / 2;
+add(box(gx, o.y + o.glass_y, gx + o.glass_w, o.y + o.glass_y + o.glass_h, 6.2, 7.6,
+        mat("#0b0e12", { roughness: 0.15, metalness: 0.3 })), 2, "module");
+const face = new THREE.Mesh(new THREE.PlaneGeometry(o.view_w, o.view_h), new THREE.MeshBasicMaterial({ map: texture(DATA.face) }));
+face.position.set(o.x + o.w / 2, -(o.y + o.view_y + o.view_h / 2), 7.62);
+add(face, 2, "module");
+const pinsX0 = DATA.pins[0][0] - 1.27, pinsX1 = DATA.pins[DATA.pins.length - 1][0] + 1.27, py = DATA.pins[0][1];
+add(box(pinsX0, py - 1.25, pinsX1, py + 1.25, 2.5, 5, mat("#141414")), 1, "module");
+for (const [x, y] of DATA.pins) add(cyl(x, y, 0.32, -T - 0.4, 6.6, mat("#d6b36a", { metalness: 0.9, roughness: 0.3 }), 8), 1, "module");
+
+// ---------------------------------------------------------------- корпус
+const LEVEL = { bottom: -4, washer_back: -3, frame_back: -3, button: -3, frame_mid: 1.5, frame_top: 2.5, washer_front: 3, cover: 4 };
+const caseLayers = DATA.case.layers;
+for (const L of caseLayers) {
+  const material = new THREE.MeshPhysicalMaterial({
+    color: L.color, transparent: true, opacity: L.opacity, roughness: 0.08, metalness: 0,
+    clearcoat: 1, side: THREE.DoubleSide, depthWrite: L.opacity > 0.6,
+  });
+  for (const part of L.shapes) {
+    const g = new THREE.ExtrudeGeometry(shapeFrom(part, L.circles), { depth: L.t, bevelEnabled: false, curveSegments: 24 });
+    const m = new THREE.Mesh(g, material);
+    m.position.z = L.z;
+    m.renderOrder = 2;
+    add(m, LEVEL[L.id] ?? 0, "case");
+  }
+}
+// Винты M2 × 20 с головками на крышке и гайки на дне.
+const cover = caseLayers.find(l => l.id === "cover"), bottom = caseLayers.find(l => l.id === "bottom");
+const steel = mat("#9aa1aa", { metalness: 0.9, roughness: 0.3 });
+for (const [x, y] of DATA.screws) {
+  add(cyl(x, y, 0.95, bottom.z - 1.6, cover.z + cover.t, steel, 12), 4.5, "screws");
+  add(cyl(x, y, 1.9, cover.z + cover.t, cover.z + cover.t + 1.3, steel), 4.5, "screws");
+  add(cyl(x, y, 2.2, bottom.z - 1.6, bottom.z, steel, 6), -4.5, "screws");
+}
+
+// ---------------------------------------------------------------- размеры и стек
+(function info() {
+  const frames = caseLayers.find(l => l.id === "cover").shapes[0][0];
+  const xs = frames.map(p => p[0]), ys = frames.map(p => p[1]);
+  const top = cover.z + cover.t, low = bottom.z;
+  document.getElementById("d-w").textContent = (Math.max(...xs) - Math.min(...xs)).toFixed(1);
+  document.getElementById("d-h").textContent = (Math.max(...ys) - Math.min(...ys)).toFixed(1);
+  document.getElementById("d-t").textContent = (top - low).toFixed(1);
+  const rows = [...caseLayers].filter(l => !["washer_front", "washer_back", "button"].includes(l.id))
+    .concat([{ name: "плата", t: 1.6, z: -1.6, color: "#2b2f26" }])
+    .sort((a, b) => b.z - a.z);
+  document.getElementById("stack").innerHTML = rows.map(l =>
+    `<tr><td><span class="sw" style="background:${l.color}"></span>${l.name}</td><td>${l.t.toFixed(1)} мм</td></tr>`).join("");
+})();
+
+// ---------------------------------------------------------------- управление
+const explode = document.getElementById("explode");
+const toggles = { case: "t-case", screws: "t-screws", module: "t-module" };
+function update() {
+  const k = parseFloat(explode.value);
+  for (const m of items) {
+    m.position.z = m.userData.baseZ + m.userData.level * EXPLODE_STEP * k;
+    const t = toggles[m.userData.group];
+    m.visible = t ? document.getElementById(t).checked : true;
+  }
+}
+explode.addEventListener("input", update);
+for (const id of Object.values(toggles)) document.getElementById(id).addEventListener("change", update);
+
+const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let anim = null;
+function fly(pos, explodeTo) {
+  const from = camera.position.clone(), e0 = parseFloat(explode.value), t0 = performance.now();
+  const dur = reduce ? 0 : 650;
+  anim = (now) => {
+    const k = dur ? Math.min(1, (now - t0) / dur) : 1, s = k * k * (3 - 2 * k);
+    camera.position.lerpVectors(from, pos, s);
+    if (explodeTo !== undefined) { explode.value = e0 + (explodeTo - e0) * s; update(); }
+    if (k >= 1) anim = null;
+  };
+}
+const VIEWS = {
+  "v-front": [new THREE.Vector3(15, -20, 115), 0],
+  "v-back": [new THREE.Vector3(15, -20, -115), 0],
+  "v-iso": [new THREE.Vector3(95, -85, 85), 0],
+  "v-explode": [new THREE.Vector3(185, -120, 70), 1],
+};
+for (const [id, [pos, ex]] of Object.entries(VIEWS)) {
+  document.getElementById(id).addEventListener("click", () => {
+    for (const b of document.querySelectorAll(".views button")) b.setAttribute("aria-pressed", String(b.id === id));
+    fly(pos, ex);
+  });
+}
+
+function resize() {
+  const r = canvas.parentElement.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / Math.max(1, r.height);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize);
+camera.position.copy(VIEWS["v-iso"][0]);
+document.getElementById("v-iso").setAttribute("aria-pressed", "true");
+resize();
+update();
+renderer.setAnimationLoop((now) => {
+  if (anim) anim(now);
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
