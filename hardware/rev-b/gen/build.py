@@ -22,6 +22,7 @@ import pcbnew
 
 import footprints
 import netlist
+import fixroute
 import powerroute
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -182,6 +183,8 @@ def circle_pts(cx, cy, r, n=32):
 
 
 CU = (pcbnew.F_Cu, pcbnew.In1_Cu, pcbnew.In2_Cu, pcbnew.B_Cu)
+LAYER_NAMES = {pcbnew.F_Cu: "F.Cu", pcbnew.In1_Cu: "In1.Cu", pcbnew.In2_Cu: "In2.Cu", pcbnew.B_Cu: "B.Cu"}
+EDGE_CLEAR = 0.35  # мм: медь от края платы у роутера (DRC требует 0.3)
 
 
 def module_box():
@@ -352,6 +355,16 @@ def seg_seg(a, b, c, d):
     return min(dist_seg(a, c, d), dist_seg(b, c, d), dist_seg(c, a, b), dist_seg(d, a, b))
 
 
+def net_clr(*nets):
+    """Зазор между медью этих цепей по правилам классов (наибольший из них), мм."""
+    out = CLEAR
+    for n in nets:
+        for c in netlist.NETCLASSES.values():
+            if n in c["nets"]:
+                out = max(out, c["clearance"])
+    return out
+
+
 class Space:
     """Где на плате свободно для нового переходного или короткого отвода."""
 
@@ -361,7 +374,11 @@ class Space:
         board.GetBoardPolygonOutlines(outline)
         self.inner = pcbnew.SHAPE_POLY_SET(outline)
         self.inner.Inflate(-MM(0.3 + PLANE_VIA[0] / 2), 16)
-        self.pads = [(pad, pad.GetEffectivePolygon(), fp) for fp in board.GetFootprints() for pad in fp.Pads()]
+        # Порядок — по обозначениям и номерам выводов: в файле он зависит от случайных UUID,
+        # а от него — какая площадка первой займёт место под переходное.
+        fps = sorted(board.GetFootprints(), key=lambda f: f.GetReference())
+        self.pads = [(pad, pad.GetEffectivePolygon(), fp) for fp in fps
+                     for pad in sorted(fp.Pads(), key=lambda q: q.GetNumber())]
         self.keepouts = [z.Outline() for z in board.Zones() if z.GetIsRuleArea()]
         for fp in board.GetFootprints():
             self.keepouts += [z.Outline() for z in fp.Zones() if z.GetIsRuleArea() and z.GetDoNotAllowTracks()]
@@ -403,12 +420,12 @@ class Space:
         if any(z.Collide(c, MM(r)) for z in self.no_via):
             return False
         for q, qp in near_pads:
-            if qp.Collide(c, MM(r + (0.05 if q.GetNetname() == net else CLEAR))):
+            if qp.Collide(c, MM(r + (0.05 if q.GetNetname() == net else net_clr(net, q.GetNetname()) + 0.02))):
                 return False
         if any(math.hypot(c.x - h.x, c.y - h.y) < MM(r + 0.25) + hr for h, hr in self.holes):
             return False
         for a0, b0, hw, ly, n in near_cu:
-            gap = 0.1 if n == net else CLEAR
+            gap = 0.1 if n == net else net_clr(net, n) + 0.02
             if ly is None and n == net:
                 gap = r + 0.1  # свои переходные не лепим вплотную
             if dist_seg(c, a0, b0) < MM(r + gap) + hw:
@@ -417,7 +434,7 @@ class Space:
 
     def stub_ok(self, p, c, layer, net, near_pads, near_cu, own_pad):
         for a0, b0, hw, ly, n in near_cu:
-            if n != net and (ly is None or ly == layer) and seg_seg(p, c, a0, b0) < MM(STUB / 2 + CLEAR) + hw:
+            if n != net and (ly is None or ly == layer) and seg_seg(p, c, a0, b0) < MM(STUB / 2 + net_clr(net, n) + 0.02) + hw:
                 return False
         d = math.hypot(c.x - p.x, c.y - p.y)
         n_s = max(2, int(pcbnew.ToMM(int(d)) / 0.05))
@@ -425,7 +442,8 @@ class Space:
             t = i / n_s
             pt = pcbnew.VECTOR2I(int(p.x + (c.x - p.x) * t), int(p.y + (c.y - p.y) * t))
             for q, qp in near_pads:
-                if q is not own_pad and q.GetNetname() != net and q.IsOnLayer(layer) and qp.Collide(pt, MM(STUB / 2 + CLEAR)):
+                if q is not own_pad and q.GetNetname() != net and q.IsOnLayer(layer) and \
+                        qp.Collide(pt, MM(STUB / 2 + net_clr(net, q.GetNetname()) + 0.02)):
                     return False
             if t > 0.3 and any(z.Collide(pt, MM(STUB / 2)) for z in self.keepouts):
                 return False
@@ -517,6 +535,21 @@ def plane_fanout(board, space, netname):
     return missed
 
 
+def edge_keepouts():
+    """Полосы вдоль прямых краёв платы: роутер держит медь в EDGE_CLEAR от края, как DRC."""
+    e = EDGE_CLEAR
+    tx0, tx1, tcy = W / 2 - netlist.TAB_R, W / 2 + netlist.TAB_R, netlist.TAB_CY
+    rects = [(R, 0, tx0, e), (tx1, 0, W - R, e), (R, H - e, W - R, H), (0, R, e, H - R), (W - e, R, W, H - R),
+             (tx0, tcy, tx0 + e, e), (tx1 - e, tcy, tx1, e)]
+    out = ""
+    for x0, y0, x1, y1 in rects:
+        pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+        coords = "  ".join(f"{x * 1000:.1f} {-y * 1000:.1f}" for x, y in pts)
+        for layer in CU:
+            out += f'(keepout "" (polygon {LAYER_NAMES[layer]} 0  {coords}))\n    '
+    return out
+
+
 def dsn_planes(dsn):
     """Цепи-плоскости (земля) — плоскостями в своих слоях: роутер считает площадки с
     переходными в плоскость подключёнными и сам эти цепи не разводит. Уже проложенные
@@ -529,6 +562,7 @@ def dsn_planes(dsn):
                      for net, layer in netlist.PLANES.items())
     i = text.index("(boundary")
     text = text[:i] + planes.strip() + "\n    " + text[i:]
+    text = text[:i] + edge_keepouts() + text[i:]
     for net in netlist.PLANES:
         text = re.sub(r"(\((?:wire|via)\b[^\n]*?\(net %s\))\(type route\)" % re.escape(net),
                       r"\1(type protect)", text)
@@ -538,8 +572,10 @@ def dsn_planes(dsn):
 
 def stitch_islands(board):
     """Островки заливки, где нет ни переходного, ни сквозной площадки своей цепи, сшиваются
-    переходным с внутренней плоскостью. Без этого DRC видит их несоединёнными."""
+    переходным с внутренней плоскостью. Без этого DRC видит их несоединёнными.
+    Возвращает площадки на островках, где переходному места не нашлось."""
     added = 0
+    orphans = set()
     for _ in range(3):
         fill(board)
         space = Space(board)
@@ -583,11 +619,16 @@ def stitch_islands(board):
                     space.add(spot, spot, MM(PLANE_VIA[0]) / 2, None, netname)
                     anchors.setdefault(netname, []).append(spot)
                     new += 1
+                else:  # переходному места нет — площадки на островке подведёт доводчик
+                    orphans.update((fp.GetReference(), pad.GetNumber()) for pad, _, fp in space.pads
+                                   if pad.GetNetname() == netname and pad.IsOnLayer(z.GetLayer())
+                                   and isle.Contains(pad.GetPosition()))
         added += new
         if not new:
             break
     fill(board)
     print(f"сшивка заливок: {added} переходных")
+    return sorted(orphans)
 
 
 def isle_room(isle, c):
@@ -655,8 +696,9 @@ def route():
     planes_exist = has_copper_zones(board)  # прогон повторный: заливки остаются, в DSN не идут
     space = Space(board)
     for _ in range(2):  # второй проход подключает площадки к переходным соседей
+        missed = []
         for netname in list(netlist.PLANES) + netlist.POWER_NETS:
-            plane_fanout(board, space, netname)
+            missed += plane_fanout(board, space, netname)
     # Шины питания — своим маршрутизатором в слое питания, до сигналов.
     def power_track(a, b, net, width):
         add_track(board, V(*a), V(*b), pcbnew.In2_Cu, board.FindNet(net), width)
@@ -667,7 +709,7 @@ def route():
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         sys.exit("не удалось выгрузить DSN")
     dsn_planes(dsn)
-    dsn_prepare(dsn, [net for net, _ in failed])
+    dsn_prepare(dsn, netlist.POWER_NETS)  # остаток питания (площадки без своего переходного) — роутеру
     if not (os.environ.get("REUSE_SES") and os.path.exists(ses)):  # REUSE_SES=1 — взять прошлый результат
         run_freerouting(dsn, ses, os.environ.get("FR_TIMEOUT", "00:15:00"))
     fan = set(netlist.PLANES) | set(netlist.POWER_NETS)
@@ -698,9 +740,37 @@ def route():
             board.Add(v)
         else:
             add_track(board, a, b, layer, board.FindNet(netname), pcbnew.ToMM(width))
+    print("висящих обрезков убрано:", fixroute.remove_dangling(board))
     if not planes_exist:
         add_planes(board)
     stitch_islands(board)
+    # Доводка: что не развёл Freerouting — своим трассировщиком по отчёту DRC.
+    def fix_track(a, b, layer, net, width):
+        add_track(board, V(*a), V(*b), layer, board.FindNet(net), width)
+    def fix_via(p, net, dia, drill):
+        v = pcbnew.PCB_VIA(board)
+        v.SetPosition(V(*p))
+        v.SetWidth(MM(dia))
+        v.SetDrill(MM(drill))
+        v.SetViaType(pcbnew.VIATYPE_THROUGH)
+        v.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+        v.SetNet(board.FindNet(net))
+        board.Add(v)
+    if missed:  # площадки земли и питания, которым не нашлось своего переходного
+        failed = fixroute.connect_pads(board, missed, fix_track, fix_via)
+        if failed:
+            print("не подключены:", failed)
+    for _ in range(3):
+        _, _, text = drc(board)
+        if "[unconnected_items]" not in text:
+            break
+        failed = fixroute.route_leftovers(board, text, fix_track, fix_via)
+        if failed:
+            print("доводка не смогла:", failed)
+        orphans = stitch_islands(board)
+        if orphans:
+            print("не подключены:", fixroute.connect_pads(board, orphans, fix_track, fix_via) or "—")
+            fill(board)
     pcbnew.SaveBoard(PCB, board)
     return drc(board)
 

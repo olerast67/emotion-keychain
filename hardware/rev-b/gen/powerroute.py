@@ -66,13 +66,14 @@ class Grid:
         for kind, g, n in (self.items if items is None else items):
             if n == net:
                 continue
+            c = max(clr, _cls(n)["clearance"]) + 0.01  # зазор — наибольший из двух классов
             if kind == "c":
                 cx, cy, r = g
-                R = r + clr + half
+                R = r + c + half
                 self._mark_circle(bad, cx, cy, R)
             else:
                 ax, ay, bx, by, hw = g
-                self._mark_segment(bad, ax, ay, bx, by, hw + clr + half)
+                self._mark_segment(bad, ax, ay, bx, by, hw + c + half)
         return bad
 
     def _static_mask(self, half):
@@ -185,8 +186,8 @@ def _plan(grid, board, order):
     for net in order:
         c = _cls(net)
         clr = c["clearance"]
-        vias = [(pcbnew.ToMM(t.GetPosition().x), pcbnew.ToMM(t.GetPosition().y)) for t in board.GetTracks()
-                if isinstance(t, pcbnew.PCB_VIA) and t.GetNetname() == net]
+        vias = sorted((pcbnew.ToMM(t.GetPosition().x), pcbnew.ToMM(t.GetPosition().y)) for t in board.GetTracks()
+                      if isinstance(t, pcbnew.PCB_VIA) and t.GetNetname() == net)
         if len(vias) < 2:
             continue
         cells = [(int(round(x / STEP)), int(round(y / STEP))) for x, y in vias]
