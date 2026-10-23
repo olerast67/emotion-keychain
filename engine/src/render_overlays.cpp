@@ -280,8 +280,9 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Question: {
+      // Знак висит у правого глаза, но с поля не уходит, даже когда глаз уехал за взглядом.
       const float bob = fsin(t * kTau * 0.8f) * 1.5f;
-      const float x = rx + rw * 0.5f + 9.0f, y = ry - rh * 0.5f + 1.0f + bob;
+      const float x = fmin_(rx + rw * 0.5f + 9.0f, kR - 5.5f), y = fmax_(ry - rh * 0.5f + 1.0f + bob, kT + 9.0f);
       const float k = s;
       arc(fb, x, y - 4.0f * k, 3.6f * k, 3.6f * k, kPi * 1.0f, kPi * 2.45f, 2.0f);
       capsule(fb, x + 0.5f * k, y, x + 0.5f * k, y + 2.5f * k, 2.0f);
@@ -290,7 +291,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     }
     case Overlay::Exclaim: {
       const float jig = fsin(t * kTau * 3.0f) * (t < 0.6f ? 1.0f : 0.0f);
-      const float x = lx - lw * 0.5f - 9.0f + jig, y = ly - lh * 0.5f + 2.0f;
+      const float x = fmax_(lx - lw * 0.5f - 9.0f + jig, kL + 2.5f), y = fmax_(ly - lh * 0.5f + 2.0f, kT + 8.0f);
       const float k = s;
       capsule(fb, x, y - 6.0f * k, x, y + 2.0f * k, 3.0f);
       fill_circle(fb, x, y + 6.5f * k, 1.7f * k);
@@ -320,13 +321,18 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Gloom: {
-      const int xa = iround(lx - lw * 0.5f), xb = iround(rx + rw * 0.5f);
-      const int ytop = iround(fmin_(ly - lh * 0.5f, ry - rh * 0.5f));
-      int k = 0;
-      for (int x = xa; x <= xb; x += 4, ++k) {
-        // Полосы не доходят до глаз: между ними живут брови.
-        const int len = iround((float)(ytop - 8 - (int)kT) * s * ((k & 1) ? 0.6f : 1.0f));
-        for (int y = (int)kT; y < (int)kT + len; ++y) fb.hspan(y, x, x + 1, Ink::Set);
+      // Тучка уныния, как в манге: по три вертикальные черты у верхних углов,
+      // снаружи от глаз. Над глазами им места нет — там брови.
+      // Длины разные и заметно длиннее ширины промежутков: так черты не складываются в букву.
+      static const float kLen[3] = {19.0f, 13.0f, 16.0f};
+      for (int side = 0; side < 2; ++side) {
+        const float edge = side == 0 ? lx - lw * 0.5f - 4.0f : rx + rw * 0.5f + 4.0f;
+        for (int k = 0; k < 3; ++k) {
+          const int x = iround(side == 0 ? edge - 2.0f - (float)k * 6.0f : edge + (float)k * 6.0f);
+          if (x < (int)kL || x + 1 > (int)kR - 1) continue;
+          const int len = iround(kLen[k] * s);
+          for (int y = (int)kT; y < (int)kT + len; ++y) fb.hspan(y, x, x + 1, Ink::Set);
+        }
       }
       return;
     }
@@ -343,7 +349,8 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Bulb: {
-      const float x = rx + rw * 0.5f + 8.0f, y = ry - rh * 0.5f - 1.0f;
+      // Лампочка с лучами крупная: её место у правого глаза, но не ближе поля к краю.
+      const float x = fmin_(rx + rw * 0.5f + 8.0f, kR - 10.0f), y = fmax_(ry - rh * 0.5f - 1.0f, kT + 9.5f);
       const float k = s;
       fill_circle(fb, x, y, 4.0f * k);
       capsule(fb, x - 1.5f * k, y + 5.0f * k, x + 1.5f * k, y + 5.0f * k, 1.5f);
@@ -496,28 +503,24 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Stubble: {
-      const int ox = iround(a.ox), oy = iround(a.oy);
-      const float ecx = a.mx, ecy = a.my - 16.0f;
-      for (int y = imax(iround(a.my - 8.0f), (int)kT); y < (int)kB - 1; ++y) {
-        for (int x = (int)kL; x < (int)kR - 1; ++x) {
-          const float dx = (float)x - ecx, dy = (float)y - ecy;
-          const bool jaw = in_ellipse(dx, dy, 60.0f, 34.0f) && !in_ellipse(dx, dy, 44.0f, 18.0f);
-          const bool chin = fabs_(dx) < 16.0f && (float)y > a.my + 7.0f;
-          if (!jaw && !chin) continue;
-          if (fabs_((float)x - a.mx) < a.mw * 0.5f + 4.0f && fabs_((float)y - a.my) < 7.0f) continue;
-          // Щетина — редкие точки 2×2 по хэшу, без регулярной штриховки и без однопиксельной пыли.
-          const int xr = x - ox, yr = y - oy;
-          if ((yr % 3) || (xr % 3)) continue;
-          uint32_t hsh = (uint32_t)xr * 73856093u ^ (uint32_t)yr * 19349663u;
-          hsh ^= hsh >> 13;
-          hsh *= 0x5bd1e995u;
-          hsh ^= hsh >> 15;
-          if ((hsh & 255u) < (uint32_t)(90.0f * s)) {
-            fb.set(x, y);
-            fb.set(x + 1, y);
-            fb.set(x, y + 1);
-            fb.set(x + 1, y + 1);
-          }
+      // Щетина — ровный пунктир точками 2×2 по линии челюсти: две дуги под ртом от щеки
+      // до щеки, внутренняя со сдвигом на полшага. Регулярный узор читается как борода,
+      // а не как пыль на экране, и едет вместе с лицом.
+      const float jx = a.mx, jy = a.my - 7.0f;
+      for (int row = 0; row < 2; ++row) {
+        const float ax = 40.0f - 7.0f * (float)row, ay = 17.0f - 5.0f * (float)row;
+        const int n = 16 - 3 * row;
+        for (int i = 0; i <= n; ++i) {
+          const float k = ((float)i + 0.5f * (float)row) / (float)n;
+          if (k > 1.0f) continue;
+          const float ang = kPi * (0.06f + 0.88f * k);
+          const int x = iround(jx + ax * s * fcos(ang)), y = iround(jy + ay * s * fsin(ang));
+          if (x < (int)kL || x + 1 > (int)kR - 1 || y < (int)kT || y + 1 > (int)kB - 1) continue;
+          if (fabs_((float)x - a.mx) < a.mw * 0.5f + 3.0f && fabs_((float)y - a.my) < 7.0f) continue;  // рот
+          fb.set(x, y);
+          fb.set(x + 1, y);
+          fb.set(x, y + 1);
+          fb.set(x + 1, y + 1);
         }
       }
       return;
@@ -600,12 +603,11 @@ void corner_rect(Framebuffer& fb, int x0, int y0, int x1, int y1) {
 
 }  // namespace
 
-void render_theme(Framebuffer& fb, const Anchors& a, bool cyber, bool cyber_eye, float lock, bool glint) {
+void render_theme(Framebuffer& fb, const Anchors& a, float reticle, bool cyber_eye, bool glint) {
   const int lo_x = kSafeMargin, hi_x = kWidth - 1 - kSafeMargin, lo_y = kSafeMargin, hi_y = kHeight - 1 - kSafeMargin;
-  if (cyber) {
-    // Прицельная рамка вокруг всего лица. После смены эмоции уголки съезжаются
-    // к лицу — «захват цели».
-    const float pad = 3.0f + 10.0f * (1.0f - clampf(lock, 0.0f, 1.0f));
+  if (reticle >= 0.0f) {
+    // Прицел вокруг всего лица: уголки съезжаются к нему — «цель захвачена».
+    const float pad = 3.0f + 10.0f * (1.0f - clampf(reticle, 0.0f, 1.0f));
     float fx0 = a.mx - a.mw * 0.5f, fx1 = a.mx + a.mw * 0.5f, fy0 = a.my, fy1 = a.my + 6.0f;
     for (int i = 0; i < 2; ++i) {
       fx0 = fmin_(fx0, a.ex[i] - a.ew[i] * 0.5f), fx1 = fmax_(fx1, a.ex[i] + a.ew[i] * 0.5f);
@@ -624,13 +626,16 @@ void render_theme(Framebuffer& fb, const Anchors& a, bool cyber, bool cyber_eye,
     corner_rect(fb, x1 - 1, y1 - len, x1, y1);
   }
   if (cyber_eye) {
-    // Кибер-глаз: риски прицела вокруг правого глаза и редкая вспышка.
+    // Кибер-глаз: квадратный зрачок рисует само лицо, здесь — вспышка раз в 5 с
+    // и риски вокруг глаза, пока он «сканирует» вместе с прицелом.
     const float ex = a.ex[1], ey = a.ey[1];
     const float rx = a.ew[1] * 0.5f + 3.0f, ry = fmax_(a.eh[1] * 0.5f, 5.0f) + 3.0f;
-    const int cx = iround(ex), cy = iround(ey);
-    corner_rect(fb, cx - 1, imax(iround(ey - ry) - 3, lo_y), cx, iround(ey - ry));
-    corner_rect(fb, imax(iround(ex - rx) - 3, lo_x), cy - 1, iround(ex - rx), cy);
-    corner_rect(fb, iround(ex + rx), cy - 1, imin(iround(ex + rx) + 3, hi_x), cy);
+    if (reticle >= 0.0f) {
+      const int cx = iround(ex), cy = iround(ey);
+      corner_rect(fb, cx - 1, imax(iround(ey - ry) - 3, lo_y), cx, iround(ey - ry));
+      corner_rect(fb, imax(iround(ex - rx) - 3, lo_x), cy - 1, iround(ex - rx), cy);
+      corner_rect(fb, iround(ex + rx), cy - 1, imin(iround(ex + rx) + 3, hi_x), cy);
+    }
     if (glint)
       sparkle_at(fb, fmin_(ex + rx + 2.0f, (float)hi_x - 4.0f), fmax_(ey - ry - 1.0f, (float)lo_y + 4.0f), 4.0f);
   }

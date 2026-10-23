@@ -11,6 +11,26 @@ constexpr uint32_t kMaxLookHoldMs = 600000;
 constexpr int kMaxTransitionMs = 10000;
 // Ступень, которой рисуется наклон: примерно полпикселя сдвига зрачка.
 constexpr float kTiltStep = 0.05f;
+// Прицел: съезжается за kReticleLockMs, в конце мигает kReticleBlinkMs шагами по 75 мс.
+// «Сканирование» без повода — раз в 3–8 минут.
+constexpr uint32_t kReticleLockMs = 350, kReticleBlinkMs = 300, kReticleBlinkStep = 75;
+constexpr uint32_t kScanMinMs = 180000, kScanSpreadMs = 300000;
+
+// Эмоции, на которых кибер-брелок «берёт цель».
+bool locks_on(Expr e) {
+  switch (e) {
+    case Expr::focused:
+    case Expr::suspicious:
+    case Expr::determined:
+    case Expr::alert:
+    case Expr::curious:
+    case Expr::skeptical:
+    case Expr::hmm_squint:
+    case Expr::challenge_accepted:
+    case Expr::chad_stare: return true;
+    default: return false;
+  }
+}
 
 inline float frac(float x) { return x - (float)ifloor(x); }
 
@@ -89,6 +109,7 @@ struct Hasher {
   }
   void eye(const Eye& e) {
     byte((uint8_t)e.kind);
+    byte((uint8_t)e.sq);
     const float vals[] = {e.w,  e.h,  e.r,       e.t,       e.px,       e.py,      e.pr,       e.gx,
                           e.gy, e.gr, e.lid_cov, e.lid_ang, e.lid_bend, e.low_cov, e.low_bend, e.dx,
                           e.dy, e.sx, e.sy,      e.rot,     e.squash,   e.stretch};
@@ -189,6 +210,8 @@ void FaceEngine::init(uint32_t seed, uint32_t now_ms) {
   tilt_last_ = now_ms;
   micro_glitch_next_ = now_ms + 45000u + rng_.next() % 60000u;
   micro_glitch_on_ = false;
+  reticle_on_ = reticle_shown_ = false;
+  scan_next_ = now_ms + kScanMinMs + rng_.next() % kScanSpreadMs;
   ov_last_ = now_ms;
   last_now_ = now_ms;
   set_expression(Expr::neutral, now_ms, 0);
@@ -221,6 +244,14 @@ void FaceEngine::set_expression(Expr e, uint32_t now_ms, int transition_ms) {
   // Первый жест — пораньше, чтобы новая эмоция сразу ожила (у спокойного лица — тоже реже).
   const uint32_t first_ms = preset_->accent_ms * (calm_ ? kCalmAccentStretch : 1u);
   accent_next_ = now_ms + tr_ms_ + (uint32_t)((float)first_ms * rng_.range(0.3f, 0.7f));
+  if (opt_.theme == Theme::Cyber && locks_on(e)) scan(now_ms);
+  next_update_ = now_ms;
+}
+
+void FaceEngine::scan(uint32_t now_ms, uint32_t ms) {
+  reticle_on_ = true;
+  reticle_t0_ = now_ms;
+  reticle_ms_ = (uint32_t)imax((int)imin((int)ms, 60000), (int)(kReticleLockMs + kReticleBlinkMs));
   next_update_ = now_ms;
 }
 
@@ -315,6 +346,7 @@ void FaceEngine::apply_quirks(Face& f) const {
     f.eye[i].pr *= q.pupil_scale;
     if (f.brow[i].len > 0.5f) f.brow[i].gap += q.brow_lift;
   }
+  f.eye[1].sq = q.cyber_eye;
 }
 
 void FaceEngine::set_quirks(const Quirks& q, uint32_t now_ms) {
@@ -371,9 +403,13 @@ void FaceEngine::compute_fit() {
   f.ox = f.oy = 0;
   Anchors a;
   render_face(back_, f, &a);
+  // Значок появляется с «подскоком» (ease_out_back): при alpha ≈ 0.58 он на 10 % крупнее,
+  // чем потом. Поле считаем и по этому кадру.
+  const float kAlphas[2] = {1.0f, 0.58f};
   for (int i = 0; i < (int)Overlay::Count; ++i) {
     if (!((ov_target_ >> i) & 1ull) || overlay_screen_space((Overlay)i)) continue;
-    for (int k = 0; k < 8; ++k) render_overlay(back_, (Overlay)i, a, 1.0f, (float)k * 0.31f);
+    for (float al : kAlphas)
+      for (int k = 0; k < 8; ++k) render_overlay(back_, (Overlay)i, a, al, (float)k * 0.31f);
   }
   // Рамка темы и риски кибер-глаза сами прижаты к безопасному полю, в расчёт не входят.
   int x0 = kWidth, x1 = -1, y0 = kHeight, y1 = -1;
@@ -1171,8 +1207,31 @@ bool FaceEngine::update(uint32_t now) {
       want(period, 50);
     }
   }
-  const float lock = cyber ? ease_out(clampf((float)(now - expr_t0_) / 350.0f, 0.0f, 1.0f)) : 1.0f;
-  if (cyber && lock < 1.0f) want(period, frame_ms());
+  // Прицел: только в кибер-теме и только поверх лица, не сцены.
+  if (cyber && opt_.idle_motion && scene_ == Scene::None && time_reached(now, scan_next_)) {
+    scan(now);
+    scan_next_ = now + kScanMinMs + rng_.next() % kScanSpreadMs;
+  }
+  float reticle = -1.0f;  // < 0 — не виден, иначе 0..1 — насколько уголки съехались
+  uint32_t reticle_wake = 0;
+  if (reticle_on_) {
+    const uint32_t rt = now - reticle_t0_, blink_at = reticle_ms_ - kReticleBlinkMs;
+    if (!cyber || rt >= reticle_ms_) {
+      reticle_on_ = false;
+    } else if (rt < kReticleLockMs) {
+      reticle = ease_out((float)rt / (float)kReticleLockMs);
+      want(period, frame_ms());
+    } else if (rt < blink_at) {
+      reticle = 1.0f;
+      reticle_wake = blink_at - rt;
+    } else {
+      const uint32_t b = rt - blink_at;
+      reticle = (b / kReticleBlinkStep) % 2u ? -1.0f : 1.0f;
+      reticle_wake = kReticleBlinkStep - b % kReticleBlinkStep;
+    }
+  }
+  if (scene_ != Scene::None) reticle = -1.0f;
+  reticle_shown_ = reticle >= 0.0f;
   const bool glint = quirks_.cyber_eye && (now % 5000u) < 400u;
   if (glint) want(period, 100);
 
@@ -1223,7 +1282,7 @@ bool FaceEngine::update(uint32_t now) {
   hs.u32(glitch_ > 0.0f ? now / 50u : 0u);
   hs.byte((uint8_t)(opt_.scanlines | opt_.upside_down << 1));
   hs.byte((uint8_t)((uint8_t)opt_.theme | quirks_.cyber_eye << 2 | glint << 3));
-  hs.f(lock);
+  hs.f(reticle);
   hs.byte((uint8_t)scene_);
   hs.u32(scene_t);
   hs.u32(opt_.scanlines ? (expr_t0_ / 1000u + now / 20000u) & 1u : 0u);
@@ -1244,7 +1303,7 @@ bool FaceEngine::update(uint32_t now) {
       for (int i = 0; i < (int)Overlay::Count; ++i) {
         if (ov_alpha_[i] > 0.0f) render_overlay(back_, (Overlay)i, anchors, ov_alpha_[i], (float)ov_local[i] * 0.001f);
       }
-      render_theme(back_, anchors, cyber, quirks_.cyber_eye, lock, glint);
+      render_theme(back_, anchors, reticle, quirks_.cyber_eye, glint);
     }
 
     if (glitch_ > 0.0f) {
@@ -1305,7 +1364,10 @@ bool FaceEngine::update(uint32_t now) {
   if (cyber && opt_.idle_motion) {
     at(micro_glitch_next_);
     if (micro_glitch_on_) at(micro_glitch_until_);
+    if (scene_ == Scene::None) at(scan_next_);
   }
+  if (reticle_wake) wake[nw++] = reticle_wake;
+  if (reticle_on_) at(reticle_t0_ + reticle_ms_);
   if (scene_ != Scene::None) at(scene_ends_ms());
   // События, выпавшие рядом, сливаются: процессор просыпается один раз на всех.
   uint32_t first = kMaxSleepMs;

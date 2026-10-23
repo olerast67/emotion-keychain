@@ -121,6 +121,14 @@ class FaceEngine {
   void jerk(float dx, float dy, uint32_t now_ms);
   static constexpr float kTiltDeadband = 0.05f;
 
+  // Прицел кибер-темы: уголки съезжаются к лицу, держатся и гаснут, мигнув.
+  // Сам включается на «цепких» эмоциях (сосредоточен, подозревает, решителен…) и
+  // изредка как «сканирование»; снаружи — когда рядом замечен другой брелок.
+  // В классической теме не рисуется.
+  void scan(uint32_t now_ms, uint32_t ms = kReticleMs);
+  bool reticle_visible() const { return reticle_shown_; }
+  static constexpr uint32_t kReticleMs = 2200;
+
   // Полноэкранная сцена вместо лица (scenes.h). Лицо продолжает жить под ней.
   void play_scene(Scene s, uint32_t now_ms, const SceneParams& p = {});
   Scene scene() const { return scene_; }
@@ -228,6 +236,8 @@ class FaceEngine {
   uint32_t tilt_last_ = 0;
   uint32_t micro_glitch_next_ = 0, micro_glitch_until_ = 0;
   bool micro_glitch_on_ = false;
+  uint32_t reticle_t0_ = 0, reticle_ms_ = 0, scan_next_ = 0;
+  bool reticle_on_ = false, reticle_shown_ = false;
   void apply_quirks(Face& f) const;
 
   // Оверлеи.

@@ -17,7 +17,7 @@ const char* const kIds[] = {
 #undef FACE_X
 };
 
-const char* const kNames[] = {"Загрузка «NEURAL LINK»", "Взлом",    "Дождь данных", "ERROR 404",
+const char* const kNames[] = {"Загрузка «OLERAST LINK»", "Взлом",    "Дождь данных", "ERROR 404",
                               "Перезагрузка",           "Прятки",   "Апгрейд",      "Новый год",
                               "День рождения",          "Хэллоуин", "Встреча",      "Дуэль"};
 static_assert(sizeof(kNames) / sizeof(kNames[0]) == kSceneCount, "имена сцен");
@@ -95,7 +95,7 @@ Face with_eyes(const Face& face, float open) {
 
 void boot(Framebuffer& fb, uint32_t t) {
   if (t < 300) return;
-  const char* title = "NEURAL LINK";
+  const char* title = "OLERAST LINK";
   draw_text_centered(fb, kCx, kT + 6, title, 2, Ink::Set, (int)((t - 300) / 90));
   if (t >= 1100) progress_bar(fb, 16, 28, 111, 38, ease_in_out(phase(t, 1100, 1700)));
   if (t >= 2900 && (t > 3500 || blink_on(t - 2900, 150))) draw_text_centered(fb, kCx, 46, "ONLINE");
@@ -138,26 +138,28 @@ void hack(Framebuffer& fb, uint32_t t) {
   }
 }
 
-void data_rain(Framebuffer& fb, uint32_t t) {
-  const float fade = 1.0f - phase(t, 4300, 700);
-  for (int c = 0; c < 20; ++c) {
+void data_rain(Framebuffer& fb, uint32_t t, const Face& face) {
+  // Поток данных: столбцы нулей и единиц тем же шрифтом, что и надписи, падают с разной
+  // скоростью; цифры иногда меняются. Под конец поток редеет и проявляется лицо.
+  const float fade = 1.0f - phase(t, 3400, 900);
+  constexpr int kCols = 9, kPitch = 12;
+  for (int c = 0; c < kCols; ++c) {
     const uint32_t h = hash((uint32_t)c * 977u + 13u);
     if ((float)(h % 1000u) / 1000.0f > fade) continue;
-    const int x = kL + 1 + c * 6;
-    const float v = 0.022f + (float)(h % 40u) * 0.001f;  // px/мс
-    const int span = 90;
-    const int head = (int)((float)t * v + (float)(h >> 10) * 0.01f) % span - 14;
-    const int len = 3 + (int)((h >> 20) % 5u);
-    for (int k = 0; k <= len; ++k) {
-      const int y = head - k * 4;
-      if (y < kT || y + 1 > kB) continue;
-      // Голова потока чуть крупнее хвоста.
-      if (k == 0)
-        fill_box(fb, x, y, x + 2, y + 2);
-      else
-        fill_box(fb, x, y, x + 1, y + 1);
+    const int x = kL + 2 + c * 13 + (int)((h >> 4) % 3u);
+    const float v = 0.018f + (float)(h % 25u) * 0.001f;  // px/мс
+    const int len = 2 + (int)((h >> 20) % 3u);            // цифр в струе
+    const int span = (kB - kT) + len * kPitch + 10;
+    const int head = kT + (int)((float)t * v + (float)(h >> 10) * 0.01f) % span;
+    for (int k = 0; k < len; ++k) {
+      const int y = head - k * kPitch;
+      if (y < kT || y + text_height() - 1 > kB) continue;
+      const uint32_t g = hash(h + (uint32_t)(y / kPitch) * 31u + (t / 400u) * 7u);
+      const char digit[2] = {(char)('0' + (g & 1u)), 0};
+      draw_text(fb, x, y, digit);
     }
   }
+  if (t >= 4100) draw_face(fb, with_eyes(face, ease_out(phase(t, 4100, 600))));
 }
 
 void error404(Framebuffer& fb, uint32_t t) {
@@ -275,12 +277,22 @@ void halloween(Framebuffer& fb, uint32_t t) {
 void greet(Framebuffer& fb, uint32_t t, const SceneParams& p) {
   draw_text_centered(fb, kCx, kT + 4, p.value ? "HI AGAIN" : "NEW FRIEND", 2, Ink::Set, (int)(t / 70u));
   if (t >= 800) {
-    char buf[16] = "[";
-    int n = 1;
-    for (int i = 0; p.text[i] && n < 13; ++i) buf[n++] = p.text[i];
-    buf[n++] = ']';
-    buf[n] = 0;
-    draw_text_centered(fb, kCx, 26, buf);
+    // Позывной другого брелока, вокруг — прицел: уголки съезжаются, «цель захвачена».
+    const char* code = p.text[0] ? p.text : "--";
+    draw_text_centered(fb, kCx, 26, code);
+    const float pad = 3.0f + 8.0f * (1.0f - ease_out(phase(t, 800, 350)));
+    const int hw = text_width(code) / 2;
+    const int x0 = imax(iround((float)(kCx - hw) - 3.0f - pad), kL), x1 = imin(iround((float)(kCx + hw) + 2.0f + pad), kR);
+    const int y0 = imax(iround(23.0f - pad), kT), y1 = imin(iround(37.0f + pad), kB);
+    const int len = 4;
+    fill_box(fb, x0, y0, x0 + len, y0 + 1);
+    fill_box(fb, x0, y0, x0 + 1, y0 + len);
+    fill_box(fb, x1 - len, y0, x1, y0 + 1);
+    fill_box(fb, x1 - 1, y0, x1, y0 + len);
+    fill_box(fb, x0, y1 - 1, x0 + len, y1);
+    fill_box(fb, x0, y1 - len, x0 + 1, y1);
+    fill_box(fb, x1 - len, y1 - 1, x1, y1);
+    fill_box(fb, x1 - 1, y1 - len, x1, y1);
   }
   if (t >= 1400) {
     const float k = 1.0f + 0.15f * fsin((float)(t - 1400) * 0.012f);
@@ -345,7 +357,7 @@ void render_scene(Framebuffer& fb, Scene s, uint32_t t, const SceneParams& p, co
   switch (s) {
     case Scene::boot: boot(fb, t); break;
     case Scene::hack: hack(fb, t); break;
-    case Scene::data_rain: data_rain(fb, t); break;
+    case Scene::data_rain: data_rain(fb, t, face); break;
     case Scene::error404: error404(fb, t); break;
     case Scene::reboot: reboot(fb, t, face); break;
     case Scene::hide: hide(fb, t, face); break;

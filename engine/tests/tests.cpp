@@ -448,6 +448,56 @@ static void test_cyber_theme_and_tilt() {
   CHECK(fabs_(eng.face().gx) < 0.1f, "выровняли — взгляд вернулся: %.2f", eng.face().gx);
 }
 
+// Прицел кибер-темы: только на «цепких» эмоциях, сам гаснет, в классике его нет.
+static void test_reticle() {
+  for (int theme = 0; theme < 2; ++theme) {
+    FaceEngine eng;
+    eng.options().theme = theme ? Theme::Cyber : Theme::Classic;
+    eng.init(5, 0);
+    bool seen = false;
+    for (uint32_t t = 0; t < 5000; t += 50) {
+      eng.update(t);
+      seen |= eng.reticle_visible();
+    }
+    CHECK(!seen, "тема %d: на спокойном лице прицела нет", theme);
+    eng.set_expression(Expr::focused, 5000, 0);
+    eng.update(5000);
+    eng.update(5400);
+    CHECK(eng.reticle_visible() == (theme == 1), "тема %d: сосредоточенность берёт цель", theme);
+    eng.update(5000 + FaceEngine::kReticleMs + 100);
+    CHECK(!eng.reticle_visible(), "тема %d: прицел гаснет сам", theme);
+  }
+  // Изредка сканирует и без повода: раз в 3–8 минут.
+  FaceEngine eng;
+  eng.options().theme = Theme::Cyber;
+  eng.init(6, 0);
+  int scans = 0;
+  uint32_t last_seen = 0;
+  for (uint32_t t = 0; t < 30u * 60000u; t += 50) {
+    eng.update(t);
+    if (!eng.reticle_visible()) continue;
+    if (!scans || t - last_seen > 1000u) ++scans;  // мигание в конце — тот же скан
+    last_seen = t;
+  }
+  CHECK(scans >= 3 && scans <= 10, "за полчаса %d сканирований", scans);
+}
+
+// Кибер-глаз: правый зрачок квадратный, левый — круглый.
+static void test_cyber_pupil() {
+  Face f;
+  expression_face(Expr::neutral, &f);
+  Framebuffer a, b;
+  a.clear(), b.clear();
+  render_face(a, f, nullptr);
+  f.eye[1].sq = true;
+  render_face(b, f, nullptr);
+  int left_diff = 0, right_diff = 0;
+  for (int y = 0; y < kHeight; ++y)
+    for (int x = 0; x < kWidth; ++x) (x < kWidth / 2 ? left_diff : right_diff) += a.get(x, y) != b.get(x, y);
+  CHECK(right_diff > 8, "правый зрачок другой формы: %d пикселей", right_diff);
+  CHECK(left_diff == 0, "левый глаз не меняется: %d пикселей", left_diff);
+}
+
 static void test_growth_behavior() {
   // С новым прогрессом персонаж сутки показывает только открытые эмоции.
   FaceEngine eng;
@@ -645,11 +695,14 @@ static void test_blink_survives_clips() {
       uint32_t t = 0;
       eng.set_expression(Expr::neutral, t, 0);
       eng.update(t);
+      // Открытые глаза — самый «светлый» кадр последних секунд: в момент клипа
+      // лицо может как раз моргать.
+      int open = 0;
       while (t < 8000u + seed * 37u) {
         t = eng.next_update_ms();
         eng.update(t);
+        if (t + 3000u > 8000u + seed * 37u) open = imax(open, lit_now(eng));
       }
-      const int open = lit_now(eng);
       eng.play_clip(c, t);
       const uint32_t clip_end = t + clip_duration_ms(c) + 100u;
       bool blinked = false;
@@ -1089,6 +1142,8 @@ int main() {
   test_progress();
   test_scenes();
   test_cyber_theme_and_tilt();
+  test_reticle();
+  test_cyber_pupil();
   test_growth_behavior();
   test_millis_wrap();
   test_blink_survives_clips();

@@ -43,6 +43,7 @@ struct Eye {
   float rot = 0;         // поворот значка (звезда, спираль), градусы
   // Только во время работы: моргание и сжатие при саккаде. В пресетах не задаются.
   float squash = 1, stretch = 1;
+  bool sq = false;  // квадратный зрачок — кибер-глаз редкого брелока
 
   constexpr Eye pupil(float x, float y, float rad) const {
     Eye e = *this;

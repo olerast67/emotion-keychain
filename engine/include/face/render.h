@@ -31,9 +31,9 @@ const char* overlay_id(Overlay o);
 // поле от края он держит сам, сдвиг лица на него не влияет.
 bool overlay_screen_space(Overlay o);
 
-// Слой темы поверх лица. Cyber — прицельные рамки вокруг глаз (lock 0..1 —
-// «захват цели» после смены эмоции). cyber_eye — кибер-глаз редкого брелока,
-// рисуется в любой теме; glint — момент, когда он вспыхивает.
-void render_theme(Framebuffer& fb, const Anchors& a, bool cyber, bool cyber_eye, float lock, bool glint);
+// Слой темы поверх лица. reticle — прицел вокруг лица: < 0 не рисуется, 0..1 — насколько
+// уголки съехались к лицу. cyber_eye — кибер-глаз редкого брелока: риски вокруг него
+// появляются вместе с прицелом, glint — момент, когда он вспыхивает.
+void render_theme(Framebuffer& fb, const Anchors& a, float reticle, bool cyber_eye, bool glint);
 
 }  // namespace face

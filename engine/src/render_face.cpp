@@ -14,6 +14,12 @@ void closed_line(Framebuffer& fb, float cx, float cy, float w, float thick) {
   capsule(fb, cx - hw, cy, cx + hw, cy, thick);
 }
 
+// Зрачок: круглый или квадратный — у кибер-глаза. Квадрат чуть меньше круга той же
+// «радиусности», чтобы не казаться крупнее соседнего зрачка.
+inline bool in_pupil(float dx, float dy, float rx, float ry, bool square) {
+  return square ? fabs_(dx) <= rx * 0.86f && fabs_(dy) <= ry * 0.86f : in_ellipse(dx, dy, rx, ry);
+}
+
 void draw_rrect_eye(Framebuffer& fb, const Eye& e, float cx, float cy, int side, float gx, float gy) {
   const float w = e.w * e.sx * e.stretch;
   const float h = e.h * e.sy * e.squash;
@@ -77,13 +83,13 @@ void draw_rrect_eye(Framebuffer& fb, const Eye& e, float cx, float cy, int side,
       bool on;
       if (!hollow) {
         on = true;
-        if (e.pr > 0.0f && in_ellipse(px - pcx, py - pcy, prx, pry)) on = false;
+        if (e.pr > 0.0f && in_pupil(px - pcx, py - pcy, prx, pry, e.sq)) on = false;
         if (e.gr > 0.0f && in_ellipse(px - g2x, py - g2y, g2rx, g2ry)) on = false;
       } else {
         on = !in_rrect(dx, dy, ihw, ihh, ir);
         if (!on && has_up && v < lid_v + edge) on = true;
         if (!on && has_low && v > low_v - edge) on = true;
-        if (!on && e.pr > 0.0f && in_ellipse(px - pcx, py - pcy, prx, pry)) on = true;
+        if (!on && e.pr > 0.0f && in_pupil(px - pcx, py - pcy, prx, pry, e.sq)) on = true;
       }
       if (on) fb.set(x, y);
     }
