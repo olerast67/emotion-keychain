@@ -517,47 +517,21 @@ def plane_fanout(board, space, netname):
     return missed
 
 
-def dsn_without_nets(board, dsn, nets):
-    """Убирает цепи-плоскости из задачи роутера: из network, классов и разводки;
-    их уже проложенные отводы и переходные становятся запретными зонами."""
+def dsn_planes(dsn):
+    """Цепи-плоскости (земля) — плоскостями в своих слоях: роутер считает площадки с
+    переходными в плоскость подключёнными и сам эти цепи не разводит. Уже проложенные
+    отводы земли закреплены."""
     text = open(dsn).read()
-    # Плоскости из заливок прошлого прогона роутеру не нужны: цепи-плоскости он не разводит.
-    text = re.sub(r"\(plane [^\s()]+ \(polygon [^()]*\)\)", "", text)
-    for netname in nets:
-        text = re.sub(r"\(net %s\s*\(pins[^)]*\)\s*\)" % re.escape(netname), "", text)
-        text = re.sub(r"\(wire\s*\((?:path|polyline_path)[^()]*\)\s*\(net %s\)[^()]*(?:\([^()]*\))*\s*\)"
-                      % re.escape(netname), "", text)
-        text = re.sub(r"\(via \"[^\"]*\" [-\d. ]+\(net %s\)[^()]*(?:\([^()]*\))*\s*\)" % re.escape(netname), "", text)
-
-    def strip_class(m):
-        names = [t for t in m.group(2).split() if t not in nets]
-        return m.group(1) + " " + " ".join(names) + "\n      (circuit"
-    text = re.sub(r"(\(class\s+\S+)((?:\s+[^\s()]+)*)\s*\(circuit", strip_class, text)
-    um = lambda v: pcbnew.ToMM(v) * 1000
-    keep = []
-    names = [board.GetLayerName(l) for l in CU]
-    for t in board.GetTracks():
-        if t.GetNetname() not in nets:
-            continue
-        if isinstance(t, pcbnew.PCB_VIA):
-            p = t.GetPosition()
-            d = um(t.GetWidth()) + 2 * CLEAR * 1000
-            for name in names:
-                keep.append(f'    (keepout "" (circle {name} {d:.1f} {um(p.x):.1f} {-um(p.y):.1f}))')
-        else:
-            a, b = t.GetStart(), t.GetEnd()
-            w = um(t.GetWidth()) / 2 + CLEAR * 1000
-            ax, ay, bx, by = um(a.x), -um(a.y), um(b.x), -um(b.y)
-            L = math.hypot(bx - ax, by - ay) or 1.0
-            nx, ny = -(by - ay) / L * w, (bx - ax) / L * w
-            ex, ey = (bx - ax) / L * w, (by - ay) / L * w
-            pts = [(ax + nx - ex, ay + ny - ey), (bx + nx + ex, by + ny + ey), (bx - nx + ex, by - ny + ey),
-                   (ax - nx - ex, ay - ny - ey)]
-            pts.append(pts[0])
-            coords = "  ".join(f"{x:.1f} {y:.1f}" for x, y in pts)
-            keep.append(f'    (keepout "" (polygon {board.GetLayerName(t.GetLayer())} 0  {coords}))')
+    # Плоскости из заливок прошлого прогона заменяются своими — по всему контуру платы.
+    text = re.sub(r"\s*\(plane [^\s()]+ \(polygon [^()]*\)\)", "", text)
+    m = re.search(r"\(boundary\s*\(path pcb 0\s+([^()]*)\)", text)
+    planes = "".join(f"\n    (plane {net} (polygon {layer} 0 {m.group(1).strip()}))"
+                     for net, layer in netlist.PLANES.items())
     i = text.index("(boundary")
-    text = text[:i] + "\n".join(keep) + "\n    " + text[i:]
+    text = text[:i] + planes.strip() + "\n    " + text[i:]
+    for net in netlist.PLANES:
+        text = re.sub(r"(\((?:wire|via)\b[^\n]*?\(net %s\))\(type route\)" % re.escape(net),
+                      r"\1(type protect)", text)
     with open(dsn, "w") as f:
         f.write(text)
 
@@ -692,11 +666,14 @@ def route():
     ses = os.path.join(WORK, NAME + ".ses")
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         sys.exit("не удалось выгрузить DSN")
-    dsn_without_nets(board, dsn, list(netlist.PLANES))
+    dsn_planes(dsn)
     dsn_prepare(dsn, [net for net, _ in failed])
-    run_freerouting(dsn, ses, os.environ.get("FR_TIMEOUT", "00:15:00"))
+    if not (os.environ.get("REUSE_SES") and os.path.exists(ses)):  # REUSE_SES=1 — взять прошлый результат
+        run_freerouting(dsn, ses, os.environ.get("FR_TIMEOUT", "00:15:00"))
     fan = set(netlist.PLANES) | set(netlist.POWER_NETS)
-    saved = [(isinstance(t, pcbnew.PCB_VIA), t.GetStart(), t.GetEnd(), t.GetLayer(), t.GetNetname(), t.GetWidth())
+    # Координаты копируются: GetStart() ссылается на память дорожки, а strip_tracks её удалит.
+    saved = [(isinstance(t, pcbnew.PCB_VIA), pcbnew.VECTOR2I(t.GetStart()), pcbnew.VECTOR2I(t.GetEnd()),
+              t.GetLayer(), t.GetNetname(), t.GetWidth())
              for t in board.GetTracks() if t.GetNetname() in fan]
     strip_tracks(board)
     import_ses(board, ses)
