@@ -182,6 +182,16 @@ int cmd_list() {
   return 0;
 }
 
+// Текст для Markdown: GitHub читает пару «$» как формулу, поэтому знак экранируется.
+std::string md(const char* s) {
+  std::string out;
+  for (; *s; ++s) {
+    if (*s == '$') out += '\\';
+    out += *s;
+  }
+  return out;
+}
+
 // Каталог в Markdown: генерируется из пресетов, поэтому всегда совпадает с кодом.
 int cmd_catalog(const Args& a) {
   FILE* f = a.pos.empty() ? stdout : fopen(a.pos[0].c_str(), "w");
@@ -202,10 +212,10 @@ int cmd_catalog(const Args& a) {
       const Expression& x = expression((Expr)i);
       if ((int)x.cat != c) continue;
       if (x.hold_ms)
-        fprintf(f, "| `%s` | %s | %s | → `%s` через %.1f с |\n", x.id, x.name, x.when, expr_id(x.next),
-                x.hold_ms / 1000.0);
+        fprintf(f, "| `%s` | %s | %s | → `%s` через %.1f с |\n", x.id, md(x.name).c_str(), md(x.when).c_str(),
+                expr_id(x.next), x.hold_ms / 1000.0);
       else
-        fprintf(f, "| `%s` | %s | %s | держится |\n", x.id, x.name, x.when);
+        fprintf(f, "| `%s` | %s | %s | держится |\n", x.id, md(x.name).c_str(), md(x.when).c_str());
     }
   }
   if (f != stdout) fclose(f);
