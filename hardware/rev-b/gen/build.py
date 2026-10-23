@@ -123,7 +123,20 @@ def add_outline(board):
         s.SetWidth(MM(0.1))
         board.Add(s)
 
-    seg((R, 0), (W - R, 0))
+    # Ушко для кольца — посередине сверху, отдельным выступом над платой.
+    tx0, tx1, tr, tcy = W / 2 - netlist.TAB_R, W / 2 + netlist.TAB_R, netlist.TAB_R, netlist.TAB_CY
+    seg((R, 0), (tx0, 0))
+    seg((tx0, 0), (tx0, tcy))
+    s = pcbnew.PCB_SHAPE(board)
+    s.SetShape(pcbnew.SHAPE_T_ARC)
+    s.SetCenter(V(W / 2, tcy))
+    s.SetStart(V(tx0, tcy))
+    s.SetArcAngleAndEnd(pcbnew.EDA_ANGLE(180, pcbnew.DEGREES_T), True)
+    s.SetLayer(pcbnew.Edge_Cuts)
+    s.SetWidth(MM(0.1))
+    board.Add(s)
+    seg((tx1, tcy), (tx1, 0))
+    seg((tx1, 0), (W - R, 0))
     seg((W, R), (W, H - R))
     seg((W - R, H), (R, H))
     seg((0, H - R), (0, R))
