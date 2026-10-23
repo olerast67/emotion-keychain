@@ -17,6 +17,7 @@ import netlist
 
 STEP = 0.1  # мм
 EDGE = 0.3  # медь от края платы
+FALLBACK = 0.3  # запасная ширина шины, мм
 DIRS = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
 
 
@@ -178,36 +179,42 @@ def _plan(grid, board, order):
     segs, failed, length = [], [], 0.0
     for net in order:
         c = _cls(net)
-        half, clr = c["track"] / 2, c["clearance"]
+        clr = c["clearance"]
         vias = [(pcbnew.ToMM(t.GetPosition().x), pcbnew.ToMM(t.GetPosition().y)) for t in board.GetTracks()
                 if isinstance(t, pcbnew.PCB_VIA) and t.GetNetname() == net]
         if len(vias) < 2:
             continue
-        bad = grid.blocked(net, half, clr, items)
         cells = [(int(round(x / STEP)), int(round(y / STEP))) for x, y in vias]
-        for cx, cy in cells:
-            bad[cy, cx] = False  # клетка у своего переходного всегда доступна
         tree = {cells[0]}
         left = set(range(1, len(vias)))
-        while left:
-            targets = {cells[i]: i for i in left}
-            path = _search(bad, list(tree), list(targets), grid.nx, grid.ny)
-            if path is None:
+        # Сначала ширина класса; что не прошло — запасной шириной: длинные слаботочные
+        # ветки (VBUS к модулю — только определение USB) обходятся узкой дорожкой.
+        for width in (c["track"], FALLBACK):
+            if not left or width > c["track"]:
                 break
-            i = targets[path[-1]]
-            left.discard(i)
-            tree.update(path)
-            pts = [(x * STEP, y * STEP) for x, y in _simplify(path)]
-            if path[0] in cells:  # концы — точно в центры переходных
-                pts[0] = vias[cells.index(path[0])]
-            pts[-1] = vias[i]
-            for a, b in zip(pts, pts[1:]):
-                d = math.hypot(a[0] - b[0], a[1] - b[1])
-                if d < 1e-6:
-                    continue
-                length += d
-                segs.append((a, b, net, c["track"]))
-                items.append(("s", (a[0], a[1], b[0], b[1], half), net))
+            half = width / 2
+            bad = grid.blocked(net, half, clr, items)
+            for cx, cy in cells:
+                bad[cy, cx] = False  # клетка у своего переходного всегда доступна
+            while left:
+                targets = {cells[i]: i for i in left}
+                path = _search(bad, list(tree), list(targets), grid.nx, grid.ny)
+                if path is None:
+                    break
+                i = targets[path[-1]]
+                left.discard(i)
+                tree.update(path)
+                pts = [(x * STEP, y * STEP) for x, y in _simplify(path)]
+                if path[0] in cells:  # концы — точно в центры переходных
+                    pts[0] = vias[cells.index(path[0])]
+                pts[-1] = vias[i]
+                for a, b in zip(pts, pts[1:]):
+                    d = math.hypot(a[0] - b[0], a[1] - b[1])
+                    if d < 1e-6:
+                        continue
+                    length += d * width
+                    segs.append((a, b, net, width))
+                    items.append(("s", (a[0], a[1], b[0], b[1], half), net))
         if left:
             failed.append((net, len(left)))
     return segs, failed, length
