@@ -637,9 +637,14 @@ def run_freerouting(dsn, ses, timeout):
         sys.exit(f"Freerouting не выдал SES, см. {log}")
 
 
-def dsn_prepare(dsn):
+SPILL_W = 0.3  # мм: остаток шины питания вне слоя питания (слаботочные ветки)
+
+
+def dsn_prepare(dsn, spill=()):
     """Задача для роутера: уже проложенные отводы питания закреплены, каждому классу цепей —
-    свои слои (питание только в слое питания, сигналы — по внешним слоям)."""
+    свои слои (питание только в слое питания, сигналы — по внешним слоям). Цепи питания из
+    spill не уместились в слое питания целиком: их остаток роутер ведёт дорожкой SPILL_W
+    и по внешним слоям тоже."""
     text = open(dsn).read()
     power = set(netlist.POWER_NETS)
     text = re.sub(r"(\((?:wire|via)\b[^\n]*?\(net (\S+?)\))\(type route\)",
@@ -656,6 +661,14 @@ def dsn_prepare(dsn):
         use = "".join(f"\n        (use_layer {l})" for l in layers) if layers else ""
         return head + m.group(2) + "\n      (circuit" + use
     text = re.sub(r"(\(class\s+\S+\s)((?:[^()]*?))\s*\(circuit", add_layers, text)
+    for net in spill:
+        text = re.sub(r"(\(class\s+\S+[^()]*?)\s" + re.escape(net) + r"(?=[\s)])", r"\1", text, count=1)
+        dia, drill = via_size(net)
+        via = f"Via[0-3]_{int(dia * 1000)}:{int(drill * 1000)}_um"
+        layers = "".join(f"\n        (use_layer {l})" for l in [netlist.POWER_LAYER, *netlist.SIGNAL_LAYERS])
+        cls = (f"    (class Spill_{net} {net}\n      (circuit{layers}\n        (use_via {via})\n      )\n"
+               f"      (rule\n        (width {int(SPILL_W * 1000)})\n        (clearance 200.1)\n      )\n    )\n")
+        text = re.sub(r"(\n)(    \(class )", lambda m: m.group(1) + cls + m.group(2), text, count=1)
     with open(dsn, "w") as f:
         f.write(text)
 
@@ -680,7 +693,7 @@ def route():
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         sys.exit("не удалось выгрузить DSN")
     dsn_without_nets(board, dsn, list(netlist.PLANES))
-    dsn_prepare(dsn)
+    dsn_prepare(dsn, [net for net, _ in failed])
     run_freerouting(dsn, ses, os.environ.get("FR_TIMEOUT", "00:15:00"))
     fan = set(netlist.PLANES) | set(netlist.POWER_NETS)
     saved = [(isinstance(t, pcbnew.PCB_VIA), t.GetStart(), t.GetEnd(), t.GetLayer(), t.GetNetname(), t.GetWidth())

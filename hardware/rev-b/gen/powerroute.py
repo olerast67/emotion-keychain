@@ -7,7 +7,6 @@
 повороты штрафуются, поэтому шины выходят прямыми. Ширина и зазор — из класса цепи.
 """
 import heapq
-import itertools
 import math
 
 import numpy as np
@@ -123,41 +122,47 @@ class Grid:
 
 
 def _search(bad, sources, targets, nx, ny):
-    """Дейкстра от всех клеток дерева до ближайшей цели; штраф за поворот."""
+    """Дейкстра от всех клеток дерева до ближайшей цели. Одно состояние на клетку:
+    штраф за поворот считается от направления, которым в клетку пришли."""
     INF = 1e18
-    dist = {}
+    dist = np.full(nx * ny, INF)
+    came = np.full(nx * ny, -1, dtype=np.int64)
+    kdir = np.full(nx * ny, -1, dtype=np.int8)
+    flat = bad.ravel()
     heap = []
-    for s in sources:
-        dist[(s, -1)] = 0.0
-        heapq.heappush(heap, (0.0, s, -1))
-    prev = {}
-    tset = set(targets)
+    for x, y in sources:
+        i = y * nx + x
+        dist[i] = 0.0
+        heap.append((0.0, i))
+    heapq.heapify(heap)
+    tset = {y * nx + x for x, y in targets}
     while heap:
-        d, cell, di = heapq.heappop(heap)
-        if dist.get((cell, di), INF) < d:
+        d, i = heapq.heappop(heap)
+        if d > dist[i]:
             continue
-        if cell in tset:
-            path = [cell]
-            key = (cell, di)
-            while key in prev:
-                key = prev[key]
-                path.append(key[0])
+        if i in tset:
+            path = []
+            while i >= 0:
+                path.append((int(i % nx), int(i // nx)))
+                i = came[i]
             return path[::-1]
-        x, y = cell
+        x, y = i % nx, i // nx
+        di = kdir[i]
         for k, (ddx, ddy) in enumerate(DIRS):
-            nx_, ny_ = x + ddx, y + ddy
-            if nx_ < 0 or ny_ < 0 or nx_ >= nx or ny_ >= ny or bad[ny_, nx_]:
+            x2, y2 = x + ddx, y + ddy
+            if x2 < 0 or y2 < 0 or x2 >= nx or y2 >= ny:
                 continue
-            if ddx and ddy and (bad[y, nx_] or bad[ny_, x]):
+            j = y2 * nx + x2
+            if flat[j]:
+                continue
+            if ddx and ddy and (flat[y * nx + x2] or flat[y2 * nx + x]):
                 continue  # по диагонали — только если не задевает угол препятствия
-            step = 1.4142 if ddx and ddy else 1.0
-            turn = 0.0 if di in (-1, k) else 1.5
-            nd = d + step + turn
-            key = ((nx_, ny_), k)
-            if nd < dist.get(key, INF):
-                dist[key] = nd
-                prev[key] = (cell, di)
-                heapq.heappush(heap, (nd, (nx_, ny_), k))
+            nd = d + (1.4142 if ddx and ddy else 1.0) + (0.0 if di in (-1, k) else 1.5)
+            if nd < dist[j]:
+                dist[j] = nd
+                came[j] = i
+                kdir[j] = k
+                heapq.heappush(heap, (nd, j))
     return None
 
 
@@ -225,8 +230,12 @@ def route_power(board, nets, add_track):
     соединилось при наименьшей длине. Возвращает список цепей, у которых не всё соединилось."""
     grid = Grid(board)
     best = None
-    for order in itertools.permutations(nets):
+    # Порядок важен: кто раньше, тот проходит прямее. Пробуем сдвиги и разворот списка.
+    orders = [nets[k:] + nets[:k] for k in range(len(nets))]
+    orders += [o[::-1] for o in orders]
+    for order in orders:
         segs, failed, length = _plan(grid, board, order)
+        print("  питание, порядок", order, "не соединено", failed or "—", flush=True)
         score = (sum(n for _, n in failed), length)
         if best is None or score < best[0]:
             best = (score, segs, failed)
