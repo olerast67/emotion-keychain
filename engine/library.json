@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Движок лиц брелока: 139 эмоций, переходы, жесты и поведение для монохромного экрана 128×64",
   "keywords": ["ssd1306", "oled", "face", "emotions", "animation"],
+  "license": "PolyForm-Noncommercial-1.0.0",
   "frameworks": "*",
   "platforms": "*",
   "build": {

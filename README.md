@@ -12,6 +12,7 @@
 ![nRF52840](https://img.shields.io/badge/MCU-nRF52840-1d3f8f)
 ![OLED](https://img.shields.io/badge/OLED-SSD1306_128%C3%9764-1d3f8f)
 ![Emotions](https://img.shields.io/badge/emotions-139-c7a35a)
+[![License](https://img.shields.io/badge/license-PolyForm_Noncommercial-c7a35a)](LICENSE.md)
 
 [Движок](docs/engine.md) · [Эмоции](docs/emotions.md) · [Железо](docs/hardware.md) · [Энергия](docs/power.md) · [План](docs/plan.md)
 
@@ -92,10 +93,10 @@ sim/web/build.sh    # нужны clang с целью wasm32 и wasm-ld (паке
 
 ### На живом экране
 
-Любая ESP32 и модуль SSD1306 на четырёх проводах. Прошивка ставится из браузера без установки или через PlatformIO:
+ESP32-C5, обычная ESP32, C3 или S3 и модуль SSD1306 на четырёх проводах. Прошивка ставится из браузера без установки или через PlatformIO:
 
 ```sh
-cd firmware && pio run -e esp32dev -t upload && pio device monitor
+cd firmware && pio run -e esp32c5 -t upload && pio device monitor
 ```
 
 Подключение, команды и что проверить на панели — в [firmware/README.md](firmware/README.md).
@@ -121,7 +122,7 @@ tools/           вспомогательные скрипты
 
 - [x] Движок лиц: 139 эмоций, переходы, жесты, поведение
 - [x] Симуляторы: консольный, оконный, в браузере
-- [x] Прошивка стенда: любая ESP32 + SSD1306 + сенсорная кнопка
+- [x] Прошивка стенда: ESP32-C5 / ESP32 / C3 / S3 + SSD1306 + сенсорная кнопка
 - [ ] Стенд и прототип на XIAO nRF52840 Sense с белым SSD1306
 - [ ] Замеры тока и энергетика постоянного лица
 - [ ] Настоящие датчики: тапы, шаги, звук, свет
@@ -142,4 +143,6 @@ tools/           вспомогательные скрипты
 
 ## Лицензия
 
-Лицензия пока не выбрана: все права принадлежат автору.
+Код открыт по [PolyForm Noncommercial 1.0.0](LICENSE.md). Собрать брелок для себя, менять код, рисовать свои эмоции и делиться ими можно бесплатно.
+
+Продавать устройства, наборы или платы с этим кодом можно только по коммерческой лицензии: процент с продаж или разовая оплата. Условия — в [COMMERCIAL.md](COMMERCIAL.md).
