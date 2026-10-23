@@ -26,6 +26,13 @@ add_executable(face_tests engine/tests/tests.cpp)
 target_link_libraries(face_tests PRIVATE face_engine)
 add_test(NAME face_tests COMMAND face_tests)
 
+# Прошивка стенда на ПК: заглушки Arduino и эмулятор контроллера экрана вместо железа.
+add_executable(firmware_tests firmware/host/stand_test.cpp firmware/src/ssd1306.cpp)
+target_include_directories(firmware_tests PRIVATE firmware/host firmware/src)
+target_compile_options(firmware_tests PRIVATE -Wall -Wextra)
+target_link_libraries(firmware_tests PRIVATE face_engine)
+add_test(NAME firmware_tests COMMAND firmware_tests)
+
 # Оконный симулятор, если найден SDL2.
 find_package(SDL2 QUIET)
 if(SDL2_FOUND)

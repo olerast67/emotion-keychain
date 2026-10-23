@@ -42,3 +42,28 @@ jobs:
             sim/web/dist/index.html
             out/emotions_sheet.gif
             out/bench.txt
+
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: PlatformIO
+        run: pip install platformio
+
+      - name: Прошивка стенда для ESP32, ESP32-C3 и ESP32-S3
+        run: pio run -d firmware -e esp32dev -e esp32c3 -e esp32s3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stand-firmware
+          path: firmware/.pio/build/*/stand-*.bin
