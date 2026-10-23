@@ -27,6 +27,9 @@
 #ifndef PIN_BUTTON
 #define PIN_BUTTON 4  // -1 — без кнопки
 #endif
+#ifndef PIN_BOOT
+#define PIN_BOOT -1  // кнопка BOOT на плате: работает как вторая кнопка, без проводов
+#endif
 #ifndef BUTTON_ACTIVE_LOW
 #define BUTTON_ACTIVE_LOW 0  // TTP223 по умолчанию даёт 1 при касании; 1 — обычная кнопка на GND
 #endif
@@ -289,6 +292,7 @@ uint32_t btn_t0 = 0, btn_change = 0, tap_pending_at = 0;
 bool long_fired = false, tap_pending = false;
 
 void on_short(uint32_t now, bool twice) {
+  Serial.println(twice ? "Кнопка: двойной тап" : "Кнопка: тап");
   if (mode == Mode::Alive) {
     bh.on_event(twice ? Event::double_tap : Event::tap, now);
   } else {
@@ -297,8 +301,9 @@ void on_short(uint32_t now, bool twice) {
 }
 
 void poll_button(uint32_t now) {
-  if (PIN_BUTTON < 0) return;
-  const bool raw = digitalRead(PIN_BUTTON) == (BUTTON_ACTIVE_LOW ? LOW : HIGH);
+  if (PIN_BUTTON < 0 && PIN_BOOT < 0) return;
+  bool raw = PIN_BUTTON >= 0 && digitalRead(PIN_BUTTON) == (BUTTON_ACTIVE_LOW ? LOW : HIGH);
+  if (PIN_BOOT >= 0 && digitalRead(PIN_BOOT) == LOW) raw = true;
   if (raw != btn_down && now - btn_change > 25) {  // антидребезг
     btn_down = raw;
     btn_change = now;
@@ -337,6 +342,7 @@ void setup() {
   while (!Serial && millis() - t0 < 1500) delay(10);  // USB CDC на C3/S3 появляется не сразу
 
   if (PIN_BUTTON >= 0) pinMode(PIN_BUTTON, BUTTON_ACTIVE_LOW ? INPUT_PULLUP : INPUT_PULLDOWN);
+  if (PIN_BOOT >= 0) pinMode(PIN_BOOT, INPUT_PULLUP);
   Wire.begin(PIN_SDA, PIN_SCL);
   Wire.setClock(I2C_HZ);
 
@@ -346,8 +352,8 @@ void setup() {
   bh.init(&eng, seed ^ 0x9E3779B9u, now);
   clock_base_ms = now;
 
-  Serial.printf("\nБрелок с эмоциями — стенд. SDA %d, SCL %d, кнопка %d, I2C %d кГц\n", PIN_SDA, PIN_SCL, PIN_BUTTON,
-                I2C_HZ / 1000);
+  Serial.printf("\nБрелок с эмоциями — стенд. SDA %d, SCL %d, кнопка %d, BOOT %d, I2C %d кГц\n", PIN_SDA, PIN_SCL,
+                PIN_BUTTON, PIN_BOOT, I2C_HZ / 1000);
   if (!start_oled()) {
     Serial.println("Экран не найден.");
     scan_i2c();
