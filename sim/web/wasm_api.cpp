@@ -130,6 +130,7 @@ EXPORT(fe_set_theme) void fe_set_theme(int cyber) { g_eng.options().theme = cybe
 EXPORT(fe_identity) void fe_identity(uint32_t lo, uint32_t hi, uint32_t now) {
   g_id = make_identity((uint64_t)hi << 32 | lo);
   g_bh.personality() = g_id.personality;
+  g_bh.set_temperament(&temperament(g_id.archetype));
   g_eng.set_quirks(g_id.quirks, now);
 }
 EXPORT(fe_id_code) const char* fe_id_code() { return g_id.code; }

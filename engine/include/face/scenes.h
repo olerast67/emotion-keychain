@@ -38,11 +38,16 @@ constexpr int kSceneCount = (int)Scene::Count;
 // value: greet — 1, если знакомый; duel — 1, если победа.
 struct SceneParams {
   char text[16] = {};
+  char sub[12] = {};  // вторая строка: например, характер встреченного брелока
   int value = 0;
-  void set_text(const char* s) {
+  void set_text(const char* s) { copy(text, s, 15); }
+  void set_sub(const char* s) { copy(sub, s, 11); }
+
+ private:
+  static void copy(char* dst, const char* s, int n) {
     int i = 0;
-    for (; s && s[i] && i < 15; ++i) text[i] = s[i];
-    text[i] = 0;
+    for (; s && s[i] && i < n; ++i) dst[i] = s[i];
+    dst[i] = 0;
   }
 };
 

@@ -213,13 +213,18 @@ void load_settings(uint32_t now) {
 void apply_identity(uint64_t serial, uint32_t now) {
   me = make_identity(serial);
   bh.personality() = me.personality;
+  bh.set_temperament(&temperament(me.archetype));
   eng.set_quirks(me.quirks, now);
 }
 
 void print_me() {
   const Personality& p = me.personality;
-  Serial.printf("Я %s: %s, %s%s\n", me.code, archetype_name(me.archetype), rarity_name(me.rarity),
+  const Temperament& t = temperament(me.archetype);
+  Serial.printf("Я %s: %s (%s), %s%s\n", me.code, t.name, t.tag, rarity_name(me.rarity),
                 me.quirks.cyber_eye ? ", золотой кибер-глаз" : "");
+  Serial.printf("В покое — %s, рад — %s, скучает — %s; на касание — %s, %s…\n", expression(t.rest).id,
+                expression(t.rest_happy).id, expression(t.rest_bored).id, expression(t.tap[0]).id,
+                expression(t.tap[1]).id);
   Serial.printf("Характер: игривость %.2f, ворчливость %.2f, сонливость %.2f, застенчивость %.2f\n", p.playful,
                 p.grumpy, p.sleepy, p.shy);
   const Implant& cur = implant(progress.implant);
@@ -478,7 +483,8 @@ void command(char* s, uint32_t now) {
   }
   if (!strcmp(s, "meet")) {
     if (mode != Mode::Alive) set_mode(Mode::Alive, now);
-    bh.meet(make_identity(now).code, !(arg && !strcmp(arg, "old")), now);
+    const Identity peer = make_identity(now);
+    bh.meet(peer.code, !(arg && !strcmp(arg, "old")), now, peer.hash);
     save_progress(now, true);
     return;
   }

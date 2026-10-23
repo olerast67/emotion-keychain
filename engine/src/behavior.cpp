@@ -157,6 +157,29 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   reason_ = "";
   next_ = now;
   if (progress_) attach_progress(progress_);
+  set_temperament(temp_);
+}
+
+void Behavior::set_temperament(const Temperament* t) {
+  temp_ = t;
+  if (!eng_) return;
+  eng_->options().tempo = t ? t->tempo : 1.0f;
+  eng_->options().glitches = t && t->glitches;
+}
+
+bool Behavior::usable(Expr e) const {
+  return !progress_ || (int)e >= kExprCount || progress_->is_unlocked(e) || (temp_ && temperament_innate(*temp_, e));
+}
+
+Expr Behavior::flavor(Expr e) const {
+  if (!temp_) return e;
+  switch (e) {
+    case Expr::neutral:
+    case Expr::calm: return temp_->rest;
+    case Expr::happy: return temp_->rest_happy;
+    case Expr::bored: return temp_->rest_bored;
+    default: return e;
+  }
 }
 
 void Behavior::schedule_surprise(uint32_t now) {
@@ -181,7 +204,7 @@ Expr Behavior::pick(const Option* opts, int n) {
   n = n > 16 ? 16 : n;
   for (int i = 0; i < n; ++i) {
     w[i] = opts[i].weight > 0.0f ? opts[i].weight : 0.0f;
-    if (progress_ && !progress_->is_unlocked(opts[i].expr)) w[i] = 0.0f;
+    if (!usable(opts[i].expr)) w[i] = 0.0f;
     for (Expr r : recent_react_)
       if (r == opts[i].expr) w[i] *= 0.35f;
     total += w[i];
@@ -325,6 +348,9 @@ void Behavior::on_event(Event e, uint32_t now) {
         mood_.valence = clamp11(mood_.valence + 0.15f);
         if (mood_.annoyance > 0.5f) {
           react(Expr::unamused, now, 2400, "двойной тап, но он не в духе");
+        } else if (temp_) {
+          const Option o[] = {{temp_->dtap[0], 3}, {temp_->dtap[1], 2}, {temp_->dtap[2], 1}};
+          react(pick(o), now, 3000, "двойной тап");
         } else {
           const Option o[] = {{Expr::laugh, 3},  {Expr::happy, 2},   {Expr::playful, 1},
                               {Expr::giggle, 1}, {Expr::wink, 0.7f}, {Expr::tears_of_joy, good ? 0.6f : 0.0f}};
@@ -338,6 +364,15 @@ void Behavior::on_event(Event e, uint32_t now) {
       } else {
         // Самое частое событие: пул из нескольких вариантов, чтобы не надоедать.
         mood_.valence = clamp11(mood_.valence + 0.05f);
+        if (temp_) {
+          const Option o[] = {{temp_->tap[0], temp_->tap_w[0]},
+                              {temp_->tap[1], temp_->tap_w[1]},
+                              {temp_->tap[2], temp_->tap_w[2]},
+                              {temp_->tap[3], temp_->tap_w[3]}};
+          const Expr x = pick(o);
+          react(x, now, x == Expr::booped ? 800 : 2000, "тап", Clip::boop);
+          break;
+        }
         const Option o[] = {{Expr::booped, 4},     {Expr::wink, good ? 1.2f : 0.3f},
                             {Expr::curious, 1},    {Expr::owo, good ? 0.6f : 0.2f},
                             {Expr::awkward, 0.4f}, {Expr::wtf, 0.2f}};
@@ -599,10 +634,11 @@ Expr Behavior::choose_base(uint32_t now) {
   if (moving) return Expr::walking;
   if (alone > 4u * 60u * kMin) return Expr::sulking;
   if (alone > 2u * 60u * kMin) return Expr::lonely;
-  if (mood_.boredom > 0.7f) return Expr::bored;
+  if (mood_.boredom > 0.7f) return flavor(Expr::bored);
   if (mood_.valence < -0.4f) return Expr::sad;
   if (mood_.valence < -0.15f) return Expr::worried;
-  if (mood_.valence > 0.55f) return Expr::happy;
+  if (mood_.valence > 0.55f) return flavor(Expr::happy);
+  if (temp_) return temp_->rest;  // у характера своё лицо в покое
   if (mood_.valence > 0.35f) return Expr::content;
   if (clock_min_ >= 21 * 60 && clock_min_ < 22 * 60) return Expr::content;
   if (quiet > 5u * kMin) return Expr::calm;
@@ -617,7 +653,19 @@ void Behavior::idle_action(uint32_t now) {
   float w[kIdleCount];
   const Mood& m = mood_;
   const bool happy = m.valence > 0.2f;
-  const float meme = 0.12f * pers_.playful;  // мемы — приправа, а не основа
+  // Свои занятия характера: с вероятностью own_idle — из его списка.
+  if (temp_ && rng_.unit() < temp_->own_idle) {
+    Expr opts[4];
+    int n = 0;
+    for (Expr x : temp_->idle)
+      if (x != cur && usable(x)) opts[n++] = x;
+    if (n) {
+      react(opts[rng_.next() % (uint32_t)n], now, 3500, "сам по себе, по характеру");
+      return;
+    }
+  }
+  // мемы — приправа, а не основа
+  const float meme = 0.12f * pers_.playful * (temp_ ? temp_->meme : 1.0f);
   w[kLookAround] = 1.0f;
   w[kDoubleBlink] = 0.6f;
   w[kWink] = 0.25f * pers_.playful;
@@ -650,7 +698,7 @@ void Behavior::idle_action(uint32_t now) {
   w[kCyclops] = (happy && now - last_cyclops_ > 120u * kMin) ? 0.05f : 0.0f;
   float total = 0;
   for (int i = 0; i < kIdleCount; ++i) {
-    if (progress_ && kIdle[i].expr != Expr::Count && !progress_->is_unlocked(kIdle[i].expr)) w[i] = 0.0f;
+    if (kIdle[i].expr != Expr::Count && !usable(kIdle[i].expr)) w[i] = 0.0f;
     for (uint8_t r : recent_idle_)
       if (r == i) w[i] *= 0.15f;  // не повторяться
     total += w[i];
@@ -785,7 +833,8 @@ void Behavior::update(uint32_t now) {
   if (time_reached(now, next_idle_)) {
     idle_action(now);
     const bool sleepy = mood_.energy < 0.3f;
-    next_idle_ = now + (12000u + rng_.next() % 28000u) * (sleepy ? 2u : 1u);
+    const float activity = temp_ ? sanef(temp_->activity, 1.0f, 0.2f, 4.0f) : 1.0f;
+    next_idle_ = now + (uint32_t)((float)((12000u + rng_.next() % 28000u) * (sleepy ? 2u : 1u)) / activity);
   }
   if (reacting_) wake(react_until_);
   wake(next_eval_);
@@ -802,7 +851,7 @@ void Behavior::attach_progress(Progress* p) {
 }
 
 Expr Behavior::allowed(Expr e) const {
-  if (!progress_ || (int)e >= kExprCount || progress_->is_unlocked(e)) return e;
+  if (usable(e)) return e;
   struct Fb {
     Expr from, to;
   };
@@ -847,12 +896,13 @@ Expr Behavior::allowed(Expr e) const {
       default: to = Expr::neutral; break;
     }
   }
-  return progress_->is_unlocked(to) ? to : Expr::neutral;
+  if (usable(to)) return to;
+  return temp_ ? temp_->rest : Expr::neutral;
 }
 
 Expr Behavior::pick_unlocked(const Expr* opts, int n) {
   for (int i = 0; i < n; ++i)
-    if (!progress_ || progress_->is_unlocked(opts[i])) return opts[i];
+    if (usable(opts[i])) return opts[i];
   return allowed(opts[0]);
 }
 
@@ -903,16 +953,50 @@ void Behavior::add_steps(uint32_t steps, uint32_t now) {
   if (progress_) grant(progress_->add_steps(steps), now);
 }
 
-void Behavior::meet(const char* code, bool is_new, uint32_t now) {
+Expr Behavior::greet_after(const Temperament* other, bool is_new) {
+  const Temperament* me = temp_;
+  if (!me || !other) return is_new ? pick_unlocked({Expr::excited, Expr::hello}) : pick_unlocked({Expr::hello});
+  if (me == other) return pick_unlocked({Expr::pog, Expr::excited, Expr::happy});  // близнецы
+  const Archetype a = (Archetype)(me - &temperament((Archetype)0));
+  const Archetype b = (Archetype)(other - &temperament((Archetype)0));
+  switch (a) {
+    case Archetype::grumpy:
+      if (b == Archetype::playful || b == Archetype::dramatic) return pick_unlocked({Expr::unamused, Expr::annoyed});
+      if (b == Archetype::sweet) return pick_unlocked({Expr::flustered, Expr::smug});  // растаял, но не признаётся
+      return pick_unlocked({Expr::not_bad, Expr::skeptical});
+    case Archetype::shy: return pick_unlocked({Expr::flustered, Expr::embarrassed, Expr::shy});
+    case Archetype::sweet: return pick_unlocked({Expr::love, Expr::adoring});
+    case Archetype::trickster:
+      if (b == Archetype::trickster || b == Archetype::glitchy) return pick_unlocked({Expr::evil_laugh, Expr::devilish});
+      return pick_unlocked({Expr::devilish, Expr::smug});
+    case Archetype::curious: return pick_unlocked({Expr::curious, Expr::idea, Expr::excited});
+    case Archetype::dramatic: return pick_unlocked({Expr::tears_of_joy, Expr::touched, Expr::love});
+    case Archetype::glitchy: return pick_unlocked({Expr::processing, Expr::owo});
+    case Archetype::chill: return pick_unlocked({Expr::cool, Expr::not_bad});
+    case Archetype::sleepy: return pick_unlocked({Expr::waking, Expr::content});
+    case Archetype::playful:
+      if (b == Archetype::grumpy) return pick_unlocked({Expr::troll_grin, Expr::playful});  // подразнить ворчуна
+      return pick_unlocked({Expr::party, Expr::excited, Expr::happy});
+    default: return pick_unlocked({Expr::hello});
+  }
+}
+
+void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_hash) {
   last_event_ = last_touch_ = now;
   if (eng_) eng_->note_activity(now);
   mood_.valence = clamp11(mood_.valence + 0.2f);
   mood_.affection = clamp01(mood_.affection + 0.05f);
+  const Temperament* other = peer_hash ? &temperament(archetype_from_hash(peer_hash)) : nullptr;
   SceneParams p;
   p.set_text(code);
   p.value = is_new ? 0 : 1;
-  queue_scene(Scene::greet, p, is_new ? pick_unlocked({Expr::excited, Expr::hello}) : pick_unlocked({Expr::hello}), now,
-              is_new ? "новый знакомый брелок" : "встретил знакомого");
+  if (other) p.set_sub(other == temp_ ? "TWIN!" : other->tag);
+  queue_scene(Scene::greet, p, greet_after(other, is_new), now,
+              other == temp_ && other ? "встретил такого же" : is_new ? "новый знакомый брелок" : "встретил знакомого");
+  // Ворчун при виде брелока с золотым глазом, глюк с глюком — данные текут рекой.
+  if (other && temp_ && other == temp_ && temp_->glitches)
+    queue_scene(Scene::data_rain, SceneParams{}, pick_unlocked({Expr::hypnotized, Expr::zoned_out}), now,
+                "два глюка синхронизировались");
   if (progress_) grant(progress_->met_friend(is_new), now);
 }
 
@@ -957,13 +1041,16 @@ void Behavior::surprise(uint32_t now) {
     Scene s;
     float w;
   };
-  const Opt opts[] = {{Scene::hide, cyber ? 1.0f : 3.0f},
-                      {Scene::reboot, 1.5f},
-                      {Scene::error404, cyber ? 2.0f : 1.0f},
-                      {Scene::hack, cyber ? 3.0f : 1.0f},
-                      {Scene::data_rain, cyber ? 2.0f : 0.7f}};
+  Opt opts[] = {{Scene::hide, cyber ? 1.0f : 3.0f},
+                {Scene::reboot, 1.5f},
+                {Scene::error404, cyber ? 2.0f : 1.0f},
+                {Scene::hack, cyber ? 3.0f : 1.0f},
+                {Scene::data_rain, cyber ? 2.0f : 0.7f}};
   float total = 0;
-  for (const Opt& o : opts) total += o.w;
+  for (Opt& o : opts) {
+    if (temp_ && o.s == temp_->fav) o.w *= 3.0f;  // любимый сюрприз характера
+    total += o.w;
+  }
   float x = rng_.unit() * total;
   Scene s = Scene::hide;
   for (const Opt& o : opts) {

@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
   CHECK(eng.face().gx > 0.5f, "наклон двигает взгляд: %.2f (сцена %s, эмоция %s)", eng.face().gx, scene_id(eng.scene()),
         expression(eng.expression()).id);
   type("tilt 0 0");
-  type("serial 9");
+  type("serial 75");
   CHECK(me.quirks.cyber_eye && said("золотой кибер-глаз"), "чужой серийник — другой персонаж");
   type("serial");
   CHECK(!strcmp(me.code, make_identity(ESP.getEfuseMac()).code), "свой персонаж вернулся");

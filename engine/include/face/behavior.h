@@ -13,6 +13,7 @@
 
 #include "face/engine.h"
 #include "face/progress.h"
+#include "face/temperament.h"
 
 namespace face {
 
@@ -105,6 +106,11 @@ class Behavior {
   // Какой яркости экрана хватает: в темноте — минимум, ночью и во сне — приглушённо.
   Brightness brightness() const;
 
+  // Характер брелока (temperament.h): лицо в покое, ответ на касания, свои занятия,
+  // темп и сбои картинки. nullptr — «средний» персонаж, как в симуляторе.
+  void set_temperament(const Temperament* t);
+  const Temperament* temperament_ptr() const { return temp_; }
+
   // Рост: без прогресса открыто всё (симулятор, тесты). С прогрессом персонаж
   // показывает только открытые эмоции, а касания, шаги и встречи дают опыт.
   void attach_progress(Progress* p);
@@ -115,8 +121,10 @@ class Behavior {
   void add_xp(uint32_t xp, uint32_t now_ms);
   void add_steps(uint32_t steps, uint32_t now_ms);
 
-  // Другой брелок рядом (BLE): приветствие и опыт. code — его позывной.
-  void meet(const char* code, bool is_new, uint32_t now_ms);
+  // Другой брелок рядом (BLE): приветствие и опыт. code — его позывной, peer_hash — хэш
+  // из его рекламного пакета: по нему виден характер соседа, и встреча идёт по-разному
+  // для разных пар (близнецы, ворчун и игрун, скромник с кем угодно…). 0 — неизвестен.
+  void meet(const char* code, bool is_new, uint32_t now_ms, uint32_t peer_hash = 0);
   // Хакерская дуэль с другим брелоком: победа открывает эмоцию досрочно.
   void duel(const char* code, bool won, uint32_t now_ms);
 
@@ -160,6 +168,8 @@ class Behavior {
   Expr choose_base(uint32_t now);
   void idle_action(uint32_t now);
   void grant(int installed, uint32_t now);
+  // Эмоция после приветствия: зависит от своего характера и характера соседа.
+  Expr greet_after(const Temperament* other, bool is_new);
   bool run_queue(uint32_t now);
   // Первая открытая из вариантов; если закрыты все — ближайшая замена первой.
   Expr pick_unlocked(const Expr* opts, int n);
@@ -168,10 +178,15 @@ class Behavior {
     return pick_unlocked(opts, N);
   }
   bool night() const { return clock_min_ >= 23 * 60 || clock_min_ < 6 * 60; }
+  // Эмоция доступна: открыта ростом или своя у характера.
+  bool usable(Expr e) const;
+  // Подмена через характер: «в покое» — его лицо, «рад» — его радость и т. д.
+  Expr flavor(Expr e) const;
 
   FaceEngine* eng_ = nullptr;
   Rng rng_;
   Personality pers_;
+  const Temperament* temp_ = nullptr;
   Mood mood_;
   bool auto_ = true;
   uint16_t clock_min_ = 12 * 60;

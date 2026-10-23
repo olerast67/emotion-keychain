@@ -227,7 +227,9 @@ void FaceEngine::set_expression(Expr e, uint32_t now_ms, int transition_ms) {
   apply_quirks(to_);
   for (int i = 0; i < 2; ++i) eye_swap_[i] = from_.eye[i].kind != to_.eye[i].kind;
   mouth_swap_ = from_.mouth.kind != to_.mouth.kind;
-  tr_ms_ = (uint16_t)(transition_ms < 0 ? preset_->in_ms : imin(transition_ms, kMaxTransitionMs));
+  const float tempo = sanef(opt_.tempo, 1.0f, 0.3f, 3.0f);
+  tr_ms_ = (uint16_t)(transition_ms < 0 ? imin(iround((float)preset_->in_ms * tempo), kMaxTransitionMs)
+                                        : imin(transition_ms, kMaxTransitionMs));
   tr_t0_ = now_ms;
   tr_active_ = tr_ms_ > 0;
   if (!tr_active_) base_ = to_;
@@ -1195,7 +1197,7 @@ bool FaceEngine::update(uint32_t now) {
 
   // Киберпанк: редкие короткие сбои сигнала, раз в 45–150 с.
   const bool cyber = opt_.theme == Theme::Cyber;
-  if (cyber && opt_.idle_motion && scene_ == Scene::None) {
+  if ((cyber || opt_.glitches) && opt_.idle_motion && scene_ == Scene::None) {
     if (time_reached(now, micro_glitch_next_)) {
       micro_glitch_on_ = true;
       micro_glitch_until_ = now + 140u;
@@ -1361,10 +1363,10 @@ bool FaceEngine::update(uint32_t now) {
   if (preset_->hold_ms) at(expr_t0_ + preset_->hold_ms);
   if (opt_.scanlines) wake[nw++] = 20000u - now % 20000u;
   if (quirks_.cyber_eye) wake[nw++] = (glint ? 400u : 5000u) - now % 5000u;
-  if (cyber && opt_.idle_motion) {
+  if ((cyber || opt_.glitches) && opt_.idle_motion) {
     at(micro_glitch_next_);
     if (micro_glitch_on_) at(micro_glitch_until_);
-    if (scene_ == Scene::None) at(scan_next_);
+    if (cyber && scene_ == Scene::None) at(scan_next_);
   }
   if (reticle_wake) wake[nw++] = reticle_wake;
   if (reticle_on_) at(reticle_t0_ + reticle_ms_);

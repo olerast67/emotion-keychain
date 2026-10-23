@@ -81,6 +81,10 @@ struct EngineOptions {
   // Через сколько мс без внимания (note_activity, взгляд, наклон) лицо успокаивается:
   // фирменные жесты втрое реже, взгляд вдвое реже. 0 — не успокаиваться.
   uint32_t calm_after_ms = 180000;
+  // Характер брелока (temperament.h): темп переходов (меньше 1 — резче) и мелкие сбои
+  // картинки в любой теме — у «глюка».
+  float tempo = 1.0f;
+  bool glitches = false;
 };
 
 struct EngineStats {
@@ -132,6 +136,7 @@ class FaceEngine {
   // Полноэкранная сцена вместо лица (scenes.h). Лицо продолжает жить под ней.
   void play_scene(Scene s, uint32_t now_ms, const SceneParams& p = {});
   Scene scene() const { return scene_; }
+  const SceneParams& scene_params() const { return scene_p_; }
   uint32_t scene_ends_ms() const { return scene_ == Scene::None ? 0 : scene_t0_ + scene_duration_ms(scene_); }
 
   EngineOptions& options() { return opt_; }

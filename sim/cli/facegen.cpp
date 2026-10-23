@@ -424,7 +424,11 @@ int cmd_id(const Args& a) {
   const Identity id = make_identity((uint64_t)atoll(a.pos[0].c_str()));
   const Personality& p = id.personality;
   const Quirks& q = id.quirks;
-  printf("%s: %s, %s\n", id.code, archetype_name(id.archetype), rarity_name(id.rarity));
+  const Temperament& t = temperament(id.archetype);
+  printf("%s: %s (%s), %s\n", id.code, t.name, t.tag, rarity_name(id.rarity));
+  printf("  в покое %s, рад %s, скучает %s; на касание %s/%s/%s/%s; темп ×%.2f, активность ×%.2f\n",
+         expression(t.rest).id, expression(t.rest_happy).id, expression(t.rest_bored).id, expression(t.tap[0]).id,
+         expression(t.tap[1]).id, expression(t.tap[2]).id, expression(t.tap[3]).id, t.tempo, t.activity);
   printf("  игривость %.2f, ворчливость %.2f, сонливость %.2f, застенчивость %.2f\n", p.playful, p.grumpy, p.sleepy,
          p.shy);
   printf("  глаза %+.0f px и ×%.2f, зрачки ×%.2f, моргает ×%.2f, брови %+.0f px%s\n", q.spacing, q.eye_scale,

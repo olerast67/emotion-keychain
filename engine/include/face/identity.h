@@ -1,29 +1,15 @@
-// Свой характер у каждого брелока. Из серийного номера чипа выводятся
-// архетип, черты характера, мелкие отличия внешности и редкость.
-// Одинаковый номер — всегда один и тот же персонаж, поэтому хранить ничего не нужно.
+// Свой характер у каждого брелока. Из серийного номера чипа выводится хэш, а из него —
+// архетип с темпераментом (temperament.h), черты характера, мелкие отличия внешности
+// и редкость. Одинаковый номер — всегда один и тот же персонаж, хранить ничего не нужно.
 #pragma once
 
 #include <stdint.h>
 
 #include "face/behavior.h"
 #include "face/engine.h"
+#include "face/temperament.h"
 
 namespace face {
-
-#define FACE_ARCHETYPE_LIST(X) \
-  X(playful)                   \
-  X(grumpy)                    \
-  X(sleepy)                    \
-  X(shy)                       \
-  X(curious)                   \
-  X(chill)
-
-enum class Archetype : uint8_t {
-#define FACE_X(n) n,
-  FACE_ARCHETYPE_LIST(FACE_X)
-#undef FACE_X
-      Count
-};
 
 enum class Rarity : uint8_t {
   Common,     // ~89%
@@ -41,8 +27,9 @@ struct Identity {
 };
 
 Identity make_identity(uint64_t serial);
-const char* archetype_id(Archetype a);
-const char* archetype_name(Archetype a);  // по-русски
-const char* rarity_name(Rarity r);        // по-русски
+// Всё о брелоке по его позывному-хэшу: так брелок узнаёт характер соседа по рекламному
+// пакету BLE, где передаётся только хэш.
+Identity identity_from_hash(uint32_t hash);
+const char* rarity_name(Rarity r);  // по-русски
 
 }  // namespace face

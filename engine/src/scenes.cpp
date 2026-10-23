@@ -295,8 +295,13 @@ void greet(Framebuffer& fb, uint32_t t, const SceneParams& p) {
     fill_box(fb, x1 - 1, y1 - len, x1, y1);
   }
   if (t >= 1400) {
-    const float k = 1.0f + 0.15f * fsin((float)(t - 1400) * 0.012f);
-    fill_heart(fb, (float)kCx, 49.0f, 8.0f * k, 7.0f * k);
+    if (p.sub[0]) {
+      // Характер соседа: «SHY», «GRUMPY»… или «TWIN!», если такой же, как ты.
+      if (t > 1900 || blink_on(t - 1400, 120)) draw_text_centered(fb, kCx, 44, p.sub);
+    } else {
+      const float k = 1.0f + 0.15f * fsin((float)(t - 1400) * 0.012f);
+      fill_heart(fb, (float)kCx, 49.0f, 8.0f * k, 7.0f * k);
+    }
   }
 }
 

@@ -320,13 +320,23 @@ static void test_identity() {
     legend += id.rarity == Rarity::Legendary;
     const Quirks& q = id.quirks;
     if (fabs_(q.spacing) > 4.0f || q.eye_scale < 0.94f || q.eye_scale > 1.06f || q.pupil_scale < 0.84f ||
-        q.pupil_scale > 1.31f || q.blink_rate < 0.79f || q.blink_rate > 1.31f ||
+        q.pupil_scale > 1.31f || q.blink_rate < 0.59f || q.blink_rate > 1.45f ||
         q.cyber_eye != (id.rarity == Rarity::Legendary))
       ranges = false;
   }
   CHECK(ranges, "особенности внешности в своих пределах");
-  for (int i = 0; i < (int)Archetype::Count; ++i)
-    CHECK(arch[i] > n / 12, "архетип %s встречается: %d", archetype_id((Archetype)i), arch[i]);
+  // Каждый характер встречается не реже, чем в его доле весов, с запасом.
+  float wsum = 0;
+  for (int i = 0; i < kArchetypeCount; ++i) wsum += temperament((Archetype)i).weight;
+  for (int i = 0; i < kArchetypeCount; ++i) {
+    const float share = temperament((Archetype)i).weight / wsum;
+    CHECK(arch[i] > (int)(n * share * 0.8f) && arch[i] < (int)(n * share * 1.2f), "архетип %s встречается: %d",
+          archetype_id((Archetype)i), arch[i]);
+  }
+  // По хэшу из рекламного пакета сосед узнаёт тот же характер и позывной.
+  const Identity peer = identity_from_hash(a.hash);
+  CHECK(peer.archetype == a.archetype && !strcmp(peer.code, a.code) && peer.rarity == a.rarity,
+        "характер соседа по хэшу совпадает");
   CHECK(legend > n / 200 && legend < n / 60, "легендарных около 1%%: %d из %d", legend, n);
   CHECK(rare > n / 14 && rare < n / 8, "редких около 10%%: %d из %d", rare, n);
 }
@@ -496,6 +506,90 @@ static void test_cyber_pupil() {
     for (int x = 0; x < kWidth; ++x) (x < kWidth / 2 ? left_diff : right_diff) += a.get(x, y) != b.get(x, y);
   CHECK(right_diff > 8, "правый зрачок другой формы: %d пикселей", right_diff);
   CHECK(left_diff == 0, "левый глаз не меняется: %d пикселей", left_diff);
+}
+
+// Характеры заметно разные: у каждого своё лицо в покое и свои ответы на касания,
+// даже у нового брелока, у которого открыта только база.
+static void test_temperaments() {
+  static float hist[kArchetypeCount][kExprCount];
+  for (int a = 0; a < kArchetypeCount; ++a) {
+    const Temperament& t = temperament((Archetype)a);
+    FaceEngine eng;
+    Behavior bh;
+    Progress p;
+    p.reset();
+    eng.init(40 + a, 0);
+    bh.init(&eng, 40 + a, 0);
+    bh.attach_progress(&p);
+    bh.set_temperament(&t);
+    bh.set_surprise_interval(7u * 24u * 3600000u, 7u * 24u * 3600000u, 0);
+    int rest_ms = 0, tap_hits = 0, taps = 0;
+    for (uint32_t ms = 0; ms < 3u * 3600000u; ms += 500) {
+      bh.set_clock((uint16_t)(10 * 60 + ms / 60000u));
+      if (ms % 300000u == 150000u) {
+        bh.on_event(Event::tap, ms);
+        ++taps;
+        bh.update(ms);
+        eng.update(ms);
+        for (Expr x : t.tap) tap_hits += eng.expression() == x;
+      }
+      bh.update(ms);
+      eng.update(ms);
+      hist[a][(int)eng.expression()] += 0.5f;
+      rest_ms += eng.expression() == t.rest ? 500 : 0;
+    }
+    CHECK(rest_ms > 3600000 * 3 / 5, "%s: лицо в покое (%s) — %d%% времени", t.tag, expression(t.rest).id,
+          rest_ms / 108000);
+    CHECK(tap_hits * 10 >= taps * 6, "%s: касание отвечает по-своему %d из %d", t.tag, tap_hits, taps);
+  }
+  // Попарно: распределения эмоций пересекаются меньше чем наполовину.
+  int same = 0;
+  for (int a = 0; a < kArchetypeCount; ++a)
+    for (int b = a + 1; b < kArchetypeCount; ++b) {
+      float inter = 0, total = 0;
+      for (int e = 0; e < kExprCount; ++e) inter += fmin_(hist[a][e], hist[b][e]), total += hist[a][e];
+      if (inter > total * 0.5f) ++same;
+    }
+  CHECK(same == 0, "похожих пар характеров: %d", same);
+}
+
+// Встреча зависит от пары характеров: близнецы радуются, скромник смущается, ворчун ворчит.
+static uint32_t hash_of(Archetype a) {
+  for (uint32_t h = 1;; ++h)
+    if (archetype_from_hash(h) == a) return h;
+}
+
+static void test_meet_pairs() {
+  struct Case {
+    Archetype me, other;
+    Expr expect[3];
+    const char* sub;
+  };
+  const Case cases[] = {
+      {Archetype::shy, Archetype::grumpy, {Expr::flustered, Expr::embarrassed, Expr::shy}, "GRUMPY"},
+      {Archetype::playful, Archetype::playful, {Expr::pog, Expr::excited, Expr::happy}, "TWIN!"},
+      {Archetype::grumpy, Archetype::playful, {Expr::unamused, Expr::annoyed, Expr::Count}, "PLAYFUL"},
+      {Archetype::sweet, Archetype::chill, {Expr::love, Expr::adoring, Expr::Count}, "CHILL"},
+  };
+  for (const Case& c : cases) {
+    FaceEngine eng;
+    Behavior bh;
+    eng.init(3, 0);
+    bh.init(&eng, 3, 0);
+    bh.set_temperament(&temperament(c.me));
+    bh.meet("AB-CDEF", true, 1000, hash_of(c.other));
+    bool sub_ok = false, after_ok = false;
+    for (uint32_t t = 1000; t < 9000; t += 50) {
+      bh.update(t);
+      eng.update(t);
+      if (eng.scene() == Scene::greet) sub_ok |= !strcmp(eng.scene_params().sub, c.sub);
+      if (eng.scene() == Scene::None && t > 4500)
+        for (Expr x : c.expect) after_ok |= x == eng.expression();
+    }
+    CHECK(sub_ok, "%s встречает %s: подпись %s", temperament(c.me).tag, temperament(c.other).tag, c.sub);
+    CHECK(after_ok, "%s встречает %s: эмоция после — %s", temperament(c.me).tag, temperament(c.other).tag,
+          expression(eng.expression()).id);
+  }
 }
 
 static void test_growth_behavior() {
@@ -1145,6 +1239,8 @@ int main() {
   test_reticle();
   test_cyber_pupil();
   test_growth_behavior();
+  test_temperaments();
+  test_meet_pairs();
   test_millis_wrap();
   test_blink_survives_clips();
   test_nonfinite_inputs();
