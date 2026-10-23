@@ -85,8 +85,7 @@ def bom():
 def cpl():
     """CPL (координаты монтажа) из позиционного файла KiCad в колонки JLCPCB."""
     raw = os.path.join(OUT, "work", NAME + "-pos.csv")
-    kicad("pcb", "export", "pos", "--side", "both", "--format", "csv", "--units", "mm",
-          "--exclude-dnp", "-o", raw, PCB)
+    kicad("pcb", "export", "pos", "--side", "both", "--format", "csv", "--units", "mm", "-o", raw, PCB)
     parts = {p["ref"]: p for p in netlist.parts()}
     path = os.path.join(OUT, NAME + "-cpl-jlcpcb.csv")
     with open(raw) as fin, open(path, "w", newline="") as fout:
