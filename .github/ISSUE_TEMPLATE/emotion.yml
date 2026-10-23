@@ -1,0 +1,30 @@
+name: Новая эмоция
+description: Идея эмоции или реакции персонажа
+title: "Эмоция: "
+labels: ["эмоции"]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: Название
+      placeholder: "Например: «Чихает от пыли»"
+    validations:
+      required: true
+  - type: textarea
+    id: when
+    attributes:
+      label: Когда появляется
+      description: Какая ситуация или событие датчиков её вызывает
+      placeholder: "Холодно и брелок встряхнули"
+    validations:
+      required: true
+  - type: textarea
+    id: look
+    attributes:
+      label: Как выглядит
+      description: Глаза, рот, брови, значки, движение. Можно приложить набросок 128×64
+  - type: textarea
+    id: motion
+    attributes:
+      label: Анимация
+      description: Что двигается и сколько длится

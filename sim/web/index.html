@@ -1,0 +1,496 @@
+<title>Симулятор брелока-компаньона</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Silkscreen&family=Unbounded:wght@500;700&display=swap">
+<style>
+  /* Верстак: слева модуль экрана как на столе, справа панель стенда с переключателями. */
+  :root {
+    --bg: #eef1f5;
+    --panel: #ffffff;
+    --ink: #141920;
+    --muted: #5a6574;
+    --line: #d6dce4;
+    --chip: #e6ebf2;
+    --accent: #1c4ea6;
+    --accent-ink: #ffffff;
+    --warn: #b4521f;
+    --dirty: #e0483b;
+    /* Цвета самого модуля одинаковы в обеих темах: это физический предмет. */
+    --pcb: #1d3f8f;
+    --pcb-edge: #142f6c;
+    --glass: #050607;
+    --silk: #e8eef7;
+    --pin: #c7a35a;
+    --pixel: #f4f7fa;
+    --pixel-off: #101317;
+    --f-display: "Unbounded", "Arial Black", system-ui, sans-serif;
+    --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+    --f-silk: "Silkscreen", "JetBrains Mono", monospace;
+    --r: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c0f14; --panel: #141920; --ink: #e6ebf2; --muted: #8e98a7; --line: #262d38;
+      --chip: #1c232d; --accent: #6f9cec; --accent-ink: #0c0f14; --warn: #e08a52; --dirty: #ff6b5e;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c0f14; --panel: #141920; --ink: #e6ebf2; --muted: #8e98a7; --line: #262d38;
+    --chip: #1c232d; --accent: #6f9cec; --accent-ink: #0c0f14; --warn: #e08a52; --dirty: #ff6b5e;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 15px;
+    line-height: 1.5;
+    padding-block: 20px 40px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 20px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+  h1 { font-family: var(--f-display); font-weight: 700; font-size: clamp(22px, 3.2vw, 30px); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+  header p { margin: 0; color: var(--muted); font-size: 14px; }
+  .bench {
+    display: grid; grid-template-columns: minmax(0, 520px) minmax(0, 1fr); gap: 20px; align-items: start;
+    grid-template-areas: "dev panel" "info panel";
+  }
+  .readout { grid-area: info; display: grid; gap: 14px; }
+  @media (max-width: 900px) {
+    .bench { grid-template-columns: minmax(0, 1fr); grid-template-areas: "dev" "panel" "info"; }
+  }
+
+  /* ---- Модуль экрана ---- */
+  .device { grid-area: dev; display: grid; gap: 10px; }
+  /* На телефоне экран закреплён сверху: лицо видно, пока нажимаешь кнопки ниже. */
+  @media (max-width: 900px) {
+    .device { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 8px; }
+    .device .hint { display: none; }
+    body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+  }
+  .module {
+    position: relative;
+    background: var(--pcb);
+    border: 2px solid var(--pcb-edge);
+    border-radius: 8px;
+    padding: 34px 6% 26px;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.08) inset, 0 10px 24px rgba(10, 20, 40, 0.18);
+  }
+  .module::before, .module::after {
+    content: "";
+    position: absolute;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--bg);
+    box-shadow: 0 0 0 3px var(--pin) inset;
+    top: 10px;
+  }
+  .module::before { left: 10px; }
+  .module::after { right: 10px; }
+  .holes-bottom { position: absolute; left: 10px; right: 10px; bottom: 8px; display: flex; justify-content: space-between; pointer-events: none; }
+  .holes-bottom i { width: 14px; height: 14px; border-radius: 50%; background: var(--bg); box-shadow: 0 0 0 3px var(--pin) inset; }
+  .pins { position: absolute; top: 6px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; }
+  .pins span { display: grid; justify-items: center; gap: 2px; font-family: var(--f-silk); font-size: 9px; color: var(--silk); letter-spacing: 0.06em; }
+  .pins span::before { content: ""; width: 9px; height: 9px; border-radius: 2px; background: var(--pin); }
+  .glass { background: var(--glass); border-radius: 4px; padding: 3.5% 3.5%; box-shadow: 0 0 0 1px #000 inset; }
+  canvas { display: block; width: 100%; height: auto; aspect-ratio: 2 / 1; image-rendering: pixelated; cursor: pointer; touch-action: manipulation; border-radius: 2px; }
+  .silk-note { position: absolute; bottom: 7px; left: 50%; transform: translateX(-50%); font-family: var(--f-silk); font-size: 9px; color: var(--silk); opacity: 0.8; white-space: nowrap; }
+  .hint { margin: 0; font-size: 13px; color: var(--muted); }
+
+  .now { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; display: grid; gap: 6px; }
+  .now-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .now h2 { font-family: var(--f-display); font-weight: 500; font-size: 20px; margin: 0; text-wrap: balance; }
+  .mono { font-family: var(--f-mono); font-size: 12.5px; color: var(--muted); }
+  .cat-chip { font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+  .now p { margin: 0; font-size: 14px; max-width: 62ch; }
+  .why { color: var(--muted); }
+
+  .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  @media (max-width: 560px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; }
+  .stat b { display: block; font-family: var(--f-mono); font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 12px; color: var(--muted); }
+  .mood { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 16px; display: grid; gap: 7px; }
+  .mood h3, .panel h3 { margin: 0 0 2px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .bar { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 10px; font-size: 13px; }
+  .track { position: relative; height: 8px; border-radius: 4px; background: var(--chip); overflow: hidden; }
+  .fill { position: absolute; top: 0; bottom: 0; left: 0; background: var(--accent); border-radius: 4px; transition: width 0.4s, left 0.4s; }
+
+  /* ---- Панель управления ---- */
+  .panel { grid-area: panel; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 16px; min-width: 0; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; background: var(--bg); }
+  .seg button { border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 14px; padding: 6px 14px; border-radius: 999px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  .clock { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+  .clock input { width: 150px; accent-color: var(--accent); }
+  .clock output { font-family: var(--f-mono); font-variant-numeric: tabular-nums; min-width: 44px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); }
+  .tabs button { border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 500; padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .group { display: grid; gap: 8px; }
+  .group + .group { margin-top: 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    border: 1px solid transparent; background: var(--chip); color: var(--ink);
+    font: inherit; font-size: 13.5px; padding: 6px 11px; border-radius: 999px; cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .chip:hover { border-color: var(--accent); }
+  .chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  .chip.event { border-radius: 8px; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .search { width: 100%; max-width: 360px; font: inherit; font-size: 14px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .count { font-size: 13px; color: var(--muted); }
+  .checks { display: grid; gap: 10px; }
+  .checks label { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; cursor: pointer; }
+  .checks input { margin-top: 3px; accent-color: var(--accent); }
+  .checks small { display: block; color: var(--muted); font-size: 12.5px; }
+  .foot { font-size: 13px; color: var(--muted); max-width: 80ch; }
+  @media (prefers-reduced-motion: reduce) { .fill { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Брелок-компаньон</h1>
+    <p>Симулятор лица: тот же движок, что пойдёт в прошивку, собранный в WebAssembly. Экран 128×64, белый OLED 0.96″.</p>
+  </header>
+
+  <main class="bench">
+    <section class="device" aria-label="Экран брелока">
+      <div class="module">
+        <div class="pins" aria-hidden="true"><span>GND</span><span>VCC</span><span>SCL</span><span>SDA</span></div>
+        <div class="glass"><canvas id="oled" width="1024" height="512" aria-label="Экран 128 на 64 пикселя. Нажмите, чтобы тапнуть по брелоку."></canvas></div>
+        <div class="holes-bottom" aria-hidden="true"><i></i><i></i></div>
+        <div class="silk-note" aria-hidden="true">SSD1306 128x64 I2C 0x3C</div>
+      </div>
+      <p class="hint">Нажмите на экран — это тап по брелоку. Два быстрых нажатия — двойной тап, много подряд — он начнёт злиться.</p>
+    </section>
+
+    <section class="readout" aria-label="Что происходит">
+      <div class="now" aria-live="polite">
+        <div class="now-top"><h2 id="nowName">…</h2><span class="mono" id="nowId"></span><span class="cat-chip" id="nowCat"></span></div>
+        <p id="nowWhen"></p>
+        <p class="why" id="nowWhy"></p>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><b id="stFps">0</b><span>кадров/с на экран</span></div>
+        <div class="stat"><b id="stBytes">0</b><span>байт/с по I2C</span></div>
+        <div class="stat"><b id="stBus">0%</b><span>занятость шины 400 кГц</span></div>
+        <div class="stat"><b id="stLit">0%</b><span>горящих пикселей</span></div>
+      </div>
+
+      <div class="mood">
+        <h3>Настроение</h3>
+        <div class="bar"><span>Радость</span><div class="track"><div class="fill" id="m0"></div></div></div>
+        <div class="bar"><span>Бодрость</span><div class="track"><div class="fill" id="m2"></div></div></div>
+        <div class="bar"><span>Скука</span><div class="track"><div class="fill" id="m3"></div></div></div>
+        <div class="bar"><span>Раздражение</span><div class="track"><div class="fill" id="m4"></div></div></div>
+        <div class="bar"><span>Привязанность</span><div class="track"><div class="fill" id="m5"></div></div></div>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Управление">
+      <div class="row">
+        <div class="seg" role="group" aria-label="Режим">
+          <button id="modeAuto" aria-pressed="true">Сам живёт</button>
+          <button id="modeManual" aria-pressed="false">Ручной</button>
+        </div>
+        <div class="seg" role="group" aria-label="Скорость времени">
+          <button data-speed="1" aria-pressed="true">×1</button>
+          <button data-speed="4" aria-pressed="false">×4</button>
+          <button data-speed="16" aria-pressed="false">×16</button>
+        </div>
+        <label class="clock">Время суток <input id="clock" type="range" min="0" max="1425" step="15"><output id="clockOut">12:00</output></label>
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button role="tab" data-tab="events" aria-selected="true">Ситуации</button>
+        <button role="tab" data-tab="emotions" aria-selected="false">Эмоции <span id="exprCount"></span></button>
+        <button role="tab" data-tab="clips" aria-selected="false">Жесты</button>
+        <button role="tab" data-tab="settings" aria-selected="false">Настройки</button>
+      </div>
+
+      <div data-pane="events" id="paneEvents"></div>
+      <div data-pane="emotions" hidden>
+        <div class="row" style="margin-bottom:12px">
+          <input id="search" class="search" type="search" placeholder="Найти: смех, сон, ленни, sad…" aria-label="Поиск эмоции">
+          <span class="count" id="foundCount"></span>
+        </div>
+        <div id="paneEmotions"></div>
+      </div>
+      <div data-pane="clips" hidden><div class="chips" id="paneClips"></div></div>
+      <div data-pane="settings" hidden>
+        <div class="checks">
+          <label><input type="checkbox" id="optDrift" checked><span>Дрейф против выгорания<small>Лицо сдвигается на 1 px раз в 20–40 секунд, чтобы пиксели не выгорали.</small></span></label>
+          <label><input type="checkbox" id="optIdle" checked><span>Моргание, взгляд и фирменные жесты<small>Без них лицо застывает — так видно, сколько кадров даёт сама эмоция.</small></span></label>
+          <label><input type="checkbox" id="optScan"><span>Ретро-режим через строку<small>Горит каждая вторая строка: ретро-вид, меньше выгорания и тока.</small></span></label>
+          <label><input type="checkbox" id="optFlip"><span>Экран вверх ногами<small>На устройстве это две команды контроллеру, без затрат.</small></span></label>
+          <label><input type="checkbox" id="optDirty"><span>Подсвечивать, что уходит по шине<small>Красные рамки — изменённые окна страниц: только они отправляются на экран.</small></span></label>
+          <label><input type="checkbox" id="optGrid" checked><span>Сетка пикселей<small>Зазоры между пикселями, как на настоящей панели.</small></span></label>
+        </div>
+      </div>
+      <p class="foot">Когда лицо не меняется, движок не рисует и не шлёт ничего: экран держит картинку сам, а процессор спит до следующего моргания или события. Цифры слева — оценка нагрузки на шину для прошивки.</p>
+    </section>
+  </main>
+</div>
+
+<script>
+(async () => {
+  const WASM_B64 = "__FACE_WASM_BASE64__";
+  const bin = Uint8Array.from(atob(WASM_B64), c => c.charCodeAt(0));
+  const { instance } = await WebAssembly.instantiate(bin, {});
+  const E = instance.exports;
+  E.__wasm_call_ctors();
+  const dec = new TextDecoder();
+  const str = p => { const m = new Uint8Array(E.memory.buffer); let q = p; while (m[q]) q++; return dec.decode(m.subarray(p, q)); };
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem("fk." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem("fk." + k, JSON.stringify(v)); } catch {} },
+  };
+
+  // ---- Время симуляции ----
+  let speed = 1, sim = 0, last = performance.now(), due = 0;
+  const now = () => Math.floor(sim);
+  E.fe_init((Math.random() * 1e9) | 0, 0);
+
+  const exprs = [...Array(E.fe_expr_count()).keys()].map(i => ({
+    i, id: str(E.fe_expr_id(i)), name: str(E.fe_expr_name(i)), when: str(E.fe_expr_when(i)), cat: E.fe_expr_cat(i),
+  }));
+  const cats = [...Array(E.fe_cat_count()).keys()].map(c => str(E.fe_cat_name(c)));
+  const events = [...Array(E.fe_event_count()).keys()].map(i => ({ i, id: str(E.fe_event_id(i)), name: str(E.fe_event_name(i)) }));
+  const evIndex = Object.fromEntries(events.map(e => [e.id, e.i]));
+  document.getElementById("exprCount").textContent = exprs.length;
+
+  // ---- Экран ----
+  const cv = document.getElementById("oled");
+  const ctx = cv.getContext("2d");
+  const glow = document.createElement("canvas");
+  glow.width = 128; glow.height = 64;
+  const gctx = glow.getContext("2d");
+  const css = getComputedStyle(document.documentElement);
+  const PIX = css.getPropertyValue("--pixel").trim(), OFF = css.getPropertyValue("--pixel-off").trim();
+  const DIRTY = () => getComputedStyle(document.documentElement).getPropertyValue("--dirty").trim();
+  let showDirty = false, showGrid = true, dirtyShown = [], dirtyAt = 0, litPct = 0;
+
+  function resize() {
+    const w = cv.clientWidth || 480;
+    const cell = Math.max(2, Math.floor(w * (window.devicePixelRatio || 1) / 128));
+    cv.width = cell * 128; cv.height = cell * 64;
+    draw();
+  }
+  function draw() {
+    const fb = new Uint8Array(E.memory.buffer, E.fe_frame(), 1024);
+    const cell = cv.width / 128, gap = showGrid && cell >= 4 ? Math.max(1, Math.round(cell * 0.12)) : 0;
+    ctx.fillStyle = "#050607"; ctx.fillRect(0, 0, cv.width, cv.height);
+    const img = gctx.createImageData(128, 64);
+    let lit = 0;
+    for (let y = 0; y < 64; y++) {
+      const row = (y >> 3) * 128, bit = 1 << (y & 7);
+      for (let x = 0; x < 128; x++) {
+        const on = fb[row + x] & bit;
+        if (on) { lit++; const o = (y * 128 + x) * 4; img.data[o] = img.data[o + 1] = img.data[o + 2] = 255; img.data[o + 3] = 255; }
+        if (showGrid || on) {
+          ctx.fillStyle = on ? PIX : OFF;
+          ctx.fillRect(x * cell, y * cell, cell - gap, cell - gap);
+        }
+      }
+    }
+    litPct = lit / 8192 * 100;
+    // Лёгкое свечение белого OLED.
+    gctx.putImageData(img, 0, 0);
+    ctx.save();
+    ctx.globalAlpha = 0.28; ctx.imageSmoothingEnabled = true;
+    if ("filter" in ctx) ctx.filter = `blur(${Math.max(1, cell * 0.6)}px)`;
+    ctx.globalCompositeOperation = "lighter";
+    ctx.drawImage(glow, 0, 0, cv.width, cv.height);
+    ctx.restore();
+    if (showDirty && performance.now() - dirtyAt < 160) {
+      ctx.strokeStyle = DIRTY(); ctx.lineWidth = Math.max(1, cell * 0.25);
+      for (const w of dirtyShown) ctx.strokeRect(w.x0 * cell, w.page * 8 * cell, (w.x1 - w.x0 + 1) * cell, 8 * cell);
+    }
+  }
+  new ResizeObserver(resize).observe(cv);
+
+  // Тап по экрану.
+  cv.addEventListener("pointerdown", () => { E.fe_event(evIndex.tap, now()); due = 0; });
+
+  // ---- Режим, скорость, часы ----
+  let auto = true;
+  const btnAuto = document.getElementById("modeAuto"), btnManual = document.getElementById("modeManual");
+  function setAuto(v) { auto = v; E.fe_bh_auto(v ? 1 : 0); btnAuto.setAttribute("aria-pressed", v); btnManual.setAttribute("aria-pressed", !v); store.set("auto", v); due = 0; }
+  btnAuto.onclick = () => setAuto(true);
+  btnManual.onclick = () => setAuto(false);
+  setAuto(store.get("auto", true));
+  document.querySelectorAll("[data-speed]").forEach(b => b.onclick = () => {
+    speed = +b.dataset.speed;
+    document.querySelectorAll("[data-speed]").forEach(x => x.setAttribute("aria-pressed", x === b));
+  });
+  const clock = document.getElementById("clock"), clockOut = document.getElementById("clockOut");
+  const d = new Date();
+  clock.value = Math.floor((d.getHours() * 60 + d.getMinutes()) / 15) * 15;
+  function setClock() {
+    const m = +clock.value;
+    clockOut.value = String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+    E.fe_bh_set_clock(m); due = 0;
+  }
+  clock.oninput = setClock; setClock();
+
+  // ---- Вкладки ----
+  const tabs = document.querySelectorAll("[role=tab]");
+  function openTab(name) {
+    tabs.forEach(t => t.setAttribute("aria-selected", t.dataset.tab === name));
+    document.querySelectorAll("[data-pane]").forEach(p => p.hidden = p.dataset.pane !== name);
+    store.set("tab", name);
+  }
+  tabs.forEach(t => t.onclick = () => openTab(t.dataset.tab));
+  openTab(store.get("tab", "events"));
+
+  // ---- Ситуации ----
+  const groups = [
+    ["Касания", ["tap", "double_tap", "button", "button_long"]],
+    ["Движение", ["pick_up", "walk", "run", "still", "shake", "shake_hard", "free_fall", "impact", "upside_down", "upright"]],
+    ["Звук", ["speech", "music", "loud", "quiet"]],
+    ["Свет", ["dark", "light", "bright"]],
+    ["Температура", ["cold", "hot", "temp_ok"]],
+    ["Питание", ["charge_start", "charge_full", "charge_stop", "battery_low", "battery_critical"]],
+  ];
+  const paneEv = document.getElementById("paneEvents");
+  for (const [title, ids] of groups) {
+    const g = document.createElement("div"); g.className = "group";
+    g.innerHTML = `<h3>${title}</h3>`;
+    const chips = document.createElement("div"); chips.className = "chips";
+    for (const id of ids) {
+      const e = events[evIndex[id]];
+      const b = document.createElement("button"); b.className = "chip event"; b.textContent = e.name;
+      b.onclick = () => {
+        if (id === "free_fall") { E.fe_event(e.i, now()); setTimeout(() => { E.fe_event(evIndex.impact, now()); due = 0; }, 450 / speed); }
+        else E.fe_event(e.i, now());
+        due = 0;
+      };
+      chips.append(b);
+    }
+    g.append(chips); paneEv.append(g);
+  }
+
+  // ---- Эмоции ----
+  const paneEm = document.getElementById("paneEmotions");
+  const chipByExpr = [];
+  cats.forEach((title, c) => {
+    const list = exprs.filter(x => x.cat === c);
+    if (!list.length) return;
+    const g = document.createElement("div"); g.className = "group"; g.dataset.cat = c;
+    g.innerHTML = `<h3>${title} · ${list.length}</h3>`;
+    const chips = document.createElement("div"); chips.className = "chips";
+    for (const x of list) {
+      const b = document.createElement("button"); b.className = "chip"; b.textContent = x.name;
+      b.title = x.id + " — " + x.when; b.setAttribute("aria-pressed", "false");
+      b.dataset.search = (x.name + " " + x.id + " " + x.when).toLowerCase();
+      b.onclick = () => { E.fe_set_expr(x.i, now(), -1); if (auto) E.fe_bh_hold_manual(now(), 12000); due = 0; };
+      chipByExpr[x.i] = b; chips.append(b);
+    }
+    g.append(chips); paneEm.append(g);
+  });
+  const search = document.getElementById("search"), found = document.getElementById("foundCount");
+  search.oninput = () => {
+    const q = search.value.trim().toLowerCase(); let n = 0;
+    paneEm.querySelectorAll(".group").forEach(g => {
+      let any = false;
+      g.querySelectorAll(".chip").forEach(b => { const ok = !q || b.dataset.search.includes(q); b.hidden = !ok; if (ok) { any = true; n++; } });
+      g.hidden = !any;
+    });
+    found.textContent = q ? `найдено: ${n}` : "";
+  };
+
+  // ---- Жесты ----
+  const clipNames = { blink: "Моргнуть", wink: "Подмигнуть", nod: "Кивнуть", headshake: "Мотнуть головой", startle: "Вздрогнуть",
+    yawn: "Зевнуть", double_take: "Двойной взгляд", sneeze: "Чихнуть", look_around: "Осмотреться", hop: "Подпрыгнуть",
+    shiver: "Задрожать", peek: "Выглянуть снизу", glitch: "Сбой экрана", eye_roll: "Закатить глаза", sigh: "Вздохнуть",
+    shake_off: "Отряхнуться", boop: "Тык" };
+  const paneClips = document.getElementById("paneClips");
+  for (let i = 0; i < E.fe_clip_count(); i++) {
+    const id = str(E.fe_clip_id(i));
+    const b = document.createElement("button"); b.className = "chip event"; b.textContent = clipNames[id] || id;
+    b.onclick = () => { E.fe_play_clip(i, now()); due = 0; };
+    paneClips.append(b);
+  }
+
+  // ---- Настройки ----
+  const opt = (id, n, key, def) => {
+    const el = document.getElementById(id);
+    el.checked = store.get(key, def);
+    const apply = () => { E.fe_set_option(n, el.checked ? 1 : 0); store.set(key, el.checked); due = 0; };
+    el.onchange = apply; apply();
+  };
+  opt("optDrift", 0, "drift", true); opt("optIdle", 1, "idle", true); opt("optScan", 2, "scan", false); opt("optFlip", 3, "flip", false);
+  const optDirty = document.getElementById("optDirty"), optGrid = document.getElementById("optGrid");
+  optDirty.checked = store.get("dirty", false); showDirty = optDirty.checked;
+  optDirty.onchange = () => { showDirty = optDirty.checked; store.set("dirty", showDirty); };
+  optGrid.checked = store.get("grid", true); showGrid = optGrid.checked;
+  optGrid.onchange = () => { showGrid = optGrid.checked; store.set("grid", showGrid); draw(); };
+
+  // ---- Состояние и статистика ----
+  const el = id => document.getElementById(id);
+  let lastExpr = -1, samples = [];
+  function updateInfo() {
+    const cur = E.fe_current();
+    if (cur !== lastExpr) {
+      const x = exprs[cur];
+      el("nowName").textContent = x.name; el("nowId").textContent = x.id; el("nowCat").textContent = cats[x.cat];
+      el("nowWhen").textContent = "Когда: " + x.when;
+      if (chipByExpr[lastExpr]) chipByExpr[lastExpr].setAttribute("aria-pressed", "false");
+      if (chipByExpr[cur]) chipByExpr[cur].setAttribute("aria-pressed", "true");
+      lastExpr = cur;
+    }
+    const why = str(E.fe_bh_reason());
+    el("nowWhy").textContent = why ? "Почему: " + why : "";
+    samples.push({ t: sim, f: E.fe_stats_frames(), b: E.fe_stats_bytes() });
+    while (samples.length > 2 && sim - samples[0].t > 3000) samples.shift();
+    const a = samples[0], z = samples[samples.length - 1], dt = (z.t - a.t) / 1000;
+    if (dt > 0.3) {
+      const fps = (z.f - a.f) / dt, bps = (z.b - a.b) / dt;
+      el("stFps").textContent = fps.toFixed(1);
+      el("stBytes").textContent = Math.round(bps);
+      el("stBus").textContent = (((bps + fps * 24) * 9) / 400000 * 100).toFixed(1) + "%";
+    }
+    el("stLit").textContent = litPct.toFixed(1) + "%";
+    const setBar = (n, v, signed) => {
+      const f = el("m" + n);
+      if (signed) { const w = Math.abs(v) * 50; f.style.left = (v < 0 ? 50 - w : 50) + "%"; f.style.width = w + "%"; }
+      else { f.style.left = "0"; f.style.width = (v * 100) + "%"; }
+    };
+    setBar(0, E.fe_mood(0), true); [2, 3, 4, 5].forEach(n => setBar(n, E.fe_mood(n), false));
+  }
+
+  // ---- Главный цикл: как прошивка, просыпаемся только когда движок попросил ----
+  let infoAt = 0;
+  function tick(t) {
+    const dt = Math.min(250, t - last); last = t;
+    sim += dt * speed;
+    if (sim >= due) {
+      E.fe_bh_update(now());
+      if (E.fe_update(now())) {
+        dirtyShown = [];
+        for (let i = 0; i < E.fe_dirty_count(); i++) {
+          const w = E.fe_dirty_window(i);
+          dirtyShown.push({ page: w >> 16, x0: (w >> 8) & 255, x1: w & 255 });
+        }
+        dirtyAt = t;
+        draw();
+      } else if (showDirty && t - dirtyAt < 200) draw();
+      due = Math.min(E.fe_next(), E.fe_bh_next());
+    }
+    if (t - infoAt > 250) { updateInfo(); infoAt = t; }
+    requestAnimationFrame(tick);
+  }
+  resize();
+  requestAnimationFrame(tick);
+})();
+</script>

@@ -1,0 +1,16 @@
+# Сборка
+/build/
+/build-*/
+/sim/web/dist/
+*.o
+*.wasm
+
+# Локальные превью
+/out/
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
