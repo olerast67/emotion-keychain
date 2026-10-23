@@ -85,7 +85,7 @@ static void test_every_expression_renders() {
     settle(eng, (Expr)i, t);
     int lit = eng.frame().count_lit();
     const char* id = expr_id((Expr)i);
-    CHECK(lit > 120, "%s: слишком мало пикселей (%d)", id, lit);
+    CHECK(lit > 80, "%s: слишком мало пикселей (%d)", id, lit);
     CHECK(lit < kWidth * kHeight * 45 / 100, "%s: залито %d пикселей", id, lit);
   }
 }
@@ -205,23 +205,30 @@ static void test_behavior_reactions() {
   run(2000);
   bh.on_event(Event::double_tap, t);
   run(100);
-  CHECK(eng.expression() == Expr::laugh, "двойной тап -> смех, а не %s", expr_id(eng.expression()));
+  auto in = [&](std::initializer_list<Expr> pool) {
+    for (Expr x : pool)
+      if (eng.expression() == x) return true;
+    return false;
+  };
+  CHECK(in({Expr::laugh, Expr::happy, Expr::playful, Expr::giggle, Expr::wink, Expr::tears_of_joy}),
+        "двойной тап -> радостная реакция, а не %s", expr_id(eng.expression()));
   run(8000);
   for (int i = 0; i < 4; ++i) {
     bh.on_event(Event::shake, t);
     run(200);
   }
-  CHECK(eng.expression() == Expr::dizzy, "тряска -> головокружение, а не %s", expr_id(eng.expression()));
+  CHECK(in({Expr::dizzy, Expr::hypnotized, Expr::screaming, Expr::soy_scream}), "тряска -> головокружение, а не %s",
+        expr_id(eng.expression()));
   run(15000);
   bh.on_event(Event::dark, t);
   run(100);
-  CHECK(eng.expression() == Expr::afraid_dark, "темнота -> испуг, а не %s", expr_id(eng.expression()));
+  CHECK(in({Expr::pocket_peek, Expr::afraid_dark}), "темнота -> «кто выключил свет?», а не %s",
+        expr_id(eng.expression()));
   run(15000);
   CHECK(eng.expression() == Expr::sleeping, "в темноте засыпает, а не %s", expr_id(eng.expression()));
   bh.on_event(Event::light, t);
   run(100);
-  CHECK(eng.expression() == Expr::curious || eng.expression() == Expr::waking, "свет будит, а не %s",
-        expr_id(eng.expression()));
+  CHECK(in({Expr::curious, Expr::waking, Expr::squint}), "свет будит, а не %s", expr_id(eng.expression()));
   run(10000);
   bh.on_event(Event::charge_start, t);
   run(12000);

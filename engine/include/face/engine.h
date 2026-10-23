@@ -36,7 +36,8 @@ namespace face {
   X(glitch)               \
   X(eye_roll)             \
   X(sigh)                 \
-  X(shake_off)
+  X(shake_off)            \
+  X(boop)
 
 enum class Clip : uint8_t {
 #define FACE_X(n) n,
@@ -95,6 +96,8 @@ class FaceEngine {
   void schedule_blink(uint32_t now);
   void schedule_gaze(uint32_t now);
   void apply_motion(uint32_t now, uint32_t& period);
+  void apply_accent(uint32_t now, uint32_t& period);
+  void schedule_accent(uint32_t from);
   void apply_clip(uint32_t now, uint32_t& period);
   void overlays_update(uint32_t now, uint32_t& period);
 
@@ -128,6 +131,11 @@ class FaceEngine {
   uint16_t g_ms_ = 80;
   bool g_moving_ = false;
 
+  // Фирменное движение эмоции.
+  uint32_t accent_next_ = 0, accent_t0_ = 0;
+  bool accent_on_ = false;
+  float accent_sign_ = 1;
+
   // Клип.
   Clip clip_ = Clip::None;
   uint32_t clip_t0_ = 0;
@@ -141,7 +149,7 @@ class FaceEngine {
   // Оверлеи.
   float ov_alpha_[(int)Overlay::Count] = {};
   uint32_t ov_t0_[(int)Overlay::Count] = {};
-  uint32_t ov_target_ = 0;
+  uint64_t ov_target_ = 0;
   uint32_t ov_last_ = 0;
 
   Framebuffer front_, back_;

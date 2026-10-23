@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  engine:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Зависимости
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libsdl2-dev clang lld
+
+      - name: Сборка
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Тесты движка
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Каталог эмоций совпадает с кодом
+        run: |
+          ./build/facegen catalog /tmp/emotions.md
+          diff -u docs/emotions.md /tmp/emotions.md
+
+      - name: Веб-симулятор
+        run: sim/web/build.sh
+
+      - name: Превью
+        run: |
+          mkdir -p out
+          ./build/facegen sheet out/emotions_sheet.gif --scale 2 --cols 8
+          ./build/facegen bench --seconds 30 > out/bench.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: face-simulator
+          path: |
+            sim/web/dist/index.html
+            out/emotions_sheet.gif
+            out/bench.txt

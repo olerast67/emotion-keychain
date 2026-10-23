@@ -92,11 +92,21 @@ class Behavior {
 
   // Состояние окружения (выставляется событиями, можно читать).
   bool dark = false, charging = false, upside = false, music_on = false, speech_on = false;
-  bool cold = false, hot = false, moving = false;
+  bool cold = false, hot = false, moving = false, running = false;
   uint8_t battery = 2;  // 0 — критично, 1 — мало, 2 — норма
 
  private:
+  struct Option {
+    Expr expr;
+    float weight;
+  };
   void react(Expr e, uint32_t now, uint32_t ms, const char* why, Clip clip = Clip::None);
+  // Взвешенный выбор из пула вариантов, недавние реакции выпадают реже.
+  Expr pick(const Option* opts, int n);
+  template <int N>
+  Expr pick(const Option (&opts)[N]) {
+    return pick(opts, N);
+  }
   void decay(uint32_t now);
   Expr choose_base(uint32_t now);
   void idle_action(uint32_t now);
@@ -120,6 +130,11 @@ class Behavior {
   uint32_t dark_since_ = 0;
   uint32_t upside_since_ = 0;
   uint32_t fall_at_ = 0;
+  uint32_t falls_[3] = {};
+  uint32_t loud_at_ = 0;
+  uint32_t last_calling_ = 0;
+  uint32_t last_cyclops_ = 0;
+  Expr recent_react_[4] = {Expr::Count, Expr::Count, Expr::Count, Expr::Count};
   uint32_t tap_times_[8] = {};
   float shake_level_ = 0;
   uint8_t recent_idle_[4] = {255, 255, 255, 255};

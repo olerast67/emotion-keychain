@@ -151,6 +151,7 @@ uint16_t clip_duration_ms(Clip c) {
     case Clip::eye_roll: return 1300;
     case Clip::sigh: return 1500;
     case Clip::shake_off: return 650;
+    case Clip::boop: return 460;
     default: return 0;
   }
 }
@@ -194,7 +195,131 @@ void FaceEngine::set_expression(Expr e, uint32_t now_ms, int transition_ms) {
   schedule_blink(now_ms + tr_ms_);
   g_moving_ = false;
   schedule_gaze(now_ms + tr_ms_ / 2);
+  accent_on_ = false;
+  // Первый жест — пораньше, чтобы новая эмоция сразу ожила.
+  accent_next_ = now_ms + tr_ms_ + (uint32_t)((float)preset_->accent_ms * rng_.range(0.3f, 0.7f));
   next_update_ = now_ms;
+}
+
+void FaceEngine::schedule_accent(uint32_t from) {
+  accent_next_ = from + (uint32_t)((float)preset_->accent_ms * rng_.range(0.65f, 1.35f));
+}
+
+namespace {
+
+uint16_t accent_duration(Accent a) {
+  switch (a) {
+    case Accent::Breath: return 1400;
+    case Accent::Brows: return 650;
+    case Accent::Chatter: return 750;
+    case Accent::Squint: return 520;
+    case Accent::Hop: return 460;
+    case Accent::Tilt: return 1300;
+    case Accent::Look: return 1200;
+    case Accent::Wiggle: return 700;
+    case Accent::Pulse: return 520;
+    case Accent::Twitch: return 380;
+    case Accent::Nod: return 640;
+    case Accent::Shake: return 560;
+    case Accent::Glint: return 650;
+    case Accent::Grin: return 800;
+    case Accent::Sway: return 1600;
+    case Accent::Bob: return 1000;
+    case Accent::None: return 0;
+  }
+  return 0;
+}
+
+}  // namespace
+
+void FaceEngine::apply_accent(uint32_t now, uint32_t& period) {
+  if (!preset_ || preset_->accent == Accent::None || !opt_.idle_motion) return;
+  if (!accent_on_) {
+    if (now < accent_next_ || tr_active_ || clip_active_) return;
+    accent_on_ = true;
+    accent_t0_ = now;
+    accent_sign_ = rng_.chance(0.5f) ? 1.0f : -1.0f;
+  }
+  const Accent a = preset_->accent;
+  const float k = (float)(now - accent_t0_) / (float)accent_duration(a);
+  if (k >= 1.0f) {
+    accent_on_ = false;
+    schedule_accent(now);
+    return;
+  }
+  const float b = bump(k);
+  Face& c = composed_;
+  uint32_t p = opt_.frame_ms;
+  switch (a) {
+    case Accent::None: break;
+    case Accent::Breath:
+      for (int i = 0; i < 2; ++i) c.eye[i].sy *= 1.0f + 0.05f * b;
+      c.mouth.sx *= 1.0f + 0.06f * b;
+      p = 100;
+      break;
+    case Accent::Brows: {
+      bool has = false;
+      for (int i = 0; i < 2; ++i) {
+        if (c.brow[i].len > 0.5f) {
+          c.brow[i].gap += 3.0f * b;
+          has = true;
+        }
+      }
+      if (!has)
+        for (int i = 0; i < 2; ++i) c.eye[i].sy *= 1.0f + 0.1f * b;
+      break;
+    }
+    case Accent::Chatter: {
+      const float ch = fabs_(fsin(kPi * 3.0f * k)) * (1.0f - k * 0.3f);
+      if (c.mouth.kind == MouthKind::Curve || c.mouth.kind == MouthKind::Scream || c.mouth.kind == MouthKind::Rage)
+        c.mouth.open += 4.0f * ch;
+      else
+        c.mouth.h *= 1.0f + 0.35f * ch;
+      p = 50;
+      break;
+    }
+    case Accent::Squint:
+      for (int i = 0; i < 2; ++i) c.eye[i].squash *= 1.0f - 0.28f * b;
+      c.mouth.curve += 1.0f * b;
+      break;
+    case Accent::Hop: c.oy -= 3.0f * b; break;
+    case Accent::Tilt:
+      c.layout.tilt += 3.0f * accent_sign_ * envelope(k, 0.25f, 0.35f);
+      p = 66;
+      break;
+    case Accent::Look: c.gx = clampf(c.gx + 0.9f * accent_sign_ * envelope(k, 0.12f, 0.2f), -1.0f, 1.0f); break;
+    case Accent::Wiggle:
+      for (int i = 0; i < 2; ++i) c.eye[i].dx += 2.0f * fsin(kTau * 2.0f * k) * (1.0f - k);
+      break;
+    case Accent::Pulse:
+      for (int i = 0; i < 2; ++i) {
+        c.eye[i].sx *= 1.0f + 0.1f * b;
+        c.eye[i].sy *= 1.0f + 0.1f * b;
+      }
+      break;
+    case Accent::Twitch: c.eye[accent_sign_ > 0 ? 0 : 1].squash *= 1.0f - 0.55f * bump(frac(k * 2.0f)); break;
+    case Accent::Nod: c.oy += 2.0f * fabs_(fsin(kTau * k)); break;
+    case Accent::Shake: c.ox += 2.0f * fsin(kTau * 3.0f * k) * (1.0f - k); break;
+    case Accent::Glint:
+      for (int i = 0; i < 2; ++i) {
+        c.eye[i].pr *= 1.0f + 0.3f * b;
+        c.eye[i].gr *= 1.0f + 0.3f * b;
+      }
+      break;
+    case Accent::Grin:
+      c.mouth.sx *= 1.0f + 0.12f * b;
+      c.mouth.curve += 1.5f * b;
+      break;
+    case Accent::Sway:
+      c.ox += 2.0f * fsin(kTau * k);
+      p = 66;
+      break;
+    case Accent::Bob:
+      c.oy -= 1.5f * fsin(kPi * k);
+      p = 66;
+      break;
+  }
+  want(period, p);
 }
 
 void FaceEngine::play_clip(Clip c, uint32_t now_ms) {
@@ -582,6 +707,18 @@ void FaceEngine::apply_clip(uint32_t now, uint32_t& period) {
       }
       break;
     }
+    case Clip::boop: {
+      // «Тык!»: глаза сплющиваются на пару кадров и отскакивают.
+      const float hit = bump(clampf(ms / 120.0f, 0.0f, 1.0f));
+      const float rebound = bump(clampf((ms - 120.0f) / 340.0f, 0.0f, 1.0f));
+      for (int i = 0; i < 2; ++i) {
+        c.eye[i].squash *= 1.0f - 0.3f * hit + 0.06f * rebound;
+        c.eye[i].stretch *= 1.0f + 0.1f * hit;
+      }
+      c.oy += 2.0f * hit;
+      blink_on_ = false;
+      break;
+    }
     case Clip::shake_off: {
       c.ox += 5.0f * fsin(kTau * ms / 110.0f) * (1.0f - k);
       for (int i = 0; i < 2; ++i)
@@ -596,7 +733,7 @@ void FaceEngine::overlays_update(uint32_t now, uint32_t& period) {
   ov_last_ = now;
   const float step = dt / 180.0f;
   for (int i = 0; i < (int)Overlay::Count; ++i) {
-    const bool on = (ov_target_ >> i) & 1u;
+    const bool on = (ov_target_ >> i) & 1ull;
     float& a = ov_alpha_[i];
     if (on && a < 1.0f) {
       if (a <= 0.0f) ov_t0_[i] = now;
@@ -673,6 +810,7 @@ bool FaceEngine::update(uint32_t now) {
   }
   apply_motion(now, period);
   update_gaze(now, period);
+  apply_accent(now, period);
   update_blink(now, period);
   apply_clip(now, period);
 
@@ -768,6 +906,8 @@ bool FaceEngine::update(uint32_t now) {
     if (g > now && g < next) next = g;
   }
   if (opt_.drift && drift_next_ < next) next = drift_next_;
+  if (opt_.idle_motion && !accent_on_ && preset_->accent != Accent::None && accent_next_ > now && accent_next_ < next)
+    next = accent_next_;
   if (preset_->hold_ms) {
     uint32_t h = expr_t0_ + preset_->hold_ms;
     if (h < next) next = h;

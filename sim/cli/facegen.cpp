@@ -9,6 +9,7 @@
 //   facegen clip <emotion> <clip> out.gif [--scale 4]
 //   facegen demo out.gif [--scale 3] [--per 2.5]
 //   facegen bench [--seconds 60]
+//   facegen catalog [docs/emotions.md]
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -36,6 +37,7 @@ struct Args {
   bool raw = false;
   bool anim = false;
   bool drift = false;
+  std::string ids;  // --ids a,b,c — свой набор эмоций для листа
 };
 
 Args parse(int argc, char** argv) {
@@ -61,6 +63,8 @@ Args parse(int argc, char** argv) {
       a.anim = true;
     else if (s == "--drift")
       a.drift = true;
+    else if (s == "--ids")
+      a.ids = next();
     else
       a.pos.push_back(s);
   }
@@ -121,6 +125,36 @@ int cmd_list() {
   printf("\nКлипы:");
   for (int i = 0; i < kClipCount; ++i) printf(" %s", clip_id((Clip)i));
   printf("\n");
+  return 0;
+}
+
+// Каталог в Markdown: генерируется из пресетов, поэтому всегда совпадает с кодом.
+int cmd_catalog(const Args& a) {
+  FILE* f = a.pos.empty() ? stdout : fopen(a.pos[0].c_str(), "w");
+  if (!f) return 1;
+  fprintf(f,
+          "# Каталог эмоций\n\n"
+          "Файл создан командой `facegen catalog docs/emotions.md` из `engine/src/expressions.cpp`, "
+          "руками не править. Всего эмоций: %d.\n\n"
+          "![Все эмоции](img/emotions_sheet.gif)\n",
+          kExprCount);
+  for (int c = 0; c < (int)Category::Count; ++c) {
+    int n = 0;
+    for (int i = 0; i < kExprCount; ++i) n += (int)expression((Expr)i).cat == c;
+    if (!n) continue;
+    fprintf(f, "\n## %s (%d)\n\n| id | Эмоция | Когда появляется | Затем |\n|---|---|---|---|\n",
+            category_name((Category)c), n);
+    for (int i = 0; i < kExprCount; ++i) {
+      const Expression& x = expression((Expr)i);
+      if ((int)x.cat != c) continue;
+      if (x.hold_ms)
+        fprintf(f, "| `%s` | %s | %s | → `%s` через %.1f с |\n", x.id, x.name, x.when, expr_id(x.next),
+                x.hold_ms / 1000.0);
+      else
+        fprintf(f, "| `%s` | %s | %s | держится |\n", x.id, x.name, x.when);
+    }
+  }
+  if (f != stdout) fclose(f);
   return 0;
 }
 
@@ -220,8 +254,19 @@ int cmd_demo(const Args& a) {
 int cmd_sheet(const Args& a) {
   if (a.pos.empty()) return 2;
   std::vector<Expr> list;
-  for (int i = 0; i < kExprCount; ++i)
-    if (a.cat < 0 || (int)expression((Expr)i).cat == a.cat) list.push_back((Expr)i);
+  if (!a.ids.empty()) {
+    size_t p = 0;
+    while (p <= a.ids.size()) {
+      size_t q = a.ids.find(',', p);
+      if (q == std::string::npos) q = a.ids.size();
+      Expr e;
+      if (q > p && find_expr(a.ids.substr(p, q - p), &e)) list.push_back(e);
+      p = q + 1;
+    }
+  } else {
+    for (int i = 0; i < kExprCount; ++i)
+      if (a.cat < 0 || (int)expression((Expr)i).cat == a.cat) list.push_back((Expr)i);
+  }
   const int scale = a.scale > 0 ? a.scale : 2;
   const int cols = a.cols > 0 ? a.cols : 6;
   const int rows = ((int)list.size() + cols - 1) / cols;
@@ -316,11 +361,12 @@ void usage() {
       "facegen list\n"
       "facegen still <emotion> out.gif [--scale 6] [--raw]\n"
       "facegen anim <emotion> out.gif [--seconds 4] [--scale 4] [--seed 1] [--drift]\n"
-      "facegen sheet out.gif [--scale 2] [--cols 6] [--anim] [--seconds 4] [--cat N] [--raw]\n"
+      "facegen sheet out.gif [--scale 2] [--cols 6] [--anim] [--seconds 4] [--cat N] [--ids a,b] [--raw]\n"
       "facegen trans <from> <to> out.gif [--scale 4]\n"
       "facegen clip <emotion> <clip> out.gif [--scale 4]\n"
       "facegen demo out.gif [--scale 3] [--per 2.5] [--cat N]\n"
-      "facegen bench [--seconds 60]\n");
+      "facegen bench [--seconds 60]\n"
+      "facegen catalog [docs/emotions.md]\n");
 }
 
 }  // namespace
@@ -349,6 +395,8 @@ int main(int argc, char** argv) {
     rc = cmd_demo(a);
   else if (cmd == "bench")
     rc = cmd_bench(a);
+  else if (cmd == "catalog")
+    rc = cmd_catalog(a);
   if (rc == 2) usage();
   return rc;
 }

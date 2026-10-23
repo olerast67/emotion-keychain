@@ -1,5 +1,6 @@
 // Тонкая обёртка движка для WebAssembly: тот же код, что пойдёт в прошивку.
 // Собирается без libc (см. build.sh), поэтому здесь свои memset/memcpy.
+#include "face/behavior.h"
 #include "face/engine.h"
 
 #define EXPORT(name) extern "C" __attribute__((export_name(#name)))
@@ -7,6 +8,7 @@
 using namespace face;
 
 static FaceEngine g_eng;
+static Behavior g_bh;
 static DirtyWindow g_dirty[kPages];
 static int g_dirty_n = 0;
 
@@ -35,7 +37,10 @@ __attribute__((no_builtin)) void* memmove(void* dst, const void* src, unsigned l
 }
 }
 
-EXPORT(fe_init) void fe_init(uint32_t seed, uint32_t now) { g_eng.init(seed, now); }
+EXPORT(fe_init) void fe_init(uint32_t seed, uint32_t now) {
+  g_eng.init(seed, now);
+  g_bh.init(&g_eng, seed, now);
+}
 EXPORT(fe_set_expr) void fe_set_expr(int id, uint32_t now, int ms) { g_eng.set_expression((Expr)id, now, ms); }
 EXPORT(fe_play_clip) void fe_play_clip(int id, uint32_t now) { g_eng.play_clip((Clip)id, now); }
 EXPORT(fe_look_at) void fe_look_at(float gx, float gy, uint32_t now, uint32_t hold) {
@@ -82,3 +87,28 @@ EXPORT(fe_cat_count) int fe_cat_count() { return (int)Category::Count; }
 EXPORT(fe_cat_name) const char* fe_cat_name(int c) { return category_name((Category)c); }
 EXPORT(fe_clip_count) int fe_clip_count() { return kClipCount; }
 EXPORT(fe_clip_id) const char* fe_clip_id(int i) { return clip_id((Clip)i); }
+
+// ---- Поведение ----
+EXPORT(fe_event) void fe_event(int id, uint32_t now) { g_bh.on_event((Event)id, now); }
+EXPORT(fe_bh_update) void fe_bh_update(uint32_t now) { g_bh.update(now); }
+EXPORT(fe_bh_next) uint32_t fe_bh_next() { return g_bh.next_update_ms(); }
+EXPORT(fe_bh_auto) void fe_bh_auto(int on) { g_bh.set_auto(on != 0); }
+EXPORT(fe_bh_hold_manual) void fe_bh_hold_manual(uint32_t now, uint32_t ms) { g_bh.hold_manual(now, ms); }
+EXPORT(fe_bh_set_clock) void fe_bh_set_clock(int minutes) { g_bh.set_clock((uint16_t)minutes); }
+EXPORT(fe_bh_reason) const char* fe_bh_reason() { return g_bh.last_reason(); }
+// 0 радость, 1 возбуждение, 2 бодрость, 3 скука, 4 раздражение, 5 привязанность
+EXPORT(fe_mood) float fe_mood(int i) {
+  const Mood& m = g_bh.mood();
+  switch (i) {
+    case 0: return m.valence;
+    case 1: return m.arousal;
+    case 2: return m.energy;
+    case 3: return m.boredom;
+    case 4: return m.annoyance;
+    case 5: return m.affection;
+    default: return 0;
+  }
+}
+EXPORT(fe_event_count) int fe_event_count() { return kEventCount; }
+EXPORT(fe_event_id) const char* fe_event_id(int i) { return event_id((Event)i); }
+EXPORT(fe_event_name) const char* fe_event_name(int i) { return event_name((Event)i); }

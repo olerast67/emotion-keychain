@@ -22,6 +22,7 @@ enum class EyeKind : uint8_t {
   Sparkle,  // четырёхлучевая искра
   Spiral,   // головокружение
   Cross,    // x x — «в отключке»
+  Dollar,   // $ $
   None,
 };
 
@@ -111,6 +112,10 @@ enum class MouthKind : uint8_t {
   Teeth,     // оскал/гримаса
   Tongue,    // показывает язык
   Triangle,  // крик
+  Scream,    // открытый рот-контур с верхними зубами (сойджак)
+  Rage,      // открытый рот-контур с зубами сверху и снизу (FFFUUU)
+  Grin,      // широкая зубастая ухмылка
+  Box,       // «□»
 };
 
 struct Mouth {
@@ -120,7 +125,7 @@ struct Mouth {
   float open = 0;   // раскрытие (для Curve)
   float t = 3;      // толщина линии
   float tilt = 0;   // перекос: + правый угол ниже
-  float h = 0;      // высота для Ring/Cat/Pucker/Teeth/Triangle, амплитуда для Wavy
+  float h = 0;      // высота Ring/Cat/Pucker/Teeth/Triangle/Box, амплитуда Wavy, зубы Scream/Rage
   float dx = 0, dy = 0;
   float sx = 1;  // масштаб (для смены формы рта)
 
@@ -181,6 +186,7 @@ constexpr Eye star(float d) { return Eye{EyeKind::Star, d, d, 0, 99}; }
 constexpr Eye sparkle(float d) { return Eye{EyeKind::Sparkle, d, d, 0, 99}; }
 constexpr Eye spiral(float d, float t = 2) { return Eye{EyeKind::Spiral, d, d, 0, t}; }
 constexpr Eye cross(float w, float h, float t = 4) { return Eye{EyeKind::Cross, w, h, 0, t}; }
+constexpr Eye dollar(float w, float h, float t = 3) { return Eye{EyeKind::Dollar, w, h, 0, t}; }
 constexpr Eye no_eye() { return Eye{EyeKind::None, 0, 0, 0, 0}; }
 
 constexpr EyePair both(Eye e) { return EyePair{e, e}; }
@@ -201,6 +207,15 @@ constexpr Mouth pucker(float h, float t = 2) { return Mouth{MouthKind::Pucker, h
 constexpr Mouth teeth(float w, float h) { return Mouth{MouthKind::Teeth, w, 0, 0, 2, 0, h}; }
 constexpr Mouth tongue(float w, float curve, float h = 6) { return Mouth{MouthKind::Tongue, w, curve, 0, 3, 0, h}; }
 constexpr Mouth shout(float w, float h) { return Mouth{MouthKind::Triangle, w, 0, 0, 3, 0, h}; }
+// Открытый рот-контур: curve — прогиб верхней кромки, op — глубина, teeth — высота зубов.
+constexpr Mouth scream(float w, float curve, float op, float teeth = 3, float t = 2) {
+  return Mouth{MouthKind::Scream, w, curve, op, t, 0, teeth};
+}
+constexpr Mouth rage_mouth(float w, float curve, float op, float teeth = 3, float t = 2) {
+  return Mouth{MouthKind::Rage, w, curve, op, t, 0, teeth};
+}
+constexpr Mouth grin(float w, float curve, float op, float t = 2) { return Mouth{MouthKind::Grin, w, curve, op, t}; }
+constexpr Mouth box(float w, float h, float t = 2) { return Mouth{MouthKind::Box, w, 0, 0, t, 0, h}; }
 
 constexpr Layout layout(float spacing = 54, float eye_y = 27, float mouth_y = 49, float tilt = 0) {
   return Layout{spacing, eye_y, mouth_y, tilt};

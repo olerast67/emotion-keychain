@@ -197,6 +197,22 @@ void draw_eye(Framebuffer& fb, const Eye& e, float cx, float cy, int side, float
       capsule(fb, cx - hx, cy + hy, cx + hx, cy - hy, t);
       return;
     }
+    case EyeKind::Dollar: {
+      if (h < 3.5f) {
+        closed_line(fb, cx, cy, w, 3.0f);
+        return;
+      }
+      // «S» по точкам плюс вертикальная черта.
+      static const float kS[11][2] = {{0.75f, -0.62f}, {0.3f, -0.9f}, {-0.35f, -0.88f}, {-0.72f, -0.55f},
+                                      {-0.6f, -0.12f}, {0.0f, 0.0f},  {0.6f, 0.12f},    {0.72f, 0.55f},
+                                      {0.35f, 0.88f},  {-0.3f, 0.9f}, {-0.75f, 0.62f}};
+      const float hx = fmax_(w * 0.5f - t * 0.5f, 1.0f) * 0.8f, hy = fmax_(h * 0.5f - t * 0.5f, 1.0f) * 0.8f;
+      Vec2 p[11];
+      for (int i = 0; i < 11; ++i) p[i] = Vec2{cx + kS[i][0] * hx, cy + kS[i][1] * hy};
+      polyline(fb, p, 11, t);
+      capsule(fb, cx, cy - h * 0.5f + 1.0f, cx, cy + h * 0.5f - 1.0f, 2.0f);
+      return;
+    }
   }
 }
 
@@ -240,6 +256,40 @@ void draw_curve_mouth(Framebuffer& fb, const Mouth& m, float mx, float my) {
         const float ey = my + (dx > 0 ? m.tilt : -m.tilt);
         const float ddx = dx - ex, ddy = py - ey;
         on = ddx * ddx + ddy * ddy <= cap_r2;
+      }
+      if (on) fb.set(x, y);
+    }
+  }
+}
+
+// Открытый рот-контур (тёмный внутри) с зубами: rows — сколько рядов зубов, grid — «зубастая» сетка.
+void draw_open_outline(Framebuffer& fb, const Mouth& m, float mx, float my, int rows, bool grid) {
+  const float hw = fmax_(m.w * m.sx * 0.5f, 2.0f);
+  const float t = m.t, c = m.curve, o = fmax_(m.open, 0.0f);
+  const float lo = fmin_(c, 0.0f) - t - fabs_(m.tilt) - 1.0f;
+  const float hi = fmax_(c + o, 0.0f) + t + fabs_(m.tilt) + 1.0f;
+  const int x0 = imax(ifloor(mx - hw - 1), 0), x1 = imin(iceil(mx + hw + 1), kWidth - 1);
+  const int y0 = imax(ifloor(my + lo), 0), y1 = imin(iceil(my + hi), kHeight - 1);
+  const int xa = iround(mx - hw);
+  const float teeth = m.h * m.sx;
+  for (int x = x0; x <= x1; ++x) {
+    const float dx = (float)x + 0.5f - mx;
+    if (fabs_(dx) > hw) continue;
+    const float u = dx / hw, q = fmax_(1.0f - u * u, 0.0f), sq = fsqrt(q);
+    const float base = my + m.tilt * u + c * q;
+    const float top = base - t * 0.5f, bot = base + o * sq + t * 0.5f;
+    const float itop = top + t, ibot = bot - t;
+    const bool col_inner = fabs_(dx) < hw - t;
+    for (int y = y0; y <= y1; ++y) {
+      const float py = (float)y + 0.5f;
+      if (py < top || py > bot) continue;
+      const bool hole = col_inner && py > itop && py < ibot;
+      bool on = !hole;
+      if (hole) {
+        const int k = x - xa;
+        if (rows >= 1 && py < itop + teeth && k % 5 != 4) on = true;
+        if (rows >= 2 && py > ibot - teeth && (k + 2) % 5 != 4) on = true;
+        if (grid && (fabs_(py - (itop + ibot) * 0.5f) < 0.75f || k % 4 == 0)) on = true;
       }
       if (on) fb.set(x, y);
     }
@@ -321,6 +371,23 @@ void draw_mouth(Framebuffer& fb, const Mouth& m, float mx, float my) {
       const float hh = m.h * m.sx * 0.5f;
       Vec2 p[4] = {{mx - hw, my - hh}, {mx + hw, my - hh}, {mx + hw * 0.35f, my + hh}, {mx - hw * 0.35f, my + hh}};
       fill_polygon(fb, p, 4);
+      return;
+    }
+    case MouthKind::Scream: draw_open_outline(fb, m, mx, my, 1, false); return;
+    case MouthKind::Rage: draw_open_outline(fb, m, mx, my, 2, false); return;
+    case MouthKind::Grin: draw_open_outline(fb, m, mx, my, 0, true); return;
+    case MouthKind::Box: {
+      const float hh = m.h * m.sx * 0.5f, r = 2.0f;
+      const int xa = imax(ifloor(mx - hw - 1), 0), xb = imin(iceil(mx + hw + 1), kWidth - 1);
+      const int ya = imax(ifloor(my - hh - 1), 0), yb = imin(iceil(my + hh + 1), kHeight - 1);
+      for (int y = ya; y <= yb; ++y) {
+        for (int x = xa; x <= xb; ++x) {
+          const float dx = (float)x + 0.5f - mx, dy = (float)y + 0.5f - my;
+          if (!in_rrect(dx, dy, hw, hh, r)) continue;
+          if (hw - t > 0.5f && hh - t > 0.5f && in_rrect(dx, dy, hw - t, hh - t, fmax_(r - t, 0.0f))) continue;
+          fb.set(x, y);
+        }
+      }
       return;
     }
   }
