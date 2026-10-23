@@ -2,6 +2,7 @@
 // Собирается без libc (см. build.sh), поэтому здесь свои memset/memcpy.
 #include "face/behavior.h"
 #include "face/engine.h"
+#include "face/friends.h"
 #include "face/identity.h"
 #include "face/progress.h"
 #include "face/sound.h"
@@ -13,7 +14,19 @@ using namespace face;
 static FaceEngine g_eng;
 static Behavior g_bh;
 static Voice g_voice;
+static Progress g_progress;
+static Friends g_friends;
 static uint32_t g_seed = 1;
+
+// Рост на странице: «всё открыто» (по умолчанию) или «как у нового брелока».
+static void progress_mode(bool all) {
+  g_progress.reset();
+  if (all) {
+    g_progress.unlock_all();
+    g_progress.earn(Ach::full_upgrade);  // не хвастаться полным апгрейдом при каждом открытии страницы
+  }
+  g_friends.reset();
+}
 static DirtyWindow g_dirty[kPages];
 static int g_dirty_n = 0;
 
@@ -48,6 +61,9 @@ EXPORT(fe_init) void fe_init(uint32_t seed, uint32_t now) {
   g_bh.init(&g_eng, seed, now);
   g_voice.init(nullptr, seed);
   g_bh.attach_voice(&g_voice);
+  progress_mode(true);
+  g_bh.attach_progress(&g_progress);
+  g_bh.attach_friends(&g_friends);
   g_bh.set_chat_both_sides(true);  // соседа на странице нет: его реплики играет та же пищалка
 }
 // Выбор эмоции, жеста или сцены на странице — это внимание к брелоку, как кнопка на стенде.
@@ -141,7 +157,10 @@ static const Identity& next_peer(uint32_t now) {
   g_peer = make_identity((uint64_t)(now ^ (g_peer_n * 2654435761u)) << 8 | g_peer_n);
   return g_peer;
 }
-EXPORT(fe_set_theme) void fe_set_theme(int cyber) { g_eng.options().theme = cyber ? Theme::Cyber : Theme::Classic; }
+// 0 — классика, 1 — киберпанк, 2 — ретро.
+EXPORT(fe_set_theme) void fe_set_theme(int t) {
+  g_eng.options().theme = t >= 0 && t < (int)Theme::Count ? (Theme)t : Theme::Classic;
+}
 EXPORT(fe_identity) void fe_identity(uint32_t lo, uint32_t hi, uint32_t now) {
   g_id = make_identity((uint64_t)hi << 32 | lo);
   g_bh.personality() = g_id.personality;
@@ -161,6 +180,9 @@ EXPORT(fe_play_scene) void fe_play_scene(int i, uint32_t now) {
   const Scene s = (Scene)i;
   SceneParams p;
   if (s == Scene::upgrade) p.set_text(implant(1 + (int)(now / 1000u) % (implant_count() - 1)).tag);
+  if (s == Scene::achievement) p.set_text(achievement((Ach)(now / 1000u % kAchCount)).tag);
+  if (s == Scene::charge) p.value = 15 + (int)(now / 100u % 80u);
+  if (s == Scene::banner) p.set_text("POEKHALI!"), p.set_sub("APRIL 12"), p.value = (int)BannerIcon::Rocket;
   if (s == Scene::greet || s == Scene::duel || s == Scene::chat) p.set_text(next_peer(now).code);
   if (s == Scene::duel) p.value = (int)(now & 1u);
   if (s == Scene::new_year) p.set_text("2027");
@@ -179,13 +201,44 @@ EXPORT(fe_play_scene) void fe_play_scene(int i, uint32_t now) {
 // ---- Другой брелок рядом: встреча и дуэль (после дуэли — разговор шифром) ----
 EXPORT(fe_meet) void fe_meet(int is_new, uint32_t now) {
   const Identity& p = next_peer(now);
-  g_bh.meet(p.code, is_new != 0, now, p.hash);
+  g_bh.meet(p.code, is_new != 0, now, p.hash, g_progress.implant, now);
+}
+// Тот же сосед, что в прошлый раз, на следующий день: дружба растёт.
+EXPORT(fe_meet_again) void fe_meet_again(uint32_t now) {
+  if (!g_peer.hash) next_peer(now);
+  g_bh.new_day(now);
+  g_bh.meet(g_peer.code, false, now, g_peer.hash, g_progress.implant, now);
+}
+// Старший брелок: имплант на три выше — дарит эмоцию (если есть что дарить).
+EXPORT(fe_meet_mentor) void fe_meet_mentor(uint32_t now) {
+  const Identity& p = next_peer(now);
+  g_bh.meet(p.code, true, now, p.hash, (uint8_t)(g_progress.implant + 3), now);
 }
 EXPORT(fe_duel) void fe_duel(int won, uint32_t now) {
   const Identity& p = next_peer(now);
   g_bh.duel(p.code, won != 0, now, p.hash, now);
 }
 EXPORT(fe_peer_arch) const char* fe_peer_arch() { return archetype_name(g_peer.archetype); }
+EXPORT(fe_peer_level) int fe_peer_level() { return g_friends.level(g_peer.hash); }
+EXPORT(fe_level_tag) const char* fe_level_tag(int l) { return friend_level_tag(l); }
+
+// ---- Рост, достижения, питание, календарь ----
+EXPORT(fe_progress_mode) void fe_progress_mode(int all) { progress_mode(all != 0); }
+EXPORT(fe_new_day) void fe_new_day(uint32_t now) { g_bh.new_day(now); }
+EXPORT(fe_add_xp) void fe_add_xp(uint32_t xp, uint32_t now) { g_bh.add_xp(xp, now); }
+EXPORT(fe_unlocked) int fe_unlocked() { return g_progress.unlocked_count(); }
+EXPORT(fe_implant) int fe_implant() { return g_progress.implant; }
+EXPORT(fe_streak) int fe_streak() { return g_progress.streak; }
+EXPORT(fe_days) int fe_days() { return g_progress.days; }
+EXPORT(fe_ach_count) int fe_ach_count() { return kAchCount; }
+EXPORT(fe_ach_tag) const char* fe_ach_tag(int i) { return achievement((Ach)i).tag; }
+EXPORT(fe_ach_name) const char* fe_ach_name(int i) { return achievement((Ach)i).name; }
+EXPORT(fe_ach_how) const char* fe_ach_how(int i) { return achievement((Ach)i).how; }
+EXPORT(fe_ach_earned) int fe_ach_earned(int i) { return g_progress.earned((Ach)i) ? 1 : 0; }
+EXPORT(fe_set_battery) void fe_set_battery(int pct) { g_bh.set_battery_percent(pct); }
+EXPORT(fe_power_off) void fe_power_off(uint32_t now) { g_bh.power_off(now); }
+EXPORT(fe_set_date) void fe_set_date(int y, int m, int d) { g_bh.set_date((uint16_t)y, (uint8_t)m, (uint8_t)d); }
+EXPORT(fe_eco) int fe_eco() { return g_bh.eco() ? 1 : 0; }
 
 // ---- Голос: частота пищалки сейчас (0 — тишина), тихий режим и выключатель ----
 EXPORT(fe_voice_tone) int fe_voice_tone(uint32_t now) { return g_voice.tone(now); }

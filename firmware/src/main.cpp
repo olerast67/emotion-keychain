@@ -25,6 +25,7 @@
 
 #include "face/behavior.h"
 #include "face/engine.h"
+#include "face/friends.h"
 #include "face/identity.h"
 #include "face/progress.h"
 #include "face/sound.h"
@@ -98,6 +99,12 @@ Identity me;
 uint64_t chip_serial = 0;
 Progress progress;
 Progress saved;  // что лежит во флеше
+Friends friends;
+Friends friends_saved;
+Identity last_peer;  // для «meet again»: тот же сосед, что в прошлый раз
+// «knock»: стенд сам выстукивает ритм «Shave and a haircut» по расписанию.
+uint32_t knock_at[5] = {};
+int knock_n = 0;
 Preferences prefs;
 uint32_t last_save = 0;
 uint64_t day_t0 = 0;  // начало текущих «суток вместе» по времени работы
@@ -211,8 +218,20 @@ void save_progress(uint32_t now, bool force) {
   last_save = now;
 }
 
+void save_friends() {
+  if (memcmp(&friends, &friends_saved, offsetof(Friends, crc)) == 0) return;
+  friends.seal();
+  prefs.putBytes("friends", &friends, sizeof(friends));
+  friends_saved = friends;
+}
+
 void load_settings(uint32_t now) {
   prefs.begin("keychain", false);
+  uint8_t fblob[sizeof(Friends)];
+  const size_t fn = prefs.getBytesLength("friends");
+  if (!(fn == sizeof(Friends) && prefs.getBytes("friends", fblob, fn) == fn && friends.load(fblob, (uint32_t)fn)))
+    friends.reset();
+  friends_saved = friends;
   // Запись любой известной версии; старая сразу переписывается в текущем формате.
   uint8_t blob[sizeof(Progress)];
   const size_t n = prefs.getBytesLength("progress");
@@ -224,7 +243,8 @@ void load_settings(uint32_t now) {
   }
   saved = progress;
   if (ok && n != sizeof(Progress)) save_progress(now, true);
-  eng.options().theme = prefs.getUChar("theme", 0) ? Theme::Cyber : Theme::Classic;
+  const uint8_t th = prefs.getUChar("theme", 0);
+  eng.options().theme = th < (uint8_t)Theme::Count ? (Theme)th : Theme::Classic;
   sound_on = prefs.getUChar("sound", 1) != 0;
   voice.set_enabled(sound_on);
   bday_m = prefs.getUChar("bday_m", 0);
@@ -262,8 +282,10 @@ void print_me() {
     Serial.println(", открыто всё");
   Serial.printf("Касаний %u, шагов %u, друзей %u, дуэлей %u/%u, тема %s\n", (unsigned)progress.touches,
                 (unsigned)progress.steps, progress.friends, progress.duels_won,
-                progress.duels_won + progress.duels_lost,
-                eng.options().theme == Theme::Cyber ? "киберпанк" : "классика");
+                progress.duels_won + progress.duels_lost, theme_id(eng.options().theme));
+  Serial.printf("Серия %u дн. (рекорд %u), достижений %d/%d, секретных разговоров %u, знакомых в памяти %d\n",
+                progress.streak, progress.best_streak, progress.achievement_count(), kAchCount, progress.chats,
+                friends.count());
 }
 
 // ---------------------------------------------------------------- эмоции
@@ -347,12 +369,17 @@ void help() {
       "  i            что сейчас на экране\n"
       "Характер и рост:\n"
       "  me           кто я: характер, редкость, опыт, импланты\n"
-      "  theme cyber  тема оформления: cyber или classic\n"
+      "  theme cyber  тема оформления: classic, cyber или retro\n"
       "  x <сцена>    сцена: boot hack data_rain error404 reboot hide upgrade\n"
-      "               new_year birthday halloween greet duel chat\n"
+      "               new_year birthday halloween greet duel chat achievement\n"
+      "               charge shutdown banner bsod visor screensaver\n"
       "  surprise     случайный сюрприз прямо сейчас\n"
       "  xp 200       добавить опыт; day — новый день; steps 3000 — шаги\n"
-      "  meet [old]   рядом другой брелок (новый или знакомый)\n"
+      "  meet [old]   рядом другой брелок (новый или знакомый); meet again — тот же,\n"
+      "               что в прошлый раз (дружба растёт по дням: day); meet mentor — старший с подарком\n"
+      "  ach          достижения; friends — знакомые брелоки и уровни дружбы\n"
+      "  knock        секретный стук «Shave and a haircut» — брелок ответит\n"
+      "  bat 47       заряд в процентах для сцены зарядки; off — выключиться (сон до кнопки)\n"
       "  duel win     дуэль с другим брелоком: win или lose\n"
       "  date 2026-12-31   дата для праздников; bday 05-14 — твой день рождения\n"
       "Звук:\n"
@@ -474,11 +501,12 @@ void command(char* s, uint32_t now) {
 
   if (!strcmp(s, "me")) return print_me();
   if (!strcmp(s, "theme")) {
-    const bool cyber = arg && !strcmp(arg, "cyber");
-    eng.options().theme = cyber ? Theme::Cyber : Theme::Classic;
-    prefs.putUChar("theme", cyber ? 1 : 0);
+    Theme th;
+    if (!arg || !theme_from_id(arg, &th)) return (void)Serial.println("Формат: theme classic | cyber | retro");
+    eng.options().theme = th;
+    prefs.putUChar("theme", (uint8_t)th);
     eng.set_expression(eng.expression(), now);
-    Serial.println(cyber ? "Тема: киберпанк" : "Тема: классика");
+    Serial.printf("Тема: %s\n", theme_id(th));
     return;
   }
   if (!strcmp(s, "x")) {
@@ -494,6 +522,9 @@ void command(char* s, uint32_t now) {
       p.key = chat_key(me.hash, peer.hash, now);
       p.value = chat_first(me.hash, peer.hash) ? 1 : 0;
     }
+    if (sc == Scene::achievement) p.set_text(achievement((Ach)(now % kAchCount)).tag);
+    if (sc == Scene::charge) p.value = 47;
+    if (sc == Scene::banner) p.set_text("POEKHALI!"), p.set_sub("APRIL 12"), p.value = (int)BannerIcon::Rocket;
     eng.play_scene(sc, now, p);
     if (sc == Scene::chat)
       voice.chat(p.key, p.value != 0, now, &temperament(peer.archetype));
@@ -523,9 +554,56 @@ void command(char* s, uint32_t now) {
   }
   if (!strcmp(s, "meet")) {
     if (mode != Mode::Alive) set_mode(Mode::Alive, now);
-    const Identity peer = make_identity(now);
-    bh.meet(peer.code, !(arg && !strcmp(arg, "old")), now, peer.hash);
+    const bool again = arg && !strcmp(arg, "again") && last_peer.hash;
+    const bool mentor = arg && !strcmp(arg, "mentor");
+    const Identity peer = again ? last_peer : make_identity(now);
+    last_peer = peer;
+    const uint8_t level = mentor ? (uint8_t)(progress.implant + 3) : progress.implant;
+    Serial.printf("Рядом %s (%s), уровень %u\n", peer.code, archetype_name(peer.archetype), level);
+    bh.meet(peer.code, !(arg && !strcmp(arg, "old")), now, peer.hash, level, now);
     save_progress(now, true);
+    save_friends();
+    return;
+  }
+  if (!strcmp(s, "ach")) {
+    for (int i = 0; i < kAchCount; ++i) {
+      const Achievement& a = achievement((Ach)i);
+      Serial.printf("  [%c] %-14s %s — %s\n", progress.earned((Ach)i) ? 'x' : ' ', a.tag, a.name, a.how);
+    }
+    Serial.printf("Достижений %d из %d\n", progress.achievement_count(), kAchCount);
+    return;
+  }
+  if (!strcmp(s, "friends")) {
+    for (const FriendRecord& r : friends.f) {
+      if (!r.hash) continue;
+      const Identity id = identity_from_hash(r.hash);
+      const int lvl = friends.level(r.hash);
+      Serial.printf("  %s %-10s дней %u, %s (%s)\n", id.code, archetype_name(id.archetype), r.days,
+                    friend_level_tag(lvl), friend_level_name(lvl));
+    }
+    Serial.printf("Знакомых %d из %d\n", friends.count(), Friends::kSlots);
+    return;
+  }
+  if (!strcmp(s, "knock")) {
+    if (mode != Mode::Alive) set_mode(Mode::Alive, now);
+    // «Та, та-та, та, та»: четверть, две восьмые, две четверти; восьмая 250 мс.
+    static const uint16_t kAt[5] = {0, 500, 750, 1000, 1500};
+    for (int i = 0; i < 5; ++i) knock_at[i] = now + 200u + kAt[i];
+    knock_n = 5;
+    Serial.println("Тук, тук-тук, тук, тук…");
+    return;
+  }
+  if (!strcmp(s, "bat")) {
+    long pct = 0;
+    if (!arg || !parse_int(arg, 0, 100, &pct)) return (void)Serial.println("Формат: bat 47 (0…100)");
+    bh.set_battery_percent((int)pct);
+    Serial.printf("Заряд %ld%%\n", pct);
+    return;
+  }
+  if (!strcmp(s, "off")) {
+    if (mode != Mode::Alive) set_mode(Mode::Alive, now);
+    bh.power_off(now);
+    Serial.println("Выключаюсь: проснусь от кнопки");
     return;
   }
   if (!strcmp(s, "duel")) {
@@ -608,7 +686,9 @@ void command(char* s, uint32_t now) {
   }
   if (!strcmp(s, "reset") && arg && !strcmp(arg, "yes")) {
     progress.reset();
+    friends.reset();
     save_progress(now, true);
+    save_friends();
     return print_me();
   }
 
@@ -718,6 +798,7 @@ void setup() {
 
   load_settings(now);
   bh.attach_progress(&progress);
+  bh.attach_friends(&friends);
   chip_serial = ESP.getEfuseMac();
   apply_identity(chip_serial, now);
   if (progress.days == 0) bh.new_day(now);  // первый день вместе
@@ -748,6 +829,11 @@ void loop() {
 
   poll_serial(now);
   poll_button(now);
+  // Расписание «knock»: тапы по одному в свой момент.
+  while (knock_n > 0 && time_reached(now, knock_at[5 - knock_n])) {
+    bh.on_event(Event::tap, now);
+    --knock_n;
+  }
 
   bh.set_clock((uint16_t)clock_minutes());
   // Часов нет: «день вместе» — каждые сутки работы.
@@ -756,6 +842,7 @@ void loop() {
     bh.new_day(now);
   }
   save_progress(now, false);
+  save_friends();
   // Поведение обновляется в любом режиме: без автоматики оно только ведёт настроение
   // и держит свои сроки свежими, а включённое снова — сразу в деле.
   if (time_reached(now, bh.next_update_ms())) bh.update(now);

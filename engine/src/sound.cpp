@@ -45,10 +45,13 @@ const Step kWin[] = {{7, 2}, {7, 1}, {7, 1}, {12, 6}, {0, 0}};
 // «Грустный тромбон»: четыре ноты вниз, последняя тянется.
 const Step kLose[] = {{7, 3}, {6, 3}, {5, 3}, {4, 8}, {0, 0}};
 const Step kBoot[] = {{0, 1}, {2, 1}, {4, 1}, {5, 1}, {7, 1}, {9, 1}, {11, 1}, {12, 4}, {0, 0}};
+// Ответ на стук «Shave and a haircut»: пауза — и «two bits», две ноты к тонике.
+const Step kTwoBits[] = {{kRest, 6}, {11, 4}, {kRest, 2}, {12, 6}, {0, 0}};
 
 const Step* const kMotifs[] = {kBoop,    kHappy,       kLaugh,      kSad,     kAngry,  kSurprise, kScared, kLove,
                                kSleepy,  kHello,       kGoodbye,    kQuestion, kIdea,  kError,    kChargeStart,
-                               kChargeFull, kBatteryLow, kLevelUp, kFriend,  kDuel,   kWin,      kLose,   kBoot};
+                               kChargeFull, kBatteryLow, kLevelUp, kFriend,  kDuel,   kWin,      kLose,   kBoot,
+                               kTwoBits};
 static_assert(sizeof(kMotifs) / sizeof(kMotifs[0]) == kCueCount, "мотив на каждую реплику");
 
 // Праздничные мелодии — общественное достояние: «Jingle Bells» (1857), «Happy Birthday»,
@@ -358,8 +361,11 @@ void Voice::stop() {
   n_ = i_ = 0;
 }
 
+bool Voice::has_music(Scene s) { return s != Scene::charge && (int)s < kSceneCount; }
+
 void Voice::scene(Scene s, const SceneParams& p, uint32_t now) {
-  if (!enabled_ || (quiet_ && s != Scene::boot && s != Scene::upgrade)) return;
+  // Сцена без музыки не трогает то, что уже звучит (реплику о зарядке, например).
+  if (!enabled_ || !has_music(s) || (quiet_ && s != Scene::boot && s != Scene::upgrade)) return;
   if (s == Scene::chat) return chat(p.key, p.value != 0, now);
   n_ = 0;
   const uint32_t base = base_hz();
@@ -422,6 +428,40 @@ void Voice::scene(Scene s, const SceneParams& p, uint32_t now) {
       render(Cue::duel);
       pad_to(4600);
       render(p.value ? Cue::win : Cue::lose);
+      break;
+    case Scene::achievement:
+      pad_to(450);  // кубок встал на место
+      render(Cue::win);
+      break;
+    case Scene::shutdown:
+      pad_to(1400);
+      render(Cue::goodbye);
+      pad_to(2600);
+      for (int k = 0; k < 6; ++k) push(note_hz(base, 7 - k * 2), 80);  // гаснет кадр
+      break;
+    case Scene::banner:
+      switch ((BannerIcon)p.value) {
+        case BannerIcon::Heart: render(Cue::love); break;
+        case BannerIcon::Gift: render(Cue::level_up); break;
+        case BannerIcon::Star: render(Cue::idea); break;
+        case BannerIcon::Rocket: render(Cue::boot); break;  // гамма вверх — старт
+        case BannerIcon::Skull: melody(kToccata, sizeof(kToccata) / 2, 70); break;
+        default: render(Cue::happy); break;
+      }
+      break;
+    case Scene::bsod:
+      render(Cue::error);
+      pad_to(600u + 100u * 38u);  // 100 % COMPLETE
+      render(Cue::boot);
+      break;
+    case Scene::visor:
+      // Сканер: тон скользит вверх и вниз вместе с огоньком, три прохода.
+      for (int sweep = 0; sweep < 6; ++sweep)
+        for (int k = 0; k < 6; ++k) push(note_hz(base, sweep % 2 ? 7 - k : 2 + k), 100);
+      break;
+    case Scene::screensaver:
+      pad_to(10000);  // попал в угол!
+      render(Cue::win);
       break;
     default: break;
   }

@@ -69,7 +69,11 @@ struct Quirks {
   bool cyber_eye = false;  // правый глаз — кибер-глаз (редкий брелок)
 };
 
-enum class Theme : uint8_t { Classic, Cyber };
+// Классика; киберпанк — прицел и сбои сигнала; ретро — лицо крупными пикселями 2×2,
+// как на экране старой карманной консоли.
+enum class Theme : uint8_t { Classic, Cyber, Retro, Count };
+const char* theme_id(Theme t);
+bool theme_from_id(const char* id, Theme* out);
 
 struct EngineOptions {
   bool drift = true;         // медленный дрейф лица против выгорания
@@ -133,8 +137,19 @@ class FaceEngine {
   bool reticle_visible() const { return reticle_shown_; }
   static constexpr uint32_t kReticleMs = 2200;
 
+  // Короткая надпись в левом верхнем углу поверх лица (до 7 знаков): «NEW» у только что
+  // открытой эмоции. Сначала мигает, потом горит и гаснет сама. Поверх сцены не рисуется.
+  void badge(const char* text, uint32_t now_ms, uint32_t ms = kBadgeMs);
+  bool badge_visible() const { return badge_shown_; }
+  static constexpr uint32_t kBadgeMs = 3000;
+
   // Полноэкранная сцена вместо лица (scenes.h). Лицо продолжает жить под ней.
   void play_scene(Scene s, uint32_t now_ms, const SceneParams& p = {});
+  // Оборвать сцену: на следующем кадре снова лицо.
+  void stop_scene(uint32_t now_ms) {
+    scene_ = Scene::None;
+    next_update_ = now_ms;
+  }
   Scene scene() const { return scene_; }
   const SceneParams& scene_params() const { return scene_p_; }
   uint32_t scene_ends_ms() const { return scene_ == Scene::None ? 0 : scene_t0_ + scene_duration_ms(scene_); }
@@ -243,6 +258,9 @@ class FaceEngine {
   bool micro_glitch_on_ = false;
   uint32_t reticle_t0_ = 0, reticle_ms_ = 0, scan_next_ = 0;
   bool reticle_on_ = false, reticle_shown_ = false;
+  char badge_[8] = {};
+  uint32_t badge_t0_ = 0, badge_ms_ = 0;
+  bool badge_on_ = false, badge_shown_ = false;
   void apply_quirks(Face& f) const;
 
   // Оверлеи.

@@ -2,6 +2,8 @@
 // интенсивности, настроение, суточный ритм и фоновые занятия.
 #include "face/behavior.h"
 
+#include "face/identity.h"
+
 namespace face {
 
 namespace {
@@ -66,6 +68,19 @@ const char* const kEventNames[] = {
     "Поражение в дуэли",
 };
 static_assert(sizeof(kEventNames) / sizeof(kEventNames[0]) == kEventCount, "названия событий");
+
+// День недели по григорианскому календарю: 0 — воскресенье (алгоритм Сакамото).
+int weekday(int y, int m, int d) {
+  static const int t[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+  if (m < 3) y -= 1;
+  return (y + y / 4 - y / 100 + y / 400 + t[m - 1] + d) % 7;
+}
+
+int day_of_year(int y, int m, int d) {
+  static const int before[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+  const bool leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+  return before[m - 1] + d + (leap && m > 2 ? 1 : 0);
+}
 
 inline float clamp01(float v) { return clampf(v, 0.0f, 1.0f); }
 inline float clamp11(float v) { return clampf(v, -1.0f, 1.0f); }
@@ -153,9 +168,18 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   for (Expr& r : recent_react_) r = Expr::Count;
   loud_at_ = 0;
   last_calling_ = last_cyclops_ = now;
-  queue_n_ = 0;
+  queue_n_ = shared_n_ = 0;
   queue_at_ = now;
+  cur_scene_ = Scene::None;
+  cur_shared_ = false;
   after_scene_ = Expr::Count;
+  after_fresh_ = false;
+  if (eco_ && eng_) eng_->options().frame_ms = eco_frame_ms_;
+  eco_ = 0;
+  saver_done_ = off_ = false;
+  time_eggs_done_ = 0;
+  last_clock_ = clock_min_;
+  for (uint32_t& k : knocks_) k = 0;
   last_say_ = now - kSayGapMs;
   chat_peer_ = 0;
   schedule_surprise(now);
@@ -356,7 +380,19 @@ void Behavior::on_event(Event e, uint32_t now) {
     case Event::tap:
     case Event::double_tap: {
       last_touch_ = now;
+      off_ = false;
       if (progress_) grant(progress_->touch(), now);
+      if (clock_min_ >= 3 * 60 && clock_min_ < 4 * 60) earn(Ach::night_owl, now);
+      if (clock_min_ >= 5 * 60 && clock_min_ < 6 * 60) earn(Ach::early_bird, now);
+      // Секретный стук «Shave and a haircut»: отвечает «two bits» и подмигивает.
+      if (e == Event::tap && knock(now)) {
+        react(pick_unlocked({Expr::playful, Expr::wink}), now, 3000, "секретный стук", Clip::wink);
+        say(Cue::two_bits, now);
+        // Сцена достижения — после ответа, чтобы его было слышно и видно.
+        if (time_left(now, queue_at_) < 2000u) queue_at_ = now + 2000u;
+        earn(Ach::knock, now);
+        break;
+      }
       const int add = e == Event::double_tap ? 2 : 1;
       for (int a = 0; a < add; ++a) {
         for (int i = 7; i > 0; --i) tap_times_[i] = tap_times_[i - 1];
@@ -469,6 +505,7 @@ void Behavior::on_event(Event e, uint32_t now) {
         falls_[2] = falls_[1];
         falls_[1] = falls_[0];
         falls_[0] = now;
+        if (progress_) progress_->fell();
         if (falls_[2] && now - falls_[2] < 10u * kMin)
           react(Expr::game_over, now, 3500, "третье падение за 10 минут");
         else if (falls_[1] && now - falls_[1] < 10u * kMin)
@@ -483,6 +520,7 @@ void Behavior::on_event(Event e, uint32_t now) {
     }
     case Event::pick_up:
       last_touch_ = now;
+      off_ = false;
       if (asleep) {
         react(Expr::waking, now, 2400, "взяли в руки сонного", Clip::yawn);
       } else if (since_touch > 2u * 60u * kMin) {
@@ -611,17 +649,24 @@ void Behavior::on_event(Event e, uint32_t now) {
       if (cold || hot) react(Expr::relieved, now, 2500, "температура пришла в норму");
       cold = hot = false;
       break;
-    case Event::charge_start:
+    case Event::charge_start: {
       charging = true;
-      if (battery == 0)
-        react(Expr::relieved, now, 2200, "зарядку подключили в последний момент");
-      else if (battery == 1)
-        react(Expr::grateful, now, 2200, "голодного покормили");
-      else
-        react(rng_.chance(0.15f) ? Expr::money : Expr::happy, now, 2200, "подключили зарядку");
+      off_ = saver_done_ = false;
+      // Сначала батарея наливается на экране, потом — реакция. Голодного покормили — опыт.
+      Expr x = rng_.chance(0.15f) ? Expr::money : Expr::happy;
+      const char* why = "подключили зарядку";
+      if (battery == 0) x = Expr::relieved, why = "зарядку подключили в последний момент";
+      if (battery == 1) x = Expr::grateful, why = "голодного покормили";
+      if (battery <= 1 && progress_) grant(progress_->feed(), now);
+      set_eco(0);
+      SceneParams p;
+      p.value = battery_pct_;
+      queue_scene(Scene::charge, p, allowed(x), now, why);
       break;
+    }
     case Event::charge_full: {
       battery = 2;
+      set_eco(0);
       const Option o[] = {{Expr::charged, 3}, {Expr::pog, 1}, {Expr::money, 0.5f}};
       react(pick(o), now, 3000, "зарядился");
       break;
@@ -632,16 +677,19 @@ void Behavior::on_event(Event e, uint32_t now) {
       break;
     case Event::battery_low: {
       battery = 1;
+      set_eco(1);
       const Option o[] = {{Expr::hungry, 2}, {Expr::pleading, 1}, {Expr::low_battery, 1}};
       react(pick(o), now, 4000, "мало заряда");
       break;
     }
     case Event::battery_critical:
       battery = 0;
+      set_eco(2);
       react(Expr::critical_battery, now, 4000, "заряд почти закончился");
       break;
     case Event::button: {
       last_touch_ = now;
+      off_ = false;
       if (asleep) {
         react(Expr::waking, now, 2400, "нажали кнопку", Clip::yawn);
       } else {
@@ -658,11 +706,13 @@ void Behavior::on_event(Event e, uint32_t now) {
     case Event::Count: break;
   }
   voice_event(e, now);
+  achieve(now);
 }
 
 Expr Behavior::choose_base(uint32_t now) {
   const uint32_t quiet = now - last_event_;
   const uint32_t alone = now - last_touch_;
+  if (off_) return Expr::sleeping;
   if (charging) return Expr::charging;
   if (battery == 0) return Expr::critical_battery;
   if (dark && now - dark_since_ > 8000u) return Expr::sleeping;
@@ -815,6 +865,8 @@ void Behavior::update(uint32_t now) {
     const Expr e = after_scene_;
     after_scene_ = Expr::Count;
     react(e, now, queue_n_ ? kBetweenScenesMs : 3500u, after_why_);
+    if (after_fresh_) eng_->badge("NEW", now);  // только что открытая эмоция
+    after_fresh_ = false;
     queue_at_ = now + kBetweenScenesMs;
     if (queue_n_) wake(queue_at_);
     return;
@@ -838,30 +890,17 @@ void Behavior::update(uint32_t now) {
   }
   const Expr curx = eng_->expression();
   const bool awake = curx != Expr::sleeping && curx != Expr::sleepy && curx != Expr::pocket_peek && !dark;
-  // Праздник показываем один раз за дату, когда персонаж бодрствует.
-  if (awake && year_ && holiday_done_ != (uint32_t)year_ * 400u + month_ * 32u + day_) {
-    holiday_done_ = (uint32_t)year_ * 400u + month_ * 32u + day_;
-    SceneParams p;
-    if ((month_ == 12 && day_ == 31) || (month_ == 1 && day_ == 1)) {
-      char y[6];
-      const uint16_t yy = month_ == 12 ? (uint16_t)(year_ + 1) : year_;
-      y[0] = (char)('0' + yy / 1000 % 10), y[1] = (char)('0' + yy / 100 % 10), y[2] = (char)('0' + yy / 10 % 10);
-      y[3] = (char)('0' + yy % 10), y[4] = 0;
-      p.set_text(y);
-      queue_scene(Scene::new_year, p, pick_unlocked({Expr::party, Expr::happy}), now, "Новый год");
-      return;
-    }
-    if (bday_m_ && month_ == bday_m_ && day_ == bday_d_) {
-      queue_scene(Scene::birthday, p, pick_unlocked({Expr::party, Expr::love}), now, "день рождения хозяина");
-      return;
-    }
-    if (month_ == 10 && day_ == 31) {
-      queue_scene(Scene::halloween, p, pick_unlocked({Expr::spooky, Expr::boo, Expr::scared}), now, "Хэллоуин");
-      return;
-    }
+  // Праздники и пасхалки по дате — раз за дату, по времени суток — раз в сутки, когда не спит.
+  if (awake && (date_eggs(now) || time_eggs(now))) return;
+  // На зарядке, когда давно никто не трогал, — заставка: логотип ищет угол.
+  if (awake && charging && !saver_done_ && now - last_event_ > 10u * kMin) {
+    saver_done_ = true;
+    queue_scene(Scene::screensaver, SceneParams{}, pick_unlocked({Expr::pog, Expr::excited, Expr::happy}), now,
+                "заставка на зарядке попала в угол");
+    return;
   }
   if (time_reached(now, next_surprise_)) {
-    if (awake && !charging) {
+    if (awake && !charging && !eco_) {
       surprise(now);
       return;
     }
@@ -895,7 +934,8 @@ void Behavior::update(uint32_t now) {
     idle_action(now);
     const bool sleepy = mood_.energy < 0.3f;
     const float activity = temp_ ? sanef(temp_->activity, 1.0f, 0.2f, 4.0f) : 1.0f;
-    next_idle_ = now + (uint32_t)((float)((12000u + rng_.next() % 28000u) * (sleepy ? 2u : 1u)) / activity);
+    next_idle_ =
+        now + (uint32_t)((float)((12000u + rng_.next() % 28000u) * (sleepy ? 2u : 1u) * (eco_ ? 2u : 1u)) / activity);
   }
   if (reacting_) wake(react_until_);
   if (queue_n_) wake(queue_at_);
@@ -968,10 +1008,36 @@ Expr Behavior::pick_unlocked(const Expr* opts, int n) {
   return allowed(opts[0]);
 }
 
-void Behavior::queue_scene(Scene s, const SceneParams& p, Expr after, uint32_t now, const char* why) {
-  if (queue_n_ < 4) queue_[queue_n_++] = Queued{s, p, after, why};
+void Behavior::queue_scene(Scene s, const SceneParams& p, Expr after, uint32_t now, const char* why, bool fresh) {
+  if (queue_n_ < (int)(sizeof(queue_) / sizeof(queue_[0]))) queue_[queue_n_++] = Queued{s, p, after, why, fresh};
+  manual_ = false;  // причину сцена покажет, когда начнётся (run_queue)
+  next_ = now;
+  if (eng_->scene() == Scene::None && after_scene_ == Expr::Count && time_reached(now, queue_at_)) run_queue(now);
+}
+
+void Behavior::queue_shared(Scene s, const SceneParams& p, Expr after, uint32_t now, const char* why, bool fresh) {
+  const Scene playing = eng_->scene();
+  if (playing != Scene::None && !(cur_shared_ && playing == cur_scene_)) {
+    // Своя сцена уступает: доиграет после общих (если её запускала очередь).
+    if (playing == cur_scene_ && queue_n_ < (int)(sizeof(queue_) / sizeof(queue_[0])))
+      queue_[queue_n_++] = Queued{playing, eng_->scene_params(), after_scene_, after_why_, after_fresh_};
+    eng_->stop_scene(now);
+    after_scene_ = Expr::Count;
+    after_fresh_ = false;
+    cur_scene_ = Scene::None;
+    queue_at_ = now;
+  } else if (playing == Scene::None && !(cur_shared_ && after_scene_ != Expr::Count)) {
+    // Между своими сценами паузу не ждём: общая начинается сейчас.
+    after_scene_ = Expr::Count;
+    queue_at_ = now;
+  }
+  constexpr int kMax = (int)(sizeof(queue_) / sizeof(queue_[0]));
+  if (queue_n_ == kMax) --queue_n_;  // очередь полна: уходит последняя своя
+  for (int i = queue_n_; i > shared_n_; --i) queue_[i] = queue_[i - 1];
+  queue_[shared_n_] = Queued{s, p, after, why, fresh};
+  ++shared_n_;
+  ++queue_n_;
   manual_ = false;
-  reason_ = why;
   next_ = now;
   if (eng_->scene() == Scene::None && after_scene_ == Expr::Count && time_reached(now, queue_at_)) run_queue(now);
 }
@@ -981,6 +1047,9 @@ bool Behavior::run_queue(uint32_t now) {
   const Queued q = queue_[0];
   for (int i = 1; i < queue_n_; ++i) queue_[i - 1] = queue_[i];
   --queue_n_;
+  cur_shared_ = shared_n_ > 0;
+  if (shared_n_) --shared_n_;
+  cur_scene_ = q.scene;
   eng_->play_scene(q.scene, now, q.params);
   if (voice_) {
     if (q.scene == Scene::chat && chat_both_ && chat_peer_)
@@ -989,6 +1058,7 @@ bool Behavior::run_queue(uint32_t now) {
       voice_->scene(q.scene, q.params, now);
   }
   after_scene_ = q.after;
+  after_fresh_ = q.fresh;
   after_why_ = q.why;
   reason_ = q.why;
   next_ = eng_->scene_ends_ms();
@@ -1006,19 +1076,187 @@ void Behavior::grant(int installed, uint32_t now) {
     if (implant_of((Expr)i) != installed) continue;
     if (rng_.next() % (uint32_t)(++seen) == 0) show = (Expr)i;
   }
-  queue_scene(Scene::upgrade, p, show, now, "новый имплант");
+  queue_scene(Scene::upgrade, p, show, now, "новый имплант", true);
+}
+
+void Behavior::reward(Ach a, uint32_t now) {
+  SceneParams p;
+  p.set_text(achievement(a).tag);
+  queue_scene(Scene::achievement, p, pick_unlocked({Expr::proud, Expr::happy}), now, "достижение");
+  grant(progress_->add_xp(achievement(a).xp), now);
+}
+
+void Behavior::achieve(uint32_t now) {
+  if (!progress_) return;
+  for (int i = 0; i < 2; ++i) {  // не больше двух за раз: остальные — на следующем событии
+    const Ach a = progress_->next_achievement();
+    if (a == Ach::Count) return;
+    reward(a, now);
+  }
+}
+
+void Behavior::earn(Ach a, uint32_t now) {
+  if (progress_ && progress_->earn(a)) reward(a, now);
+}
+
+void Behavior::set_eco(int level) {
+  if (!eng_ || level == eco_) return;
+  if (!eco_) eco_frame_ms_ = eng_->options().frame_ms;
+  eco_ = level;
+  const uint16_t slow = level == 1 ? 50 : 80;
+  eng_->options().frame_ms = level == 0 ? eco_frame_ms_ : (eco_frame_ms_ > slow ? eco_frame_ms_ : slow);
+}
+
+void Behavior::power_off(uint32_t now) {
+  off_ = true;
+  queue_scene(Scene::shutdown, SceneParams{}, Expr::sleeping, now, "выключается");
+}
+
+void Behavior::banner(const char* big, const char* sub, BannerIcon icon, Expr after, uint32_t now, const char* why) {
+  SceneParams p;
+  p.set_text(big);
+  p.set_sub(sub);
+  p.value = (int)icon;
+  queue_scene(Scene::banner, p, after, now, why);
+}
+
+bool Behavior::date_eggs(uint32_t now) {
+  if (!year_) return false;
+  const uint32_t key = (uint32_t)year_ * 400u + month_ * 32u + day_;
+  if (holiday_done_ == key) return false;
+  holiday_done_ = key;
+  const int m = month_, d = day_;
+  if ((m == 12 && d == 31) || (m == 1 && d == 1)) {
+    char y[6];
+    const uint16_t yy = m == 12 ? (uint16_t)(year_ + 1) : year_;
+    y[0] = (char)('0' + yy / 1000 % 10), y[1] = (char)('0' + yy / 100 % 10), y[2] = (char)('0' + yy / 10 % 10);
+    y[3] = (char)('0' + yy % 10), y[4] = 0;
+    SceneParams p;
+    p.set_text(y);
+    queue_scene(Scene::new_year, p, pick_unlocked({Expr::party, Expr::happy}), now, "Новый год");
+    return true;
+  }
+  if (bday_m_ && m == bday_m_ && d == bday_d_) {
+    queue_scene(Scene::birthday, SceneParams{}, pick_unlocked({Expr::party, Expr::love}), now, "день рождения хозяина");
+    return true;
+  }
+  if (m == 10 && d == 31) {
+    queue_scene(Scene::halloween, SceneParams{}, pick_unlocked({Expr::spooky, Expr::boo, Expr::scared}), now,
+                "Хэллоуин");
+    return true;
+  }
+  if (d == 13 && weekday(year_, m, d) == 5) {
+    banner("FRIDAY 13", "BE CAREFUL", BannerIcon::Skull, pick_unlocked({Expr::spooky, Expr::scared}), now,
+           "пятница, 13-е");
+    return true;
+  }
+  if (m == 4 && d == 1) {
+    // Розыгрыш: «упал» синим экраном — и «попался!».
+    queue_scene(Scene::bsod, SceneParams{}, pick_unlocked({Expr::innocent, Expr::neutral}), now, "1 апреля");
+    banner("GOTCHA!", "APRIL 1", BannerIcon::Sparkles, pick_unlocked({Expr::troll_grin, Expr::laugh}), now,
+           "1 апреля: розыгрыш");
+    return true;
+  }
+  struct Egg {
+    uint8_t m, d;
+    const char *big, *sub;
+    BannerIcon icon;
+    Expr after[2];
+    const char* why;
+  };
+  static const Egg kEggs[] = {
+      {2, 14, "LOVE DAY", "<3", BannerIcon::Heart, {Expr::love, Expr::adoring}, "день всех влюблённых"},
+      {2, 29, "FEB 29", "BONUS DAY", BannerIcon::Sparkles, {Expr::party, Expr::happy}, "29 февраля: лишний день"},
+      {3, 14, "PI DAY", "3.14159265", BannerIcon::Pi, {Expr::idea, Expr::thinking}, "день числа пи"},
+      {4, 12, "POEKHALI!", "APRIL 12", BannerIcon::Rocket, {Expr::excited, Expr::happy}, "день космонавтики"},
+      {5, 4, "MAY THE 4TH", "BE WITH YOU", BannerIcon::Star, {Expr::cool, Expr::smug}, "4 мая"},
+      {5, 25, "DONT PANIC", "TOWEL DAY 42", BannerIcon::Sparkles, {Expr::calm, Expr::cool}, "день полотенца"},
+  };
+  for (const Egg& g : kEggs) {
+    if (g.m != m || g.d != d) continue;
+    banner(g.big, g.sub, g.icon, pick_unlocked(g.after), now, g.why);
+    return true;
+  }
+  if (day_of_year(year_, m, d) == 256) {
+    banner("HELLO WORLD", "DAY 256", BannerIcon::Sparkles, pick_unlocked({Expr::robot, Expr::cool}), now,
+           "день программиста");
+    return true;
+  }
+  return false;
+}
+
+bool Behavior::time_eggs(uint32_t now) {
+  if (clock_min_ < last_clock_) time_eggs_done_ = 0;  // часы прошли полночь
+  last_clock_ = clock_min_;
+  auto once = [&](int bit) {
+    if (time_eggs_done_ & (1u << bit)) return false;
+    time_eggs_done_ = (uint8_t)(time_eggs_done_ | 1u << bit);
+    return true;
+  };
+  switch (clock_min_) {
+    case 13 * 60 + 37:
+      if (!once(0)) break;
+      banner("1337", "H4X0R MODE", BannerIcon::Sparkles, pick_unlocked({Expr::smug_glasses, Expr::cool}), now,
+             "13:37");
+      earn(Ach::leet, now);
+      return true;
+    case 11 * 60 + 11:
+      if (!once(1)) break;
+      banner("11:11", "MAKE A WISH", BannerIcon::Star, pick_unlocked({Expr::daydreaming, Expr::bliss}), now, "11:11");
+      return true;
+    case 12 * 60 + 34:
+      if (!once(2)) break;
+      banner("12:34", "1 2 3 4!", BannerIcon::Sparkles, pick_unlocked({Expr::happy}), now, "12:34");
+      return true;
+    case 3 * 60:
+      if (!once(3)) break;
+      banner("3 AM", "GO TO SLEEP", BannerIcon::Skull, pick_unlocked({Expr::sleepy, Expr::tired}), now,
+             "три часа ночи, а он не спит");
+      return true;
+    case 4 * 60 + 4: {
+      if (!once(4)) break;
+      SceneParams p;
+      p.set_sub("TIME NOT FOUND");
+      queue_scene(Scene::error404, p, pick_unlocked({Expr::shrug, Expr::confused}), now, "04:04");
+      return true;
+    }
+    default: break;
+  }
+  return false;
+}
+
+bool Behavior::knock(uint32_t now) {
+  // Ритм «та, та-та, та, та»: четверть, две восьмые, две четверти. Восьмая — 120–450 мс,
+  // каждый промежуток с допуском ±35 %.
+  for (int i = 0; i < 4; ++i) knocks_[i] = knocks_[i + 1];
+  knocks_[4] = now;
+  if (!knocks_[0]) return false;
+  uint32_t d[4];
+  for (int i = 0; i < 4; ++i) d[i] = knocks_[i + 1] - knocks_[i];
+  const uint32_t e = (d[1] + d[2]) / 2;
+  if (e < 120u || e > 450u) return false;
+  auto near = [](uint32_t a, uint32_t b) { return a * 100u >= b * 65u && a * 100u <= b * 135u; };
+  if (!near(d[1], d[2]) || !near(d[0], 2u * e) || !near(d[3], 2u * e)) return false;
+  for (uint32_t& k : knocks_) k = 0;
+  return true;
 }
 
 void Behavior::new_day(uint32_t now) {
-  if (progress_) grant(progress_->new_day(), now);
+  if (!progress_) return;
+  grant(progress_->new_day(), now);
+  achieve(now);
 }
 
 void Behavior::add_xp(uint32_t xp, uint32_t now) {
-  if (progress_) grant(progress_->add_xp(xp), now);
+  if (!progress_) return;
+  grant(progress_->add_xp(xp), now);
+  achieve(now);
 }
 
 void Behavior::add_steps(uint32_t steps, uint32_t now) {
-  if (progress_) grant(progress_->add_steps(steps), now);
+  if (!progress_) return;
+  grant(progress_->add_steps(steps), now);
+  achieve(now);
 }
 
 Expr Behavior::greet_after(const Temperament* other, bool is_new) {
@@ -1049,23 +1287,56 @@ Expr Behavior::greet_after(const Temperament* other, bool is_new) {
   }
 }
 
-void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_hash) {
+void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_hash, uint8_t peer_level,
+                    uint32_t nonce) {
   last_event_ = last_touch_ = now;
   if (eng_) eng_->note_activity(now);
   mood_.valence = clamp11(mood_.valence + 0.2f);
   mood_.affection = clamp01(mood_.affection + 0.05f);
   const Temperament* other = peer_hash ? &temperament(archetype_from_hash(peer_hash)) : nullptr;
+  int before = -1, level = 0;
+  bool first_today = true;
+  if (friends_ && peer_hash) {
+    level = friends_->meet(peer_hash, progress_ ? progress_->days : 0, &before, &first_today);
+    is_new = before < 0;
+  }
   SceneParams p;
   p.set_text(code);
   p.value = is_new ? 0 : 1;
   if (other) p.set_sub(other == temp_ ? "TWIN!" : other->tag);
-  queue_scene(Scene::greet, p, greet_after(other, is_new), now,
-              other == temp_ && other ? "встретил такого же" : is_new ? "новый знакомый брелок" : "встретил знакомого");
+  queue_shared(Scene::greet, p, greet_after(other, is_new), now,
+               other == temp_ && other ? "встретил такого же" : is_new ? "новый знакомый брелок" : "встретил знакомого");
   // Ворчун при виде брелока с золотым глазом, глюк с глюком — данные текут рекой.
   if (other && temp_ && other == temp_ && temp_->glitches)
-    queue_scene(Scene::data_rain, SceneParams{}, pick_unlocked({Expr::hypnotized, Expr::zoned_out}), now,
-                "два глюка синхронизировались");
+    queue_shared(Scene::data_rain, SceneParams{}, pick_unlocked({Expr::hypnotized, Expr::zoned_out}), now,
+                 "два глюка синхронизировались");
+  // Старые знакомые иногда шепчутся. Решение — из общего ключа, у соседа оно то же, и шёпот
+  // стоит в очереди сразу за приветствием: дальше у каждого свои сцены.
+  if (!is_new && peer_hash && nonce && chat_key(self_hash_, peer_hash, nonce) % 4u == 0) {
+    chat(code, peer_hash, nonce, now);
+    reason_ = "старые знакомые шепчутся";
+  }
+  if (friends_ && before >= 0 && level > before) {
+    banner(friend_level_tag(level), code, BannerIcon::Heart, pick_unlocked({Expr::love, Expr::happy}), now,
+           "дружба крепнет");
+    if (progress_) grant(progress_->add_xp(15u * (uint32_t)level), now);
+    if (level >= 3) earn(Ach::best_friend, now);
+  }
+  // Старший брелок (имплант на два выше) раз в день дарит эмоцию из следующего импланта.
+  if (progress_ && first_today && peer_level >= progress_->implant + 2) {
+    const Expr gift = progress_->steal_one(rng_);
+    if (gift != Expr::Count) {
+      SceneParams g;
+      g.set_text("GIFT");
+      g.set_sub(code);
+      g.value = (int)BannerIcon::Gift;
+      queue_scene(Scene::banner, g, gift, now, "подарок от старшего брелока", true);
+    }
+  }
+  if (other && other == temp_) earn(Ach::twin, now);
+  if (peer_hash && identity_from_hash(peer_hash).rarity == Rarity::Legendary) earn(Ach::legend, now);
   if (progress_) grant(progress_->met_friend(is_new), now);
+  achieve(now);
 }
 
 void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash, uint32_t nonce) {
@@ -1077,19 +1348,22 @@ void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash
   Expr after =
       won ? pick_unlocked({Expr::proud, Expr::smug, Expr::happy}) : pick_unlocked({Expr::sulking, Expr::grumpy});
   const char* why = won ? "выиграл дуэль" : "проиграл дуэль";
+  bool fresh = false;
   if (won && progress_) {
     const Expr stolen = progress_->steal_one(rng_);
     if (stolen != Expr::Count) {
       after = stolen;
+      fresh = true;
       why = "выиграл в дуэли новую эмоцию";
     }
   }
   mood_.valence = clamp11(mood_.valence + (won ? 0.25f : -0.15f));
   mood_.annoyance = clamp01(mood_.annoyance + (won ? 0.0f : 0.15f));
-  queue_scene(Scene::duel, p, after, now, why);
+  queue_shared(Scene::duel, p, after, now, why, fresh);  // выигранная эмоция — с «NEW»
   // Сразу за дуэлью — разговор шифром: у соседа очередь та же, и он начнётся одновременно.
   if (peer_hash) chat(code, peer_hash, nonce, now);
   if (progress_) grant(progress_->duel(won), now);
+  achieve(now);
 }
 
 void Behavior::chat(const char* code, uint32_t peer_hash, uint32_t nonce, uint32_t now) {
@@ -1099,14 +1373,16 @@ void Behavior::chat(const char* code, uint32_t peer_hash, uint32_t nonce, uint32
   p.value = chat_first(self_hash_, peer_hash) ? 1 : 0;
   chat_peer_ = peer_hash;
   // После разговора — невинное лицо: «мы ничего не обсуждали».
-  queue_scene(Scene::chat, p, pick_unlocked({Expr::innocent, Expr::smug, Expr::mischievous}), now,
-              "секретный разговор с соседом");
+  queue_shared(Scene::chat, p, pick_unlocked({Expr::innocent, Expr::smug, Expr::mischievous}), now,
+               "секретный разговор с соседом");
+  if (progress_) progress_->chatted();
 }
 
 void Behavior::set_date(uint16_t year, uint8_t month, uint8_t day) {
   year_ = year;
   month_ = month;
   day_ = day;
+  next_ = last_now_;  // праздник проверится на ближайшем проходе, а не через минуту
 }
 
 void Behavior::set_surprise_interval(uint32_t min_ms, uint32_t max_ms, uint32_t now) {
@@ -1122,11 +1398,14 @@ void Behavior::surprise(uint32_t now) {
     Scene s;
     float w;
   };
+  const bool retro = eng_->options().theme == Theme::Retro;
   Opt opts[] = {{Scene::hide, cyber ? 1.0f : 3.0f},
-                {Scene::reboot, 1.5f},
+                {Scene::reboot, retro ? 2.5f : 1.5f},
                 {Scene::error404, cyber ? 2.0f : 1.0f},
                 {Scene::hack, cyber ? 3.0f : 1.0f},
-                {Scene::data_rain, cyber ? 2.0f : 0.7f}};
+                {Scene::data_rain, cyber ? 2.0f : 0.7f},
+                {Scene::bsod, retro ? 1.5f : 0.6f},
+                {Scene::visor, cyber ? 2.0f : 0.6f}};
   float total = 0;
   for (Opt& o : opts) {
     if (temp_ && o.s == temp_->fav) o.w *= 3.0f;  // любимый сюрприз характера
@@ -1148,6 +1427,8 @@ void Behavior::surprise(uint32_t now) {
     case Scene::error404: after = pick_unlocked({Expr::shrug, Expr::confused}); break;
     case Scene::reboot: after = Expr::waking; break;
     case Scene::hide: after = pick_unlocked({Expr::playful, Expr::giggle, Expr::laugh}); break;
+    case Scene::bsod: after = pick_unlocked({Expr::dizzy, Expr::shrug}); break;
+    case Scene::visor: after = pick_unlocked({Expr::cool, Expr::robot}); break;
     default: break;
   }
   queue_scene(s, SceneParams{}, after, now, "сюрприз");

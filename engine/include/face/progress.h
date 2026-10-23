@@ -1,5 +1,6 @@
 // Рост брелока. На старте открыта база эмоций, остальные приходят «имплантами»
 // за опыт: дни вместе, касания, шаги, встречи с другими брелоками и дуэли.
+// Сверху — серия дней с хозяином и достижения: каждое один раз, с опытом и сценой.
 // Состояние — плоская структура постоянного размера: прошивка хранит её во флеше
 // как есть, а load() понимает и старые версии записи.
 #pragma once
@@ -35,7 +36,54 @@ struct XpRules {
   uint16_t friend_known = 10;  // старый знакомый, раз в день на каждого
   uint16_t duel_win = 25;
   uint16_t duel_lose = 10;
+  uint16_t care = 15;  // зарядили, когда был голоден: раз в день
 };
+
+// Достижения. Номера битов в Progress::achievements — по порядку списка, поэтому
+// новые дописываются только в конец.
+#define FACE_ACHIEVEMENT_LIST(X) \
+  X(first_friend)                \
+  X(social)                      \
+  X(first_win)                   \
+  X(champion)                    \
+  X(good_loser)                  \
+  X(petted)                      \
+  X(loved)                       \
+  X(walker)                      \
+  X(marathon)                    \
+  X(streak3)                     \
+  X(streak7)                     \
+  X(streak30)                    \
+  X(day100)                      \
+  X(full_upgrade)                \
+  X(whisperer)                   \
+  X(caring)                      \
+  X(survivor)                    \
+  X(twin)                        \
+  X(legend)                      \
+  X(night_owl)                   \
+  X(early_bird)                  \
+  X(knock)                       \
+  X(leet)                        \
+  X(best_friend)
+
+enum class Ach : uint8_t {
+#define FACE_X(n) n,
+  FACE_ACHIEVEMENT_LIST(FACE_X)
+#undef FACE_X
+      Count
+};
+constexpr int kAchCount = (int)Ach::Count;
+static_assert(kAchCount <= 32, "достижения — биты одного uint32");
+
+struct Achievement {
+  const char* id;
+  const char* tag;   // для экрана, латиницей, до 15 знаков
+  const char* name;  // по-русски
+  const char* how;   // за что
+  uint16_t xp;
+};
+const Achievement& achievement(Ach a);
 
 // Эмоция открыта, если её имплант уже установлен, или она в списке дополнительных
 // (выигранные в дуэли, а потом и секретные), или открыто всё. Дополнительные хранятся
@@ -47,7 +95,7 @@ struct XpRules {
 // Размер записи при этом не меняется.
 struct Progress {
   static constexpr uint32_t kMagic = 0x4B43484Bu;  // «KCHK»
-  static constexpr uint16_t kVersion = 2;
+  static constexpr uint16_t kVersion = 3;
   static constexpr int kExtraSlots = 16;
   static constexpr uint8_t kAllUnlocked = 1;  // флаг: открыто всё
 
@@ -65,7 +113,16 @@ struct Progress {
   uint16_t step_rest = 0;  // шаги, которые ещё не превратились в опыт
   uint8_t implant = 0;  // сколько имплантов уже установлено (0 — только база)
   uint8_t flags = 0;    // kAllUnlocked
-  uint8_t reserved[26] = {};         // запас под будущие поля: серии, достижения
+  // Версия 3: серия, достижения и счётчики для них (в версии 2 здесь были нули).
+  uint16_t streak = 0;        // дней подряд, когда хозяин был рядом (касался)
+  uint32_t achievements = 0;  // биты Ach
+  uint16_t best_streak = 0;
+  uint16_t chats = 0;   // секретных разговоров
+  uint16_t feeds = 0;   // зарядили, когда был голоден
+  uint16_t falls = 0;   // пережитых падений
+  uint8_t touched_today = 0;
+  uint8_t fed_today = 0;
+  uint8_t reserved[10] = {};         // запас под будущие поля
   uint32_t extra[kExtraSlots] = {};  // ключи дополнительно открытых эмоций, 0 — пусто
   uint32_t crc = 0;
 
@@ -86,6 +143,18 @@ struct Progress {
   int add_steps(uint32_t n, const XpRules& r = {});
   int met_friend(bool is_new, const XpRules& r = {});
   int duel(bool won, const XpRules& r = {});
+  // Зарядили голодного: счётчик растёт всегда, опыт — раз в день.
+  int feed(const XpRules& r = {});
+  void fell() { falls = (uint16_t)(falls + 1); }
+  void chatted() { chats = (uint16_t)(chats + 1); }
+
+  bool earned(Ach a) const { return (int)a < kAchCount && (achievements >> (int)a) & 1u; }
+  // Отметить достижение. true — новое (опыт за него начисляет вызывающий через add_xp).
+  bool earn(Ach a);
+  // Достижение за счётчики (друзья, победы, касания, шаги, серия…), которое только что
+  // заработано: отмечает его и возвращает; Ach::Count — нового нет.
+  Ach next_achievement();
+  int achievement_count() const;
 
   // Награда за дуэль: открыть одну эмоцию из ближайшего ещё не установленного
   // импланта раньше срока. Возвращает её или Expr::Count, если открывать нечего.

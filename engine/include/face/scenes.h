@@ -1,6 +1,6 @@
 // Сцены — короткие полноэкранные сюжеты вместо лица: загрузка, «взлом»,
 // дождь данных, праздники, апгрейд, встреча с другим брелоком, дуэль и секретный
-// разговор шифром после неё.
+// разговор шифром после неё, достижения, зарядка и выключение, пасхалки.
 // Запускаются через FaceEngine::play_scene и сами заканчиваются.
 #pragma once
 
@@ -24,7 +24,14 @@ namespace face {
   X(halloween)             \
   X(greet)                 \
   X(duel)                  \
-  X(chat)
+  X(chat)                  \
+  X(achievement)           \
+  X(charge)                \
+  X(shutdown)              \
+  X(banner)                \
+  X(bsod)                  \
+  X(visor)                 \
+  X(screensaver)
 
 enum class Scene : uint8_t {
 #define FACE_X(n) n,
@@ -39,13 +46,16 @@ constexpr int kSceneCount = (int)Scene::Count;
 // Подписи и исход: имя импланта для upgrade, позывной для greet, duel и chat,
 // value: greet — 1, если знакомый; duel — 1, если победа; chat — 1, если начинаем мы.
 // key — ключ секретного разговора (sound.h, chat_key).
+// achievement: text — название; charge: value — заряд в процентах (−1 — неизвестен);
+// banner: text — крупная строка, sub — мелкая, value — значок (BannerIcon);
+// screensaver: text — логотип; error404: sub — вместо «MOOD NOT FOUND».
 struct SceneParams {
   char text[16] = {};
-  char sub[12] = {};  // вторая строка: например, характер встреченного брелока
+  char sub[16] = {};  // вторая строка: например, характер встреченного брелока
   int value = 0;
   uint32_t key = 0;
   void set_text(const char* s) { copy(text, s, 15); }
-  void set_sub(const char* s) { copy(sub, s, 11); }
+  void set_sub(const char* s) { copy(sub, s, 15); }
 
  private:
   static void copy(char* dst, const char* s, int n) {
@@ -54,6 +64,9 @@ struct SceneParams {
     dst[i] = 0;
   }
 };
+
+// Значок под надписью сцены banner.
+enum class BannerIcon : uint8_t { Sparkles, Heart, Gift, Star, Rocket, Pi, Skull };
 
 const char* scene_id(Scene s);
 const char* scene_name(Scene s);  // по-русски

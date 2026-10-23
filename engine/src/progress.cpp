@@ -22,6 +22,34 @@ const Implant kImplants[] = {
 };
 constexpr int kImplantCount = (int)(sizeof(kImplants) / sizeof(kImplants[0]));
 
+const Achievement kAchievements[] = {
+    {"first_friend", "FIRST FRIEND", "Первый друг", "встретил первый брелок", 20},
+    {"social", "10 FRIENDS", "Душа компании", "десять знакомых брелоков", 40},
+    {"first_win", "FIRST WIN", "Первая победа", "выиграл дуэль", 20},
+    {"champion", "10 WINS", "Чемпион", "десять побед в дуэлях", 50},
+    {"good_loser", "NEVER GIVE UP", "Не сдаётся", "пять поражений — и всё равно в бой", 30},
+    {"petted", "100 TAPS", "Ласковый", "сто касаний", 20},
+    {"loved", "1000 TAPS", "Залюбленный", "тысяча касаний", 50},
+    {"walker", "10K STEPS", "Путешественник", "десять тысяч шагов вместе", 30},
+    {"marathon", "MARATHON", "Марафонец", "55 000 шагов — марафон с запасом", 60},
+    {"streak3", "3 DAY STREAK", "Три дня подряд", "три дня подряд хозяин был рядом", 20},
+    {"streak7", "7 DAY STREAK", "Неделя вместе", "семь дней подряд", 40},
+    {"streak30", "30 DAY STREAK", "Месяц вместе", "тридцать дней подряд", 100},
+    {"day100", "DAY 100", "Сотый день", "сто дней вместе", 100},
+    {"full_upgrade", "FULL UPGRADE", "Полный апгрейд", "установлены все импланты", 50},
+    {"whisperer", "5 SECRETS", "Шептун", "пять секретных разговоров", 30},
+    {"caring", "CARING HUMAN", "Заботливый хозяин", "пять раз зарядили голодного", 30},
+    {"survivor", "SURVIVOR", "Неваляшка", "пережил десять падений", 30},
+    {"twin", "TWIN FOUND", "Близнец", "встретил брелок того же характера", 30},
+    {"legend", "LEGEND MET", "Встреча с легендой", "встретил легендарный брелок", 50},
+    {"night_owl", "NIGHT OWL", "Сова", "с ним играли в три часа ночи", 20},
+    {"early_bird", "EARLY BIRD", "Жаворонок", "с ним играли в пять утра", 20},
+    {"knock", "KNOCK KNOCK", "Тук-тук", "секретный стук и ответ", 30},
+    {"leet", "1337", "Хакер", "был на связи в 13:37", 20},
+    {"best_friend", "BEST FRIENDS", "Лучшие друзья", "дружба с одним брелоком до уровня BEST FRIENDS", 60},
+};
+static_assert(sizeof(kAchievements) / sizeof(kAchievements[0]) == kAchCount, "описание каждого достижения");
+
 struct Slot {
   E expr;
   uint8_t implant;
@@ -252,6 +280,8 @@ bool from_v1(Progress& out, const uint8_t* p, uint32_t n) {
 
 }  // namespace
 
+const Achievement& achievement(Ach a) { return kAchievements[(int)a < kAchCount ? (int)a : 0]; }
+
 int implant_count() { return kImplantCount; }
 const Implant& implant(int i) { return kImplants[i < 0 ? 0 : i >= kImplantCount ? kImplantCount - 1 : i]; }
 
@@ -321,12 +351,21 @@ int Progress::add_xp(uint32_t n) {
 
 int Progress::new_day(const XpRules& r) {
   ++days;
+  // Серия: день засчитывается, если хозяин хоть раз коснулся брелока.
+  if (touched_today) {
+    streak = (uint16_t)(streak + 1);
+    if (streak > best_streak) best_streak = streak;
+  } else {
+    streak = 0;
+  }
+  touched_today = fed_today = 0;
   today_touch_xp = today_step_xp = 0;
   return add_xp(r.day);
 }
 
 int Progress::touch(const XpRules& r) {
   ++touches;
+  touched_today = 1;
   if (today_touch_xp >= r.touch_day_cap) return -1;
   const uint16_t g = (uint16_t)imin(r.touch, r.touch_day_cap - today_touch_xp);
   today_touch_xp = (uint16_t)(today_touch_xp + g);
@@ -357,6 +396,51 @@ int Progress::duel(bool won, const XpRules& r) {
   return add_xp(won ? r.duel_win : r.duel_lose);
 }
 
+int Progress::feed(const XpRules& r) {
+  feeds = (uint16_t)(feeds + 1);
+  if (fed_today) return -1;
+  fed_today = 1;
+  return add_xp(r.care);
+}
+
+bool Progress::earn(Ach a) {
+  if ((int)a >= kAchCount || earned(a)) return false;
+  achievements |= 1u << (int)a;
+  return true;
+}
+
+Ach Progress::next_achievement() {
+  const bool got[kAchCount] = {
+      friends >= 1,
+      friends >= 10,
+      duels_won >= 1,
+      duels_won >= 10,
+      duels_lost >= 5,
+      touches >= 100,
+      touches >= 1000,
+      steps >= 10000,
+      steps >= 55000,
+      streak >= 3,
+      streak >= 7,
+      streak >= 30,
+      days >= 100,
+      implant + 1 >= kImplantCount,
+      chats >= 5,
+      feeds >= 5,
+      falls >= 10,
+      // Остальные — за события, их отмечает поведение через earn().
+  };
+  for (int i = 0; i < kAchCount; ++i)
+    if (got[i] && earn((Ach)i)) return (Ach)i;
+  return Ach::Count;
+}
+
+int Progress::achievement_count() const {
+  int n = 0;
+  for (int i = 0; i < kAchCount; ++i) n += earned((Ach)i);
+  return n;
+}
+
 Expr Progress::steal_one(Rng& rng) {
   for (int imp = implant + 1; imp < kImplantCount; ++imp) {
     Expr cand[16];
@@ -383,14 +467,18 @@ uint32_t Progress::compute_crc() const {
 bool Progress::load(const void* data, uint32_t n) {
   const uint8_t* p = (const uint8_t*)data;
   if (!p || n < 8 || read32(p) != kMagic) return false;
-  switch (read16(p + 4)) {
+  const uint16_t v = read16(p + 4);
+  switch (v) {
     case 1: return from_v1(*this, p, n);
+    case 2:  // та же раскладка; новые поля версии 3 лежали в запасе нулями
     case kVersion: {
       if (n != sizeof(Progress)) return false;
       Progress q;
       uint8_t* dst = (uint8_t*)&q;
       for (uint32_t i = 0; i < n; ++i) dst[i] = p[i];
-      if (!q.valid()) return false;
+      if (q.crc != q.compute_crc()) return false;
+      q.version = kVersion;
+      q.seal();
       *this = q;
       return true;
     }

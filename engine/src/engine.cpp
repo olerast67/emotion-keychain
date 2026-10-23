@@ -1,5 +1,7 @@
 #include "face/engine.h"
 
+#include "face/text.h"
+
 namespace face {
 
 namespace {
@@ -15,6 +17,23 @@ constexpr float kTiltStep = 0.05f;
 // «Сканирование» без повода — раз в 3–8 минут.
 constexpr uint32_t kReticleLockMs = 350, kReticleBlinkMs = 300, kReticleBlinkStep = 75;
 constexpr uint32_t kScanMinMs = 180000, kScanSpreadMs = 300000;
+// Надпись в углу мигает первые kBadgeBlinkMs шагами по kBadgeBlinkStep.
+constexpr uint32_t kBadgeBlinkMs = 600, kBadgeBlinkStep = 150;
+
+const char* const kThemeIds[] = {"classic", "cyber", "retro"};
+static_assert(sizeof(kThemeIds) / sizeof(kThemeIds[0]) == (int)Theme::Count, "имя каждой темы");
+
+// Ретро: каждый квадрат 2×2 горит целиком, если в нём горят хотя бы два пикселя.
+// Квадраты начинаются с нечётных координат: пиксель в kSafeMargin − 1 от края попадает
+// в квадрат, который к краю не ближе, поэтому безопасное поле не сужается.
+void pixelate(Framebuffer& fb) {
+  for (int y = 1; y + 1 < kHeight; y += 2)
+    for (int x = 1; x + 1 < kWidth; x += 2) {
+      const int n = fb.get(x, y) + fb.get(x + 1, y) + fb.get(x, y + 1) + fb.get(x + 1, y + 1);
+      const Ink ink = n >= 2 ? Ink::Set : Ink::Clear;
+      fb.plot(x, y, ink), fb.plot(x + 1, y, ink), fb.plot(x, y + 1, ink), fb.plot(x + 1, y + 1, ink);
+    }
+}
 
 // Эмоции, на которых кибер-брелок «берёт цель».
 bool locks_on(Expr e) {
@@ -151,6 +170,18 @@ uint32_t hash32(uint32_t x) {
 
 }  // namespace
 
+const char* theme_id(Theme t) { return (int)t < (int)Theme::Count ? kThemeIds[(int)t] : "classic"; }
+
+bool theme_from_id(const char* id, Theme* out) {
+  for (int i = 0; i < (int)Theme::Count; ++i) {
+    const char* a = kThemeIds[i];
+    int k = 0;
+    while (a[k] && a[k] == id[k]) ++k;
+    if (!a[k] && !id[k]) return *out = (Theme)i, true;
+  }
+  return false;
+}
+
 const char* clip_id(Clip c) {
   static const char* const kIds[] = {
 #define FACE_X(n) #n,
@@ -211,6 +242,7 @@ void FaceEngine::init(uint32_t seed, uint32_t now_ms) {
   micro_glitch_next_ = now_ms + 45000u + rng_.next() % 60000u;
   micro_glitch_on_ = false;
   reticle_on_ = reticle_shown_ = false;
+  badge_on_ = badge_shown_ = false;
   scan_next_ = now_ms + kScanMinMs + rng_.next() % kScanSpreadMs;
   ov_last_ = now_ms;
   last_now_ = now_ms;
@@ -254,6 +286,16 @@ void FaceEngine::scan(uint32_t now_ms, uint32_t ms) {
   reticle_on_ = true;
   reticle_t0_ = now_ms;
   reticle_ms_ = (uint32_t)imax((int)imin((int)ms, 60000), (int)(kReticleLockMs + kReticleBlinkMs));
+  next_update_ = now_ms;
+}
+
+void FaceEngine::badge(const char* text, uint32_t now_ms, uint32_t ms) {
+  int i = 0;
+  for (; text && text[i] && i < 7; ++i) badge_[i] = text[i];
+  badge_[i] = 0;
+  badge_on_ = i > 0;
+  badge_t0_ = now_ms;
+  badge_ms_ = ms < 60000u ? ms : 60000u;
   next_update_ = now_ms;
 }
 
@@ -1234,6 +1276,22 @@ bool FaceEngine::update(uint32_t now) {
   }
   if (scene_ != Scene::None) reticle = -1.0f;
   reticle_shown_ = reticle >= 0.0f;
+  // Надпись в углу: мигает, потом горит до конца срока.
+  uint32_t badge_wake = 0;
+  bool badge_vis = false;
+  if (badge_on_) {
+    const uint32_t bt = now - badge_t0_;
+    if (bt >= badge_ms_) {
+      badge_on_ = false;
+    } else if (bt < kBadgeBlinkMs) {
+      badge_vis = (bt / kBadgeBlinkStep) % 2u == 0u;
+      badge_wake = kBadgeBlinkStep - bt % kBadgeBlinkStep;
+    } else {
+      badge_vis = true;
+      badge_wake = badge_ms_ - bt;
+    }
+  }
+  badge_shown_ = badge_vis && scene_ == Scene::None;
   const bool glint = quirks_.cyber_eye && (now % 5000u) < 400u;
   if (glint) want(period, 100);
 
@@ -1285,6 +1343,8 @@ bool FaceEngine::update(uint32_t now) {
   hs.byte((uint8_t)(opt_.scanlines | opt_.upside_down << 1));
   hs.byte((uint8_t)((uint8_t)opt_.theme | quirks_.cyber_eye << 2 | glint << 3));
   hs.f(reticle);
+  hs.byte((uint8_t)badge_shown_);
+  for (int i = 0; badge_shown_ && badge_[i]; ++i) hs.byte((uint8_t)badge_[i]);
   hs.byte((uint8_t)scene_);
   hs.u32(scene_t);
   hs.u32(opt_.scanlines ? (expr_t0_ / 1000u + now / 20000u) & 1u : 0u);
@@ -1306,6 +1366,13 @@ bool FaceEngine::update(uint32_t now) {
         if (ov_alpha_[i] > 0.0f) render_overlay(back_, (Overlay)i, anchors, ov_alpha_[i], (float)ov_local[i] * 0.001f);
       }
       render_theme(back_, anchors, reticle, quirks_.cyber_eye, glint);
+      if (opt_.theme == Theme::Retro) pixelate(back_);
+      if (badge_shown_) {
+        // Под надписью — тёмная подложка: читается поверх бровей и значков.
+        const int x0 = kSafeMargin, y0 = kSafeMargin, x1 = x0 + text_width(badge_) - 1, y1 = y0 + text_height() - 1;
+        for (int y = y0 - 1; y <= y1 + 1; ++y) back_.hspan(y, x0 - 1, x1 + 1, Ink::Clear);
+        draw_text(back_, x0, y0, badge_);
+      }
     }
 
     if (glitch_ > 0.0f) {
@@ -1369,6 +1436,7 @@ bool FaceEngine::update(uint32_t now) {
     if (cyber && scene_ == Scene::None) at(scan_next_);
   }
   if (reticle_wake) wake[nw++] = reticle_wake;
+  if (badge_wake) wake[nw++] = badge_wake;
   if (reticle_on_) at(reticle_t0_ + reticle_ms_);
   if (scene_ != Scene::None) at(scene_ends_ms());
   // События, выпавшие рядом, сливаются: процессор просыпается один раз на всех.

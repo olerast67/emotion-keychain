@@ -21,14 +21,19 @@ const char* const kIds[] = {
 const char* const kNames[] = {"Загрузка «OLERAST LINK»", "Взлом",    "Дождь данных", "ERROR 404",
                               "Перезагрузка",           "Прятки",   "Апгрейд",      "Новый год",
                               "День рождения",          "Хэллоуин", "Встреча",      "Дуэль",
-                              "Секретный разговор"};
+                              "Секретный разговор",     "Достижение", "Зарядка",    "Выключение",
+                              "Пасхалка",               "Синий экран", "Визор",     "Заставка"};
 static_assert(sizeof(kNames) / sizeof(kNames[0]) == kSceneCount, "имена сцен");
 
 // Разговор: четыре реплики, «расшифровка» и отказ в доступе.
 constexpr uint32_t kChatDecryptMs = kChatMs, kChatFlashMs = kChatMs + 900, kChatDeniedMs = kChatMs + 1650;
 constexpr uint16_t kChatSceneMs = (uint16_t)(kChatMs + 2600);
 
-const uint16_t kDuration[] = {3800, 5200, 5000, 3600, 4200, 5200, 4600, 6000, 6000, 4500, 3200, 6500, kChatSceneMs};
+// Заставка: логотип отскакивает от краёв и к концу попадает точно в угол.
+constexpr uint32_t kSaverHitMs = 10000, kSaverMs = 12000;
+
+const uint16_t kDuration[] = {3800, 5200, 5000, 3600, 4200, 5200, 4600, 6000, 6000, 4500, 3200, 6500, kChatSceneMs,
+                              4200, 3200, 3600, 4800, 5200, 3600, (uint16_t)kSaverMs};
 static_assert(sizeof(kDuration) / sizeof(kDuration[0]) == kSceneCount, "длительности сцен");
 
 constexpr int kL = kSafeMargin, kR = kWidth - 1 - kSafeMargin, kT = kSafeMargin, kB = kHeight - 1 - kSafeMargin;
@@ -168,10 +173,10 @@ void data_rain(Framebuffer& fb, uint32_t t, const Face& face) {
   if (t >= 4100) draw_face(fb, with_eyes(face, ease_out(phase(t, 4100, 600))));
 }
 
-void error404(Framebuffer& fb, uint32_t t) {
+void error404(Framebuffer& fb, uint32_t t, const SceneParams& p) {
   if (t < 2600) {
     draw_text_centered(fb, kCx, 10, "ERROR 404", 3);
-    draw_text_centered(fb, kCx, 36, "MOOD NOT FOUND");
+    draw_text_centered(fb, kCx, 36, p.sub[0] ? p.sub : "MOOD NOT FOUND");
     glitch_band(fb, t / 120u);
     if ((t / 120u) % 3u == 0u) glitch_band(fb, t / 120u + 101u);
     return;
@@ -416,6 +421,213 @@ void chat(Framebuffer& fb, uint32_t t, const SceneParams& p) {
   }
 }
 
+// Четырёхлучевая искра, мерцает со своей фазой.
+void sparkle(Framebuffer& fb, float x, float y, uint32_t t, uint32_t phase_ms) {
+  const float k = 0.5f + 0.5f * fsin((float)(t + phase_ms) * 0.009f);
+  if (k > 0.15f) fill_star(fb, x, y, 2.0f + 3.0f * k, 1.3f, 4, 0.0f);
+}
+
+void achievement(Framebuffer& fb, uint32_t t, const SceneParams& p) {
+  if (t > 700 || blink_on(t, 140)) draw_text_centered(fb, kCx, kT, "ACHIEVEMENT");
+  // Кубок вырастает из точки с лёгким перелётом и встаёт на место.
+  const float u = phase(t, 0, 450);
+  const float k = t < 450 ? 0.3f + 0.8f * ease_out(u) : 1.0f + 0.1f * fsin(fmin_(1.0f, (float)(t - 450) / 250.0f) * 3.1416f);
+  auto P = [&](float x, float y) { return Vec2{kCx + (x - kCx) * k, 27.0f + (y - 27.0f) * k}; };
+  const Vec2 hl = P(52, 21), hr = P(76, 21);
+  ellipse_ring(fb, hl.x, hl.y, 5 * k, 5 * k, 2.2f);
+  ellipse_ring(fb, hr.x, hr.y, 5 * k, 5 * k, 2.2f);
+  const Vec2 bowl[6] = {P(53, 17), P(75, 17), P(73, 26), P(68, 30), P(60, 30), P(55, 26)};
+  fill_polygon(fb, bowl, 6);
+  const Vec2 star = P(64, 22.5f);
+  fill_star(fb, star.x, star.y, 4.2f * k, 1.8f * k, 5, 0.0f, Paint{Ink::Clear});
+  const Vec2 stem[4] = {P(62, 30), P(66, 30), P(66, 35), P(62, 35)};
+  fill_polygon(fb, stem, 4);
+  const Vec2 base[4] = {P(56, 35), P(72, 35), P(72, 38), P(56, 38)};
+  fill_polygon(fb, base, 4);
+  if (t >= 650) {
+    sparkle(fb, 40, 18, t, 0);
+    sparkle(fb, 88, 16, t, 400);
+    sparkle(fb, 36, 34, t, 900);
+    sparkle(fb, 92, 32, t, 1300);
+  }
+  if (t >= 900) draw_text_centered(fb, kCx, 44, p.text[0] ? p.text : "UNLOCKED", 2, Ink::Set, (int)((t - 900) / 60u));
+}
+
+void battery_body(Framebuffer& fb, int x0, int y0, int x1, int y1) {
+  frame_box(fb, x0, y0, x1, y1);
+  const int my = (y0 + y1) / 2;
+  fill_box(fb, x1 + 1, my - 5, x1 + 4, my + 5);
+}
+
+void charge(Framebuffer& fb, uint32_t t, const SceneParams& p) {
+  battery_body(fb, 26, 14, 96, 42);
+  const int pct = p.value < 0 ? -1 : imin(p.value, 100);
+  // Заряд наливается до своего уровня, верхний край мигает: идёт зарядка.
+  const float shown = (pct < 0 ? 60.0f : (float)pct) * ease_out(phase(t, 150, 1300));
+  const int ia = 30, ib = 92;
+  int fill = ia + iround((float)(ib - ia) * shown / 100.0f);
+  if (t > 1450 && blink_on(t - 1450, 300)) fill = imin(fill + 6, ib);
+  if (fill > ia) fill_box(fb, ia, 18, fill, 38);
+  const Vec2 bolt[7] = {{67, 18}, {57, 29}, {63, 29}, {59, 38}, {71, 26}, {65, 26}, {69, 18}};
+  fill_polygon(fb, bolt, 7, Paint{Ink::Invert});
+  if (pct >= 0) {
+    char buf[5];
+    int n = 0;
+    if (pct >= 100) buf[n++] = '1';
+    if (pct >= 10) buf[n++] = (char)('0' + pct / 10 % 10);
+    buf[n++] = (char)('0' + pct % 10);
+    buf[n++] = '%';
+    buf[n] = 0;
+    draw_text_centered(fb, kCx, 47, buf);
+  } else {
+    draw_text_centered(fb, kCx, 47, "CHARGING");
+  }
+}
+
+void shutdown(Framebuffer& fb, uint32_t t) {
+  if (t < 1400) {
+    if (blink_on(t, 220)) draw_text_centered(fb, kCx, 8, "LOW BATTERY");
+    battery_body(fb, 40, 26, 84, 46);
+    if (blink_on(t, 350)) fill_box(fb, 44, 30, 47, 42);
+    return;
+  }
+  if (t < 2600) return draw_text_centered(fb, kCx, 27, "GOODNIGHT", 2, Ink::Set, (int)((t - 1400) / 80u));
+  if (t < 3200) {
+    const int w = iround(96.0f * (1.0f - ease_in(phase(t, 2600, 600)))) + 4;
+    return fill_box(fb, kCx - w / 2, 31, kCx + w / 2, 32);
+  }
+  if (t < 3400) fill_box(fb, kCx - 2, 30, kCx + 1, 33);
+}
+
+void banner_icon(Framebuffer& fb, BannerIcon icon, uint32_t t) {
+  const float cx = kCx, cy = 50;
+  switch (icon) {
+    case BannerIcon::Heart: {
+      const float k = 1.0f + 0.15f * fsin((float)t * 0.012f);
+      fill_heart(fb, cx, cy, 8.0f * k, 7.0f * k);
+      break;
+    }
+    case BannerIcon::Gift:
+      fill_box(fb, 54, 46, 73, 57);
+      fill_box(fb, 52, 42, 75, 45);
+      fill_box(fb, 62, 42, 65, 57, Ink::Clear);
+      ellipse_ring(fb, 59, 39, 3.5f, 2.5f, 2.0f);
+      ellipse_ring(fb, 68, 39, 3.5f, 2.5f, 2.0f);
+      break;
+    case BannerIcon::Star: {
+      const float k = 1.0f + 0.2f * fsin((float)t * 0.008f);
+      fill_star(fb, cx, cy, 8.0f * k, 3.5f * k, 5, 0.0f);
+      break;
+    }
+    case BannerIcon::Rocket: {
+      // Ракета стартует: чуть дрожит, пламя мерцает.
+      const float j = (t / 60u) % 2u ? 0.5f : -0.5f;
+      const Vec2 nose[3] = {{64 + j, 38}, {69 + j, 44}, {59 + j, 44}};
+      fill_polygon(fb, nose, 3);
+      fill_box(fb, 60 + iround(j), 44, 68 + iround(j), 53);
+      fill_circle(fb, 64.5f + j, 47.5f, 1.8f, Paint{Ink::Clear});
+      const Vec2 fl[3] = {{60 + j, 49}, {55 + j, 55}, {60 + j, 53}};
+      const Vec2 fr[3] = {{69 + j, 49}, {74 + j, 55}, {69 + j, 53}};
+      fill_polygon(fb, fl, 3);
+      fill_polygon(fb, fr, 3);
+      const float h = 3.0f + 2.0f * (0.5f + 0.5f * fsin((float)t * 0.05f));
+      const Vec2 flame[3] = {{61 + j, 54}, {68 + j, 54}, {64.5f + j, 54 + h}};
+      fill_polygon(fb, flame, 3);
+      break;
+    }
+    case BannerIcon::Pi:
+      fill_box(fb, 52, 42, 76, 44);
+      fill_box(fb, 57, 45, 59, 57);
+      capsule(fb, 69, 45, 69, 54, 3.0f);
+      capsule(fb, 69, 54, 73, 57, 2.6f);
+      break;
+    case BannerIcon::Skull:
+      fill_ellipse(fb, cx, 47, 9, 7);
+      fill_box(fb, 58, 50, 69, 57);
+      fill_circle(fb, 60, 47, 2.2f, Paint{Ink::Clear});
+      fill_circle(fb, 68, 47, 2.2f, Paint{Ink::Clear});
+      fill_box(fb, 61, 54, 62, 57, Ink::Clear);
+      fill_box(fb, 65, 54, 66, 57, Ink::Clear);
+      break;
+    case BannerIcon::Sparkles:
+    default:
+      sparkle(fb, 34, 50, t, 0);
+      sparkle(fb, 64, 52, t, 500);
+      sparkle(fb, 94, 50, t, 1000);
+      break;
+  }
+}
+
+void banner(Framebuffer& fb, uint32_t t, const SceneParams& p) {
+  // Крупная строка печатается, под ней — мелкая, ещё ниже — значок.
+  const char* big = p.text[0] ? p.text : "!!!";
+  const int scale = text_width(big, 3) <= kR - kL ? 3 : 2;
+  draw_text_centered(fb, kCx, scale == 3 ? 6 : 8, big, scale, Ink::Set, (int)((t + 70) / 70u));
+  if (t >= 900 && p.sub[0]) draw_text_centered(fb, kCx, 26, p.sub, 2, Ink::Set, (int)((t - 900) / 60u));
+  if (t >= 1400) banner_icon(fb, (BannerIcon)p.value, t);
+}
+
+void bsod(Framebuffer& fb, uint32_t t) {
+  // «:(» и проценты, которые медленно ползут к 100.
+  fill_box(fb, 8, 10, 13, 15);
+  fill_box(fb, 8, 24, 13, 29);
+  arc(fb, 33, 20, 10, 14, 1.9f, 4.4f, 3.0f);
+  draw_text(fb, 44, 6, "YOUR");
+  draw_text(fb, 44, 18, "KEYCHAIN");
+  draw_text(fb, 44, 30, "CRASHED");
+  if (t < 600) return;
+  const int pct = imin((int)((t - 600) / 38u), 100);
+  char buf[16];
+  int n = 0;
+  if (pct >= 100) buf[n++] = '1';
+  if (pct >= 10) buf[n++] = (char)('0' + pct / 10 % 10);
+  buf[n++] = (char)('0' + pct % 10);
+  const char* tail = "% COMPLETE";
+  for (int i = 0; tail[i]; ++i) buf[n++] = tail[i];
+  buf[n] = 0;
+  draw_text(fb, kL + 4, 46, buf);
+}
+
+void visor(Framebuffer& fb, uint32_t t) {
+  // Сканер-визор: огонёк бегает туда-обратно, за ним гаснет след.
+  frame_box(fb, 6, 22, 121, 41);
+  constexpr int kW = 14, kX0 = 10, kSpan = 117 - kW - kX0;
+  auto pos = [&](uint32_t tt) {
+    const uint32_t m = tt % 1200u;
+    const float u = m < 600u ? (float)m / 600.0f : (float)(1200u - m) / 600.0f;
+    return kX0 + iround(ease_in_out(u) * (float)kSpan);
+  };
+  for (int k = 3; k >= 1; --k) {
+    if (t < (uint32_t)(k * 60)) continue;
+    const int x = pos(t - (uint32_t)(k * 60));
+    fill_rrect(fb, (float)x + kW / 2.0f, 31.5f, kW / 2.0f, 5.5f, 2.0f, Paint{Ink::Set, 0.75f - 0.2f * (float)k});
+  }
+  const int x = pos(t);
+  fill_rrect(fb, (float)x + kW / 2.0f, 31.5f, kW / 2.0f, 5.5f, 2.0f);
+}
+
+int fold(int s, int r) {
+  const int m = s % (2 * r);
+  return m <= r ? m : 2 * r - m;
+}
+
+void screensaver(Framebuffer& fb, uint32_t t, const SceneParams& p) {
+  // Логотип летит под 45° и отскакивает от краёв. Пути подобраны так, что к концу он
+  // попадает точно в угол: диапазоны 64 и 36 px встречаются через 576 px пути.
+  const char* logo = p.text[0] ? p.text : "OLERAST";
+  const int w = text_width(logo), rx = imin(64, kR - kL + 1 - w), ry = 36;
+  const int s = 576 - iround((float)(kSaverHitMs - imin((int)t, (int)kSaverHitMs)) * 0.05f);
+  const int x = kL + fold(s, rx), y = kT + fold(s, ry);
+  if (t < kSaverHitMs || blink_on(t - kSaverHitMs, 160)) draw_text(fb, x, y, logo);
+  if (t >= kSaverHitMs) {
+    // Попал в угол! Искры вокруг.
+    sparkle(fb, (float)(x + 8), (float)(y + 18), t, 0);
+    sparkle(fb, (float)(x + w / 2), (float)(y + 22), t, 300);
+    sparkle(fb, (float)(x + w - 8), (float)(y + 18), t, 600);
+    draw_text_centered(fb, kCx, 46, "CORNER!");
+  }
+}
+
 }  // namespace
 
 const char* scene_id(Scene s) { return (int)s < kSceneCount ? kIds[(int)s] : "none"; }
@@ -448,6 +660,13 @@ uint16_t scene_frame_ms(Scene s, uint32_t t) {
     case Scene::greet: return 60;
     case Scene::duel: return 60;
     case Scene::chat: return t < kChatDecryptMs ? 20 : 60;
+    case Scene::achievement: return t < 900 ? 30 : 60;
+    case Scene::charge: return 60;
+    case Scene::shutdown: return 40;
+    case Scene::banner: return 60;
+    case Scene::bsod: return 100;
+    case Scene::visor: return 30;
+    case Scene::screensaver: return 40;
     default: return 100;
   }
 }
@@ -457,7 +676,7 @@ void render_scene(Framebuffer& fb, Scene s, uint32_t t, const SceneParams& p, co
     case Scene::boot: boot(fb, t); break;
     case Scene::hack: hack(fb, t); break;
     case Scene::data_rain: data_rain(fb, t, face); break;
-    case Scene::error404: error404(fb, t); break;
+    case Scene::error404: error404(fb, t, p); break;
     case Scene::reboot: reboot(fb, t, face); break;
     case Scene::hide: hide(fb, t, face); break;
     case Scene::upgrade: upgrade(fb, t, p); break;
@@ -467,6 +686,13 @@ void render_scene(Framebuffer& fb, Scene s, uint32_t t, const SceneParams& p, co
     case Scene::greet: greet(fb, t, p); break;
     case Scene::duel: duel(fb, t, p); break;
     case Scene::chat: chat(fb, t, p); break;
+    case Scene::achievement: achievement(fb, t, p); break;
+    case Scene::charge: charge(fb, t, p); break;
+    case Scene::shutdown: shutdown(fb, t); break;
+    case Scene::banner: banner(fb, t, p); break;
+    case Scene::bsod: bsod(fb, t); break;
+    case Scene::visor: visor(fb, t); break;
+    case Scene::screensaver: screensaver(fb, t, p); break;
     default: break;
   }
 }

@@ -40,7 +40,8 @@ namespace face {
   X(duel)                \
   X(win)                 \
   X(lose)                \
-  X(boot)
+  X(boot)                \
+  X(two_bits)
 
 enum class Cue : uint8_t {
 #define FACE_X(n) n,
@@ -97,6 +98,8 @@ class Voice {
   // peer — характер соседа: тогда звучат обе стороны (для стенда и симулятора).
   void chat(uint32_t key, bool first, uint32_t now_ms, const Temperament* peer = nullptr);
   void stop();
+  // У сцены есть музыка (у «зарядки» — нет: за неё говорит реплика charge_start).
+  static bool has_music(Scene s);
 
   // Что звучит сейчас: частота в Гц, 0 — тишина.
   uint16_t tone(uint32_t now_ms);

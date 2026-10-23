@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "face/engine.h"
+#include "face/friends.h"
 #include "face/progress.h"
 #include "face/sound.h"
 #include "face/temperament.h"
@@ -129,6 +130,9 @@ class Behavior {
   // показывает только открытые эмоции, а касания, шаги и встречи дают опыт.
   void attach_progress(Progress* p);
   Progress* progress() const { return progress_; }
+  // Знакомые брелоки (friends.h): уровни дружбы, подарки наставника. nullptr — без памяти о знакомых.
+  void attach_friends(Friends* f) { friends_ = f; }
+  Friends* friends() const { return friends_; }
   // Закрытая эмоция подменяется ближайшей открытой (furious → angry и т. п.).
   Expr allowed(Expr e) const;
   void new_day(uint32_t now_ms);
@@ -138,7 +142,11 @@ class Behavior {
   // Другой брелок рядом (BLE): приветствие и опыт. code — его позывной, peer_hash — хэш
   // из его рекламного пакета: по нему виден характер соседа, и встреча идёт по-разному
   // для разных пар (близнецы, ворчун и игрун, скромник с кем угодно…). 0 — неизвестен.
-  void meet(const char* code, bool is_new, uint32_t now_ms, uint32_t peer_hash = 0);
+  // С таблицей знакомых новизну решает она, а дружба растёт по дням встреч. peer_level —
+  // его имплант: старший на два и больше раз в день дарит эмоцию. С nonce сеанса старые
+  // знакомые иногда шепчутся шифром (решение из общего ключа — одинаковое у обоих).
+  void meet(const char* code, bool is_new, uint32_t now_ms, uint32_t peer_hash = 0, uint8_t peer_level = 0,
+            uint32_t nonce = 0);
   // Хакерская дуэль с другим брелоком: победа открывает эмоцию досрочно. С peer_hash
   // и общим nonce сеанса BLE после дуэли брелоки «переговариваются» шифром (сцена chat):
   // оба ставят её в очередь одинаково, поэтому разговор идёт у них одновременно.
@@ -146,14 +154,27 @@ class Behavior {
   // Секретный разговор с соседом без дуэли.
   void chat(const char* code, uint32_t peer_hash, uint32_t nonce, uint32_t now_ms);
 
-  // Календарь для праздников: Новый год, Хэллоуин, день рождения хозяина.
+  // Питание. Процент заряда показывает сцена зарядки (−1 — неизвестен). При малом заряде
+  // поведение само переходит в экорежим: реже кадры и занятия, без сюрпризов.
+  void set_battery_percent(int pct) { battery_pct_ = pct < -1 ? -1 : pct > 100 ? 100 : pct; }
+  bool eco() const { return eco_; }
+  // Выключение: «LOW BATTERY → GOODNIGHT» и сон; прошивка гасит всё по eng.scene_ends_ms().
+  void power_off(uint32_t now_ms);
+
+  // Календарь: Новый год, Хэллоуин, день рождения хозяина и пасхалки — день π, 4 мая,
+  // 1 апреля, 12 апреля, день полотенца, день программиста, пятница 13-е, 29 февраля.
   void set_date(uint16_t year, uint8_t month, uint8_t day);
   void set_birthday(uint8_t month, uint8_t day) { bday_m_ = month, bday_d_ = day; }
   // Сюрпризы — взлом, прятки, перезагрузка, ERROR 404: раз в min…max мс бодрствования.
   void set_surprise_interval(uint32_t min_ms, uint32_t max_ms, uint32_t now_ms);
   void surprise(uint32_t now_ms);
   // Сцена с последующей эмоцией: очередь на несколько штук (встреча → апгрейд).
-  void queue_scene(Scene s, const SceneParams& p, Expr after, uint32_t now_ms, const char* why);
+  // fresh — эмоция после сцены только что открыта: в углу мигает «NEW».
+  void queue_scene(Scene s, const SceneParams& p, Expr after, uint32_t now_ms, const char* why, bool fresh = false);
+  // Общая сцена с соседом (встреча, дуэль, разговор): встаёт в начало очереди за другими
+  // общими и начинается сразу, прерывая свою сцену — та покажется после. Так у двух
+  // брелоков общие сцены идут одновременно, что бы у каждого ни стояло в очереди.
+  void queue_shared(Scene s, const SceneParams& p, Expr after, uint32_t now_ms, const char* why, bool fresh = false);
 
   const Mood& mood() const { return mood_; }
   Personality& personality() { return pers_; }
@@ -190,6 +211,16 @@ class Behavior {
   Expr choose_base(uint32_t now);
   void idle_action(uint32_t now);
   void grant(int installed, uint32_t now);
+  // Достижения: за счётчики — после каждого события, за события — earn().
+  void achieve(uint32_t now);
+  void earn(Ach a, uint32_t now);
+  void reward(Ach a, uint32_t now);
+  void set_eco(int level);
+  // Пасхалки по дате и времени суток: раз за дату и раз в сутки на каждое время.
+  bool date_eggs(uint32_t now);
+  bool time_eggs(uint32_t now);
+  bool knock(uint32_t now);
+  void banner(const char* big, const char* sub, BannerIcon icon, Expr after, uint32_t now, const char* why);
   // Эмоция после приветствия: зависит от своего характера и характера соседа.
   Expr greet_after(const Temperament* other, bool is_new);
   bool run_queue(uint32_t now);
@@ -252,9 +283,14 @@ class Behavior {
     SceneParams params;
     Expr after;
     const char* why;
+    bool fresh;
   };
-  Queued queue_[4];
+  Queued queue_[8];
   int queue_n_ = 0;
+  int shared_n_ = 0;               // сколько общих сцен в начале очереди ещё не начато
+  Scene cur_scene_ = Scene::None;  // сцена, которую запустила очередь
+  bool cur_shared_ = false;        // и она общая
+  bool after_fresh_ = false;
   uint32_t queue_at_ = 0;  // следующая сцена очереди — не раньше (после эмоции-развязки прошлой)
   Expr after_scene_ = Expr::Count;
   const char* after_why_ = "";
@@ -265,6 +301,15 @@ class Behavior {
   uint32_t holiday_done_ = 0;  // ключ даты, для которой праздник уже показан
 
   Voice* voice_ = nullptr;
+  Friends* friends_ = nullptr;
+  int battery_pct_ = -1;
+  int eco_ = 0;  // 0 — нет, 1 — мало заряда, 2 — критично
+  uint16_t eco_frame_ms_ = 0;  // период кадров движка до экорежима
+  bool saver_done_ = false;    // заставка уже была на этой зарядке
+  bool off_ = false;           // «выключен»: спит до касания, кнопки или зарядки
+  uint8_t time_eggs_done_ = 0;
+  uint16_t last_clock_ = 0;
+  uint32_t knocks_[5] = {};
   uint32_t last_say_ = 0;
   uint32_t self_hash_ = 0;
   uint32_t chat_peer_ = 0;  // хэш соседа для сцены chat в очереди

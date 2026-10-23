@@ -313,10 +313,10 @@ int main(int argc, char** argv) {
     run_ms(6500);
     CHECK(host::ledc_tones - n0 >= 12, "в разговоре %u нот", host::ledc_tones - n0);
   }
-  run_ms(16000);
+  run_ms(40000);  // после разговора — свои сцены: достижение «первая победа», апгрейд
   type("date 2026-10-31");
   run_ms(1000);
-  CHECK(eng.scene() == Scene::halloween, "Хэллоуин по дате");
+  CHECK(eng.scene() == Scene::halloween, "Хэллоуин по дате: сцена %s", scene_id(eng.scene()));
   run_ms(8000);
   type("bday 05-14");
   CHECK(Preferences::store().count("keychain/bday_m"), "день рождения сохраняется");
@@ -380,6 +380,58 @@ int main(int argc, char** argv) {
   run_ms(300);
   CHECK(eng.scene() == Scene::chat && said("Разговор с"), "разговор по команде");
   run_ms(10000);
+
+  // Темы, зарядка, стук, достижения, знакомые, выключение, пасхалки по времени.
+  type("theme retro");
+  CHECK(eng.options().theme == Theme::Retro && said("Тема: retro"), "ретро-тема");
+  type("theme neon");
+  CHECK(said("Формат: theme"), "неизвестная тема");
+  type("theme classic");
+  type("bat 33");
+  type("e charge_start");
+  {
+    // Сцена зарядки — сразу или после эмоции-развязки прошлой сцены.
+    int pct = -2;
+    for (int i = 0; i < 200 && pct == -2; ++i) {
+      run_ms(20);
+      if (eng.scene() == Scene::charge) pct = eng.scene_params().value;
+    }
+    CHECK(pct == 33, "зарядка: сцена с процентом %d", pct);
+  }
+  run_ms(8000);
+  type("e charge_stop");
+  run_ms(4000);
+  type("knock");
+  run_ms(2500);
+  CHECK(progress.earned(Ach::knock) && reason_has("стук"), "секретный стук: «%s»", bh.last_reason());
+  run_ms(12000);
+  Serial.out.clear();
+  type("ach");
+  CHECK(said("[x] KNOCK KNOCK") && said("Достижений"), "список достижений");
+  type("meet");
+  run_ms(20000);
+  for (int d = 0; d < 2; ++d) {
+    type("day");
+    run_ms(15000);
+    type("meet again");
+    run_ms(25000);
+  }
+  Serial.out.clear();
+  type("friends");
+  CHECK(said("дней 3, BUDDY"), "три дня встреч — приятели");
+  type("off");
+  run_ms(8000);
+  CHECK(eng.expression() == Expr::sleeping, "выключился и спит: %s", expression(eng.expression()).id);
+  touch(80);
+  run_ms(6000);
+  CHECK(eng.expression() != Expr::sleeping, "кнопка будит: %s", expression(eng.expression()).id);
+  run_ms(4000);
+  type("t 13:37");
+  run_ms(1500);
+  CHECK(eng.scene() == Scene::banner && !strcmp(eng.scene_params().text, "1337"), "13:37 — пасхалка: %s",
+        scene_id(eng.scene()));
+  run_ms(20000);
+  type("t 12:00");
 
   // Плохой ввод: сообщение о формате, и ничего не применяется.
   type("a");
