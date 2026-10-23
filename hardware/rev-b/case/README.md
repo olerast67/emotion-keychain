@@ -6,6 +6,7 @@
 cd hardware/rev-b/case
 python3 case.py      # файлы резки и модель слоёв → out/
 python3 viewer.py    # 3D-просмотр → out/keychain-3d.html (нужен собранный build/facegen)
+python3 viewer.py --render ../../../docs/img/pcb-rev-b.png   # картинка платы для README
 ```
 
 ## Размеры

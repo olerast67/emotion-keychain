@@ -9,6 +9,7 @@ import base64
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -25,7 +26,7 @@ import netlist  # noqa: E402
 
 PCB = os.path.join(REV, "keychain-rev-b.kicad_pcb")
 OUT = os.path.join(HERE, "out")
-PX_PER_MM = 24
+PX_PER_MM = 24  # текстуры и картинки платы
 CAIROSVG = os.environ.get("CAIROSVG", "cairosvg")
 
 # Высоты корпусов деталей над платой, мм, и цвет.
@@ -49,20 +50,34 @@ def body_of(ref, fpname):
     return (0.9, "#202124")
 
 
-def layer_mask(layers, bbox, tmp):
-    """Чёрно-белая маска слоёв KiCad размером платы: 255 там, где есть рисунок."""
+def _render(layers, tmp):
+    """Слои KiCad в чёрно-белую картинку; у SVG KiCad свои поля вокруг платы."""
     svg = os.path.join(tmp, "l.svg")
     png = os.path.join(tmp, "l.png")
-    subprocess.run(["kicad-cli", "pcb", "export", "svg", "--layers", layers + ",Edge.Cuts", "--black-and-white",
+    subprocess.run(["kicad-cli", "pcb", "export", "svg", "--layers", layers, "--black-and-white",
                     "--exclude-drawing-sheet", "--page-size-mode", "2", "-o", svg, PCB],
                    check=True, capture_output=True)
-    w = int((bbox[2] - bbox[0]) * PX_PER_MM)
-    subprocess.run([CAIROSVG, svg, "-o", png, "--output-width", str(w), "-b", "white"], check=True, capture_output=True)
-    im = Image.open(png).convert("L")
-    return ImageChops.invert(im)
+    head = open(svg).read(2000)
+    w_mm = float(re.search(r'width="([\d.]+)mm"', head).group(1))
+    subprocess.run([CAIROSVG, svg, "-o", png, "--output-width", str(round(w_mm * PX_PER_MM)), "-b", "white"],
+                   check=True, capture_output=True)
+    return ImageChops.invert(Image.open(png).convert("L"))
 
 
-def board_texture(side, bbox, tmp):
+_EDGE = {}
+
+
+def layer_mask(layers, bbox, tmp):
+    """Маска слоёв (255 — рисунок), обрезанная точно по контуру платы bbox."""
+    if "box" not in _EDGE:
+        _EDGE["box"] = _render("Edge.Cuts", tmp).point(lambda v: 255 if v > 64 else 0).getbbox()
+    x0, y0, x1, y1 = _EDGE["box"]
+    im = _render(layers, tmp).crop((x0, y0, x1, y1))
+    size = (round((bbox[2] - bbox[0]) * PX_PER_MM), round((bbox[3] - bbox[1]) * PX_PER_MM))
+    return im.resize(size, Image.LANCZOS)
+
+
+def board_image(side, bbox, tmp):
     cu, mask, silk = (("F.Cu", "F.Mask", "F.Silkscreen") if side == "F" else ("B.Cu", "B.Mask", "B.Silkscreen"))
     m_cu = layer_mask(cu, bbox, tmp)
     m_open = layer_mask(mask, bbox, tmp)
@@ -72,6 +87,11 @@ def board_texture(side, bbox, tmp):
     img.paste(Image.new("RGB", size, (40, 44, 50)), mask=m_cu.point(lambda v: 120 if v > 128 else 0))
     img.paste(Image.new("RGB", size, (214, 173, 92)), mask=m_open.point(lambda v: 255 if v > 128 else 0))
     img.paste(Image.new("RGB", size, (236, 236, 232)), mask=m_silk.point(lambda v: 255 if v > 128 else 0))
+    return img
+
+
+def board_texture(side, bbox, tmp):
+    img = board_image(side, bbox, tmp)
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=88)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
@@ -108,7 +128,43 @@ def outline_points(board):
     return res
 
 
+def board_render(path):
+    """Картинка для README: лицо и оборот платы рядом, фон прозрачный, отверстия сквозные."""
+    from PIL import ImageDraw
+    board = pcbnew.LoadBoard(PCB)
+    bb = board.GetBoardEdgesBoundingBox()
+    bbox = (pcbnew.ToMM(bb.GetX()), pcbnew.ToMM(bb.GetY()), pcbnew.ToMM(bb.GetRight()), pcbnew.ToMM(bb.GetBottom()))
+    with tempfile.TemporaryDirectory() as tmp:
+        front, back = board_image("F", bbox, tmp), board_image("B", bbox, tmp)
+    w, h = front.size
+    sx, sy = w / (bbox[2] - bbox[0]), h / (bbox[3] - bbox[1])
+    px = lambda x, y: ((x - bbox[0]) * sx, (y - bbox[1]) * sy)
+    alpha = Image.new("L", (w, h), 0)
+    d = ImageDraw.Draw(alpha)
+    for part in outline_points(board):
+        d.polygon([px(x, y) for x, y in part[0]], fill=255)
+        for hole in part[1:]:
+            d.polygon([px(x, y) for x, y in hole], fill=0)
+    for fp in board.GetFootprints():
+        for p in fp.Pads():
+            r = pcbnew.ToMM(p.GetDrillSize().x) / 2
+            if r >= 0.3:
+                cx, cy = px(pcbnew.ToMM(p.GetPosition().x), pcbnew.ToMM(p.GetPosition().y))
+                d.ellipse((cx - r * sx, cy - r * sy, cx + r * sx, cy + r * sy), fill=0)
+    front.putalpha(alpha)
+    back = back.transpose(Image.FLIP_LEFT_RIGHT)  # оборот — как его видно, если перевернуть плату
+    back.putalpha(alpha.transpose(Image.FLIP_LEFT_RIGHT))
+    gap = int(w * 0.18)
+    out = Image.new("RGBA", (2 * w + gap, h), (0, 0, 0, 0))
+    out.paste(front, (0, 0), front)
+    out.paste(back, (w + gap, 0), back)
+    out.save(path)
+    print(f"{path}: {out.size[0]}×{out.size[1]}")
+
+
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--render":
+        return board_render(sys.argv[2])
     board = pcbnew.LoadBoard(PCB)
     bb = board.GetBoardEdgesBoundingBox()
     bbox = (pcbnew.ToMM(bb.GetX()), pcbnew.ToMM(bb.GetY()), pcbnew.ToMM(bb.GetRight()), pcbnew.ToMM(bb.GetBottom()))
