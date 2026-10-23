@@ -47,9 +47,11 @@
 1. Скачайте готовый файл:
    - GitHub → **Actions** → последний зелёный запуск **CI** → артефакт **stand-firmware**;
    - в архиве `stand-esp32c5.bin`, `stand-esp32dev.bin`, `stand-esp32c3.bin` и `stand-esp32s3.bin`.
-2. Откройте в Chrome или Edge [espressif.github.io/esptool-js](https://espressif.github.io/esptool-js/), нажмите **Connect** и выберите порт платы.
-3. Прошейте файл своей платы с адреса `0x0` кнопкой **Program**.
-4. Нажмите **Disconnect**. Затем в разделе **Console** выберите 115200 и нажмите **Start**: там появятся сообщения и можно вводить команды.
+2. Откройте в Chrome или Edge прошивальщик [olerast.com/flash](https://olerast.com/flash), подключите плату и выберите её порт.
+3. Прошейте файл своей платы с адреса `0x0`.
+4. Откройте консоль на 115200: там появятся сообщения и можно вводить команды.
+
+Запасной вариант — прошивальщик Espressif [espressif.github.io/esptool-js](https://espressif.github.io/esptool-js/): **Connect** → файл с адреса `0x0` → **Program** → **Disconnect** → в разделе **Console** скорость 115200 и **Start**.
 
 ### VS Code + PlatformIO
 
