@@ -5,6 +5,7 @@
 #include "face/engine.h"
 #include "face/raster.h"
 #include "face/render.h"
+#include "face/sound.h"
 #include "face/text.h"
 
 namespace face {
@@ -19,10 +20,15 @@ const char* const kIds[] = {
 
 const char* const kNames[] = {"Загрузка «OLERAST LINK»", "Взлом",    "Дождь данных", "ERROR 404",
                               "Перезагрузка",           "Прятки",   "Апгрейд",      "Новый год",
-                              "День рождения",          "Хэллоуин", "Встреча",      "Дуэль"};
+                              "День рождения",          "Хэллоуин", "Встреча",      "Дуэль",
+                              "Секретный разговор"};
 static_assert(sizeof(kNames) / sizeof(kNames[0]) == kSceneCount, "имена сцен");
 
-const uint16_t kDuration[] = {3800, 5200, 5000, 3600, 4200, 5200, 4600, 6000, 6000, 4500, 3200, 6500};
+// Разговор: четыре реплики, «расшифровка» и отказ в доступе.
+constexpr uint32_t kChatDecryptMs = kChatMs, kChatFlashMs = kChatMs + 900, kChatDeniedMs = kChatMs + 1650;
+constexpr uint16_t kChatSceneMs = (uint16_t)(kChatMs + 2600);
+
+const uint16_t kDuration[] = {3800, 5200, 5000, 3600, 4200, 5200, 4600, 6000, 6000, 4500, 3200, 6500, kChatSceneMs};
 static_assert(sizeof(kDuration) / sizeof(kDuration[0]) == kSceneCount, "длительности сцен");
 
 constexpr int kL = kSafeMargin, kR = kWidth - 1 - kSafeMargin, kT = kSafeMargin, kB = kHeight - 1 - kSafeMargin;
@@ -323,6 +329,93 @@ void duel(Framebuffer& fb, uint32_t t, const SceneParams& p) {
   if (t > 5400 || blink_on(t - 4600, 150)) draw_text_centered(fb, kCx, 32, win ? "WIN!" : "LOST", 3);
 }
 
+// Знаки шифра 5×5: не похожи на буквы шрифта 3×5, рисуются клетками 2×2.
+// clang-format off
+const uint8_t kRunes[kChatRunes][5] = {
+    {0x04, 0x0A, 0x11, 0x0A, 0x04}, {0x04, 0x04, 0x1F, 0x04, 0x0A}, {0x15, 0x15, 0x1F, 0x04, 0x04},
+    {0x1C, 0x04, 0x07, 0x04, 0x1C}, {0x04, 0x04, 0x1F, 0x11, 0x11}, {0x10, 0x10, 0x1F, 0x01, 0x01},
+    {0x0E, 0x11, 0x15, 0x11, 0x0E}, {0x01, 0x02, 0x1F, 0x08, 0x10}, {0x1B, 0x0A, 0x04, 0x0A, 0x1B},
+    {0x04, 0x0E, 0x15, 0x04, 0x04}, {0x1F, 0x0A, 0x04, 0x0A, 0x1F}, {0x1F, 0x15, 0x15, 0x15, 0x00},
+    {0x15, 0x00, 0x15, 0x00, 0x15}, {0x04, 0x0A, 0x11, 0x1F, 0x00}, {0x10, 0x18, 0x14, 0x12, 0x1F},
+    {0x0E, 0x0A, 0x1B, 0x0A, 0x0E},
+};
+// clang-format on
+
+constexpr int kRunePx = 10, kRuneStep = 12;
+constexpr int kBubbleW = kChatGlyphs * kRuneStep - 2 + 10, kBubbleH = 20;
+
+void draw_rune(Framebuffer& fb, int x, int y, uint8_t g) {
+  const uint8_t* r = kRunes[g % kChatRunes];
+  for (int row = 0; row < 5; ++row)
+    for (int col = 0; col < 5; ++col)
+      if (r[row] & (0x10 >> col)) fill_box(fb, x + col * 2, y + row * 2, x + col * 2 + 1, y + row * 2 + 1);
+}
+
+// Пузырь реплики со скруглёнными углами; shown — сколько знаков уже «сказано».
+void bubble(Framebuffer& fb, int x0, int y0, const uint8_t* g, int shown) {
+  const int x1 = x0 + kBubbleW - 1, y1 = y0 + kBubbleH - 1;
+  fill_box(fb, x0 + 2, y0, x1 - 2, y0 + 1);
+  fill_box(fb, x0 + 2, y1 - 1, x1 - 2, y1);
+  fill_box(fb, x0, y0 + 2, x0 + 1, y1 - 2);
+  fill_box(fb, x1 - 1, y0 + 2, x1, y1 - 2);
+  fill_box(fb, x0 + 1, y0 + 1, x0 + 2, y0 + 2);
+  fill_box(fb, x1 - 2, y0 + 1, x1 - 1, y0 + 2);
+  fill_box(fb, x0 + 1, y1 - 2, x0 + 2, y1 - 1);
+  fill_box(fb, x1 - 2, y1 - 2, x1 - 1, y1 - 1);
+  for (int k = 0; k < shown && k < kChatGlyphs; ++k) draw_rune(fb, x0 + 5 + k * kRuneStep, y0 + 5, g[k]);
+}
+
+void chat(Framebuffer& fb, uint32_t t, const SceneParams& p) {
+  const bool we_first = p.value != 0;
+  if (t < kChatDecryptMs) {
+    // Сверху — кто с кем: сосед слева, мы справа. Реплики идут пузырями, знаки появляются
+    // вместе с нотами пищалки (те же длительности, что у Voice::chat).
+    draw_text(fb, kL, kT, p.text[0] ? p.text : "??");
+    draw_text(fb, kR + 1 - text_width("ME"), kT, "ME");
+    const int line = (int)(t / kChatLineMs);
+    const uint32_t lt = t - (uint32_t)line * kChatLineMs;
+    for (int row = 0; row < 2; ++row) {
+      const int i = line - 1 + row;
+      if (i < 0) continue;
+      uint8_t g[kChatGlyphs];
+      const bool ours = chat_line(p.key, i, g) == we_first;
+      int shown = kChatGlyphs;
+      if (i == line) {
+        uint32_t at = 0;
+        shown = 0;
+        while (shown < kChatGlyphs && lt >= at) at += chat_glyph_ms(g[shown++]);
+      }
+      bubble(fb, ours ? kR + 1 - kBubbleW : kL, row ? 39 : 17, g, shown);
+    }
+    return;
+  }
+  if (t < kChatFlashMs) {
+    draw_text_centered(fb, kCx, 14, "DECRYPT");
+    progress_bar(fb, 16, 32, 111, 42, ease_in(phase(t, kChatDecryptMs, kChatFlashMs - kChatDecryptMs)));
+    return;
+  }
+  if (t < kChatDeniedMs) {
+    // На миг проступает «расшифровка»: буквы по одной выходят из шума — и тут же «доступ запрещён».
+    static const char kNoise[] = "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789#%*";
+    const char* phrase = chat_phrase(p.key);
+    char buf[16];
+    int n = 0;
+    while (phrase[n] && n < 15) ++n;
+    const int resolved = iround((float)n * phase(t, kChatFlashMs, 350));
+    for (int i = 0; i < n; ++i) {
+      const uint32_t h = hash(p.key + (uint32_t)i * 977u + (t / 40u) * 131u);
+      buf[i] = (i < resolved || phrase[i] == ' ') ? phrase[i] : kNoise[h % (sizeof(kNoise) - 1)];
+    }
+    buf[n] = 0;
+    draw_text_centered(fb, kCx, 27, buf);
+    return;
+  }
+  if (t > kChatDeniedMs + 500 || blink_on(t - kChatDeniedMs, 120)) {
+    draw_text_centered(fb, kCx, 14, "ACCESS");
+    draw_text_centered(fb, kCx, 32, "DENIED");
+  }
+}
+
 }  // namespace
 
 const char* scene_id(Scene s) { return (int)s < kSceneCount ? kIds[(int)s] : "none"; }
@@ -354,6 +447,7 @@ uint16_t scene_frame_ms(Scene s, uint32_t t) {
     case Scene::halloween: return 120;
     case Scene::greet: return 60;
     case Scene::duel: return 60;
+    case Scene::chat: return t < kChatDecryptMs ? 20 : 60;
     default: return 100;
   }
 }
@@ -372,6 +466,7 @@ void render_scene(Framebuffer& fb, Scene s, uint32_t t, const SceneParams& p, co
     case Scene::halloween: halloween(fb, t); break;
     case Scene::greet: greet(fb, t, p); break;
     case Scene::duel: duel(fb, t, p); break;
+    case Scene::chat: chat(fb, t, p); break;
     default: break;
   }
 }

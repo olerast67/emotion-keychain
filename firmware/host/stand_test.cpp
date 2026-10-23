@@ -11,6 +11,8 @@
 namespace host {
 uint64_t now_us = 0;
 int pins[64] = {};
+int ledc_pin = -1;
+uint32_t ledc_hz = 0, ledc_duty = 0, ledc_tones = 0;
 }  // namespace host
 
 HostSerial Serial;
@@ -162,6 +164,9 @@ int main(int argc, char** argv) {
   CHECK(said("Экран SSD1306 на 0x3C"), "сообщение об экране");
   CHECK(Wire.emu.on, "экран включён");
   CHECK(Wire.emu.mode == 0, "горизонтальная адресация");
+  CHECK(host::ledc_pin == PIN_BUZZER && host::ledc_tones > 3 && said("Звук: музыка сцены"),
+        "при старте пищалка играет загрузку: %u нот", host::ledc_tones);
+  CHECK(host::ledc_hz == 0, "после мелодии пищалка молчит");
 
   // Живой режим.
   const uint32_t bytes0 = Wire.emu.bytes;
@@ -296,9 +301,19 @@ int main(int argc, char** argv) {
   run_ms(300);
   CHECK(eng.scene() == Scene::greet && progress.friends == 1, "встреча с новым брелоком");
   run_ms(8000);
+  type("t 12:00");  // днём: ночью разговор идёт только на экране
   type("duel win");
   run_ms(9000);
   CHECK(progress.duels_won == 1, "дуэль засчитана");
+  run_ms(1500);
+  CHECK(eng.scene() == Scene::chat, "после дуэли — секретный разговор: %s", scene_id(eng.scene()));
+  {
+    // Разговор слышен: обе стороны играет одна пищалка.
+    const uint32_t n0 = host::ledc_tones;
+    run_ms(6500);
+    CHECK(host::ledc_tones - n0 >= 12, "в разговоре %u нот", host::ledc_tones - n0);
+  }
+  run_ms(16000);
   type("date 2026-10-31");
   run_ms(1000);
   CHECK(eng.scene() == Scene::halloween, "Хэллоуин по дате");
@@ -322,10 +337,49 @@ int main(int argc, char** argv) {
   setup();
   CHECK(progress.xp == xp && progress.unlocked_count() == unlocked, "прогресс пережил перезагрузку: %u", progress.xp);
   CHECK(eng.options().theme == Theme::Cyber && bday_m == 5 && bday_d == 14, "настройки пережили перезагрузку");
-  CHECK(eng.scene() == Scene::boot, "при старте — загрузка NEURAL LINK");
+  CHECK(eng.scene() == Scene::boot, "при старте — загрузка OLERAST LINK");
   run_ms(5000);
   type("reset yes");
   CHECK(progress.xp == 0 && progress.implant == 0, "рост начат заново");
+
+  // Звук: реплика по команде, выключатель во флеше, тихие часы.
+  type("a");
+  type("t 12:00");
+  run_ms(3000);
+  Serial.out.clear();
+  type("say laugh");
+  CHECK(said("Звук: laugh") && host::ledc_hz > 0, "реплика по команде: %u Гц, вывод: %s", host::ledc_hz,
+        Serial.out.c_str());
+  run_ms(2000);
+  type("say nope");
+  CHECK(said("Нет такой реплики"), "неизвестная реплика");
+  type("snd");
+  CHECK(!sound_on && Preferences::store().count("keychain/sound") && said("Звук выключен"), "звук выключен");
+  {
+    const uint32_t n0 = host::ledc_tones;
+    type("say laugh");
+    type("e charge_start");
+    run_ms(3000);
+    CHECK(host::ledc_tones == n0 && host::ledc_hz == 0, "выключенная пищалка молчит");
+  }
+  type("snd");
+  CHECK(sound_on, "звук снова включён");
+  type("e charge_stop");
+  type("t 23:30");
+  run_ms(4000);
+  Serial.out.clear();
+  type("say laugh");
+  CHECK(said("тихие часы"), "ночью смеха нет");
+  type("e battery_low");
+  run_ms(50);
+  CHECK(said("Звук: battery_low (тихо)") && host::ledc_duty == 128, "ночью о батарее — тихо: скважность %u",
+        host::ledc_duty);
+  run_ms(2000);
+  type("t 12:00");
+  type("chat");
+  run_ms(300);
+  CHECK(eng.scene() == Scene::chat && said("Разговор с"), "разговор по команде");
+  run_ms(10000);
 
   // Плохой ввод: сообщение о формате, и ничего не применяется.
   type("a");

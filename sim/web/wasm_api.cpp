@@ -4,6 +4,7 @@
 #include "face/engine.h"
 #include "face/identity.h"
 #include "face/progress.h"
+#include "face/sound.h"
 
 #define EXPORT(name) extern "C" __attribute__((export_name(#name)))
 
@@ -11,6 +12,8 @@ using namespace face;
 
 static FaceEngine g_eng;
 static Behavior g_bh;
+static Voice g_voice;
+static uint32_t g_seed = 1;
 static DirtyWindow g_dirty[kPages];
 static int g_dirty_n = 0;
 
@@ -40,8 +43,12 @@ __attribute__((no_builtin)) void* memmove(void* dst, const void* src, unsigned l
 }
 
 EXPORT(fe_init) void fe_init(uint32_t seed, uint32_t now) {
+  g_seed = seed;
   g_eng.init(seed, now);
   g_bh.init(&g_eng, seed, now);
+  g_voice.init(nullptr, seed);
+  g_bh.attach_voice(&g_voice);
+  g_bh.set_chat_both_sides(true);  // соседа на странице нет: его реплики играет та же пищалка
 }
 // Выбор эмоции, жеста или сцены на странице — это внимание к брелоку, как кнопка на стенде.
 EXPORT(fe_set_expr) void fe_set_expr(int id, uint32_t now, int ms) {
@@ -126,11 +133,21 @@ EXPORT(fe_event_name) const char* fe_event_name(int i) { return event_name((Even
 
 // ---- Характер, тема, сцены, наклон ----
 static Identity g_id;
+// Соседний брелок для встреч и дуэлей на странице: каждый раз новый.
+static Identity g_peer;
+static uint32_t g_peer_n = 0;
+static const Identity& next_peer(uint32_t now) {
+  ++g_peer_n;
+  g_peer = make_identity((uint64_t)(now ^ (g_peer_n * 2654435761u)) << 8 | g_peer_n);
+  return g_peer;
+}
 EXPORT(fe_set_theme) void fe_set_theme(int cyber) { g_eng.options().theme = cyber ? Theme::Cyber : Theme::Classic; }
 EXPORT(fe_identity) void fe_identity(uint32_t lo, uint32_t hi, uint32_t now) {
   g_id = make_identity((uint64_t)hi << 32 | lo);
   g_bh.personality() = g_id.personality;
   g_bh.set_temperament(&temperament(g_id.archetype));
+  g_bh.set_identity_hash(g_id.hash);
+  g_voice.init(&temperament(g_id.archetype), g_seed ^ g_id.hash);
   g_eng.set_quirks(g_id.quirks, now);
 }
 EXPORT(fe_id_code) const char* fe_id_code() { return g_id.code; }
@@ -141,13 +158,39 @@ EXPORT(fe_scene_count) int fe_scene_count() { return kSceneCount; }
 EXPORT(fe_scene_id) const char* fe_scene_id(int i) { return scene_id((Scene)i); }
 EXPORT(fe_scene_name) const char* fe_scene_name(int i) { return scene_name((Scene)i); }
 EXPORT(fe_play_scene) void fe_play_scene(int i, uint32_t now) {
+  const Scene s = (Scene)i;
   SceneParams p;
-  if ((Scene)i == Scene::upgrade) p.set_text(implant(1 + (int)(now / 1000u) % (implant_count() - 1)).tag);
-  if ((Scene)i == Scene::greet || (Scene)i == Scene::duel) p.set_text(make_identity(now).code);
-  if ((Scene)i == Scene::duel) p.value = (int)(now & 1u);
-  if ((Scene)i == Scene::new_year) p.set_text("2027");
+  if (s == Scene::upgrade) p.set_text(implant(1 + (int)(now / 1000u) % (implant_count() - 1)).tag);
+  if (s == Scene::greet || s == Scene::duel || s == Scene::chat) p.set_text(next_peer(now).code);
+  if (s == Scene::duel) p.value = (int)(now & 1u);
+  if (s == Scene::new_year) p.set_text("2027");
+  if (s == Scene::chat) {
+    p.key = chat_key(g_id.hash, g_peer.hash, now);
+    p.value = chat_first(g_id.hash, g_peer.hash) ? 1 : 0;
+  }
   g_eng.note_activity(now);
-  g_eng.play_scene((Scene)i, now, p);
+  g_eng.play_scene(s, now, p);
+  if (s == Scene::chat)
+    g_voice.chat(p.key, p.value != 0, now, &temperament(g_peer.archetype));
+  else
+    g_voice.scene(s, p, now);
 }
+
+// ---- Другой брелок рядом: встреча и дуэль (после дуэли — разговор шифром) ----
+EXPORT(fe_meet) void fe_meet(int is_new, uint32_t now) {
+  const Identity& p = next_peer(now);
+  g_bh.meet(p.code, is_new != 0, now, p.hash);
+}
+EXPORT(fe_duel) void fe_duel(int won, uint32_t now) {
+  const Identity& p = next_peer(now);
+  g_bh.duel(p.code, won != 0, now, p.hash, now);
+}
+EXPORT(fe_peer_arch) const char* fe_peer_arch() { return archetype_name(g_peer.archetype); }
+
+// ---- Голос: частота пищалки сейчас (0 — тишина), тихий режим и выключатель ----
+EXPORT(fe_voice_tone) int fe_voice_tone(uint32_t now) { return g_voice.tone(now); }
+EXPORT(fe_voice_next) uint32_t fe_voice_next() { return g_voice.next_change_ms(); }
+EXPORT(fe_voice_soft) int fe_voice_soft() { return g_voice.soft() ? 1 : 0; }
+EXPORT(fe_voice_enable) void fe_voice_enable(int on) { g_voice.set_enabled(on != 0); }
 EXPORT(fe_scene_active) int fe_scene_active() { return g_eng.scene() == Scene::None ? -1 : (int)g_eng.scene(); }
 EXPORT(fe_set_tilt) void fe_set_tilt(float x, float y) { g_eng.set_tilt(x, y); }

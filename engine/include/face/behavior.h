@@ -2,9 +2,10 @@
 // ведёт настроение и сам придумывает, чем заняться, когда ничего не происходит.
 //
 //   Behavior b;  b.init(&engine, seed, now);
+//   b.attach_voice(&voice);                   // по желанию: реплики пищалкой (sound.h)
 //   b.on_event(Event::DoubleTap, now);        // из обработчика прерывания IMU
 //   b.update(now);                            // в главном цикле, в любом режиме
-//   спать до ближайшего из engine.next_update_ms() и b.next_update_ms()
+//   спать до ближайшего из engine.next_update_ms(), b.next_update_ms() и voice.next_change_ms()
 //
 // Как и движок, поведение не планирует дальше kMaxSleepMs и сравнивает время через time_reached.
 #pragma once
@@ -13,6 +14,7 @@
 
 #include "face/engine.h"
 #include "face/progress.h"
+#include "face/sound.h"
 #include "face/temperament.h"
 
 namespace face {
@@ -94,7 +96,10 @@ class Behavior {
   uint32_t next_update_ms() const { return next_; }
 
   // Часы для суточного ритма: минуты от полуночи (0..1439).
-  void set_clock(uint16_t minutes) { clock_min_ = (uint16_t)(minutes % 1440); }
+  void set_clock(uint16_t minutes) {
+    clock_min_ = (uint16_t)(minutes % 1440);
+    if (voice_) voice_->set_quiet(night());  // тихие часы — сразу, а не на следующем пробуждении
+  }
   // Без автоматики поведение только ведёт настроение; включённое снова — сразу в деле.
   void set_auto(bool on) {
     auto_ = on;
@@ -110,6 +115,15 @@ class Behavior {
   // темп и сбои картинки. nullptr — «средний» персонаж, как в симуляторе.
   void set_temperament(const Temperament* t);
   const Temperament* temperament_ptr() const { return temp_; }
+  // Хэш своего брелока (identity.h): по нему с соседом считается ключ секретного разговора.
+  void set_identity_hash(uint32_t h) { self_hash_ = h; }
+
+  // Голос: реплики на касания и события (чаще у разговорчивых характеров), музыка сцен,
+  // ночью — только важное. nullptr — молчит. Характер голосу задаёт сам Voice::init.
+  void attach_voice(Voice* v) { voice_ = v; }
+  Voice* voice() const { return voice_; }
+  // Стенд и симулятор с одним брелоком: в секретном разговоре звучат обе стороны.
+  void set_chat_both_sides(bool on) { chat_both_ = on; }
 
   // Рост: без прогресса открыто всё (симулятор, тесты). С прогрессом персонаж
   // показывает только открытые эмоции, а касания, шаги и встречи дают опыт.
@@ -125,8 +139,12 @@ class Behavior {
   // из его рекламного пакета: по нему виден характер соседа, и встреча идёт по-разному
   // для разных пар (близнецы, ворчун и игрун, скромник с кем угодно…). 0 — неизвестен.
   void meet(const char* code, bool is_new, uint32_t now_ms, uint32_t peer_hash = 0);
-  // Хакерская дуэль с другим брелоком: победа открывает эмоцию досрочно.
-  void duel(const char* code, bool won, uint32_t now_ms);
+  // Хакерская дуэль с другим брелоком: победа открывает эмоцию досрочно. С peer_hash
+  // и общим nonce сеанса BLE после дуэли брелоки «переговариваются» шифром (сцена chat):
+  // оба ставят её в очередь одинаково, поэтому разговор идёт у них одновременно.
+  void duel(const char* code, bool won, uint32_t now_ms, uint32_t peer_hash = 0, uint32_t nonce = 0);
+  // Секретный разговор с соседом без дуэли.
+  void chat(const char* code, uint32_t peer_hash, uint32_t nonce, uint32_t now_ms);
 
   // Календарь для праздников: Новый год, Хэллоуин, день рождения хозяина.
   void set_date(uint16_t year, uint8_t month, uint8_t day);
@@ -153,6 +171,10 @@ class Behavior {
     float weight;
   };
   void react(Expr e, uint32_t now, uint32_t ms, const char* why, Clip clip = Clip::None);
+  // Сказать реплику: chance < 1 — с такой вероятностью (умноженной на разговорчивость характера)
+  // и не чаще раза в kSayGapMs; chance = 1 — всегда, если пищалка свободна.
+  void say(Cue c, uint32_t now, float chance = 1.0f);
+  void voice_event(Event e, uint32_t now);
   // Показать эмоцию и запомнить, что её выбрало поведение (а не цепочка движка).
   void show(Expr e, uint32_t now);
   void schedule_surprise(uint32_t now);
@@ -233,6 +255,7 @@ class Behavior {
   };
   Queued queue_[4];
   int queue_n_ = 0;
+  uint32_t queue_at_ = 0;  // следующая сцена очереди — не раньше (после эмоции-развязки прошлой)
   Expr after_scene_ = Expr::Count;
   const char* after_why_ = "";
   uint32_t surprise_min_ = 24u * 3600000u, surprise_max_ = 60u * 3600000u;  // не больше недели
@@ -240,6 +263,12 @@ class Behavior {
   uint16_t year_ = 0;
   uint8_t month_ = 0, day_ = 0, bday_m_ = 0, bday_d_ = 0;
   uint32_t holiday_done_ = 0;  // ключ даты, для которой праздник уже показан
+
+  Voice* voice_ = nullptr;
+  uint32_t last_say_ = 0;
+  uint32_t self_hash_ = 0;
+  uint32_t chat_peer_ = 0;  // хэш соседа для сцены chat в очереди
+  bool chat_both_ = false;
 };
 
 }  // namespace face

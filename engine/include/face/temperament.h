@@ -64,9 +64,10 @@ struct Temperament {
   float playful, grumpy, sleepy, shy;
   Scene fav;     // любимый сюрприз; Scene::None — без любимого
   bool glitches;  // мелкие сбои картинки и в классической теме
-  // Голос: основная нота и манера.
+  // Голос: основная нота, манера и разговорчивость (0..1: как часто отвечает вслух).
   uint16_t pitch;  // Гц
   VoiceStyle voice;
+  float talk;
   float weight;  // как часто встречается среди брелоков
 };
 

@@ -9,6 +9,7 @@
 #include "face/progress.h"
 #include "face/render.h"
 #include "face/scenes.h"
+#include "face/sound.h"
 #include "face/text.h"
 
 using namespace face;
@@ -1220,6 +1221,228 @@ static void test_brightness_levels() {
   CHECK(bh.brightness() == Brightness::Dim, "во сне — приглушённо");
 }
 
+// ---------------------------------------------------------------- звук
+
+static uint32_t voice_ms(const Voice& v) {
+  uint32_t s = 0;
+  for (int i = 0; i < v.length(); ++i) s += v.note(i).ms;
+  return s;
+}
+
+static void test_sound_cues() {
+  for (int c = 0; c < kCueCount; ++c) {
+    Cue back;
+    CHECK(cue_from_id(cue_id((Cue)c), &back) && back == (Cue)c, "id реплики %s", cue_id((Cue)c));
+  }
+  for (int a = 0; a < kArchetypeCount; ++a) {
+    const Temperament& t = temperament((Archetype)a);
+    CHECK(t.talk > 0.0f && t.talk <= 1.0f, "%s: разговорчивость %.2f", t.tag, t.talk);
+    for (int c = 0; c < kCueCount; ++c) {
+      Voice v;
+      v.init(&t, 7);
+      CHECK(v.say((Cue)c, 0), "%s говорит %s", t.tag, cue_id((Cue)c));
+      bool audible = true, sound = false;
+      for (int i = 0; i < v.length(); ++i) {
+        const Note& n = v.note(i);
+        if (n.hz) audible &= n.hz >= 600 && n.hz <= 5400, sound = true;
+      }
+      const uint32_t ms = voice_ms(v);
+      CHECK(sound && audible, "%s/%s: ноты в слышимом для пьезо диапазоне", t.tag, cue_id((Cue)c));
+      CHECK(ms >= 60 && ms <= 2500, "%s/%s: длина %u мс", t.tag, cue_id((Cue)c), (unsigned)ms);
+    }
+  }
+  // Одна реплика у разных характеров звучит по-разному.
+  int distinct = 0;
+  for (int a = 1; a < kArchetypeCount; ++a) {
+    Voice x, y;
+    x.init(&temperament((Archetype)0), 7);
+    y.init(&temperament((Archetype)a), 7);
+    x.say(Cue::laugh, 0);
+    y.say(Cue::laugh, 0);
+    bool same = x.length() == y.length();
+    for (int i = 0; same && i < x.length(); ++i) same = x.note(i).hz == y.note(i).hz && x.note(i).ms == y.note(i).ms;
+    distinct += !same;
+  }
+  CHECK(distinct == kArchetypeCount - 1, "смех у всех характеров свой: %d из %d", distinct, kArchetypeCount - 1);
+  // Скромник не договаривает и говорит тихо.
+  Voice shy, play;
+  shy.init(&temperament(Archetype::shy), 1);
+  play.init(&temperament(Archetype::playful), 1);
+  shy.say(Cue::level_up, 0);
+  play.say(Cue::level_up, 0);
+  CHECK(voice_ms(shy) < voice_ms(play) && shy.soft() && !play.soft(), "скромник короче и тише");
+  CHECK(cue_for(Expr::laugh) == Cue::laugh && cue_for(Expr::calm) == Cue::Count, "реплики по эмоциям");
+}
+
+static void test_sound_playback() {
+  Voice v;
+  v.init(&temperament(Archetype::curious), 3);
+  const uint32_t t0 = 0xFFFFFF00u;  // и через переполнение millis()
+  CHECK(v.say(Cue::hello, t0), "говорит");
+  CHECK(v.tone(t0) == v.note(0).hz && v.next_change_ms() == t0 + v.note(0).ms, "первая нота и её конец");
+  uint32_t at = t0;
+  for (int i = 0; i < v.length(); ++i) {
+    CHECK(v.tone(at) == v.note(i).hz, "нота %d звучит вовремя", i);
+    at += v.note(i).ms;
+  }
+  CHECK(!v.busy(at) && v.tone(at) == 0, "после конца — тишина");
+  CHECK(time_left(at, v.next_change_ms()) == kMaxSleepMs, "тихий голос не будит процессор раньше горизонта");
+  // Пока идёт реплика, обычная не перебивает, важная — перебивает.
+  v.say(Cue::laugh, 1000);
+  CHECK(!v.say(Cue::boop, 1010), "обычная реплика ждёт");
+  CHECK(v.say(Cue::charge_start, 1020) && v.last_cue() == Cue::charge_start, "зарядка перебивает болтовню");
+  // Ночью — только важное, и тихо.
+  v.stop();
+  v.set_quiet(true);
+  CHECK(!v.say(Cue::laugh, 5000), "ночью не смеётся вслух");
+  CHECK(v.say(Cue::battery_low, 5000) && v.soft(), "о батарее скажет и ночью, но тихо");
+  v.set_quiet(false);
+  v.set_enabled(false);
+  CHECK(!v.say(Cue::battery_low, 9000) && v.tone(9000) == 0, "выключенная пищалка молчит");
+}
+
+static void test_scene_music() {
+  for (int a = 0; a < kArchetypeCount; ++a) {
+    for (int i = 0; i < kSceneCount; ++i) {
+      Voice v;
+      v.init(&temperament((Archetype)a), 5);
+      SceneParams p;
+      p.value = 1;
+      p.key = 12345;
+      v.scene((Scene)i, p, 0);
+      CHECK(voice_ms(v) <= scene_duration_ms((Scene)i), "%s/%s: музыка %u мс длиннее сцены", temperament((Archetype)a).tag,
+            scene_id((Scene)i), (unsigned)voice_ms(v));
+      for (int k = 0; k < v.length(); ++k)
+        CHECK(!v.note(k).hz || (v.note(k).hz >= 600 && v.note(k).hz <= 5400), "%s: нота %u Гц",
+              scene_id((Scene)i), v.note(k).hz);
+    }
+  }
+  // Исход дуэли звучит, когда он появляется на экране (4.6 с).
+  Voice v;
+  v.init(&temperament(Archetype::playful), 5);
+  SceneParams p;
+  p.value = 0;
+  v.scene(Scene::duel, p, 0);
+  uint32_t at = 0;
+  int first_after = -1;
+  for (int i = 0; i < v.length(); ++i) {
+    if (at >= 4600 && v.note(i).hz && first_after < 0) first_after = (int)at;
+    at += v.note(i).ms;
+  }
+  CHECK(first_after >= 4600 && first_after < 4700, "проигрыш звучит вместе с LOST: %d мс", first_after);
+}
+
+static void test_chat_sync() {
+  const uint32_t ha = 0x1234567u, hb = 0x89ABCDEFu, nonce = 77;
+  const uint32_t key = chat_key(ha, hb, nonce);
+  CHECK(key == chat_key(hb, ha, nonce) && key != chat_key(ha, hb, nonce + 1), "ключ общий и зависит от сеанса");
+  CHECK(chat_first(ha, hb) != chat_first(hb, ha), "начинает ровно один");
+  Voice a, b;
+  a.init(&temperament(Archetype::grumpy), 1);
+  b.init(&temperament(Archetype::sweet), 2);
+  a.chat(key, chat_first(ha, hb), 0);
+  b.chat(key, chat_first(hb, ha), 0);
+  CHECK(voice_ms(a) <= kChatMs && voice_ms(b) <= kChatMs, "разговор укладывается в %u мс", (unsigned)kChatMs);
+  int overlap = 0, silent_lines = 0;
+  for (int line = 0; line < kChatLines; ++line) {
+    int a_on = 0, b_on = 0;
+    for (uint32_t t = line * kChatLineMs; t < (line + 1) * kChatLineMs; t += 5) {
+      const bool x = a.tone(t) != 0, y = b.tone(t) != 0;
+      a_on += x, b_on += y, overlap += x && y;
+    }
+    silent_lines += !a_on && !b_on;
+    uint8_t g[kChatGlyphs];
+    const bool by_first = chat_line(key, line, g);
+    const bool a_says = by_first == chat_first(ha, hb);
+    CHECK(a_says ? (a_on > 0 && b_on == 0) : (b_on > 0 && a_on == 0), "реплику %d говорит только свой брелок", line);
+  }
+  CHECK(!overlap && !silent_lines, "брелоки не перебивают друг друга: %d, пустых реплик %d", overlap, silent_lines);
+  // Знаки на экране появляются вместе с нотами: число нот реплики = числу знаков.
+  uint8_t g[kChatGlyphs];
+  chat_line(key, 0, g);
+  uint32_t sum = 0;
+  for (uint8_t x : g) {
+    sum += chat_glyph_ms(x);
+    CHECK(x < kChatRunes, "знак %u", x);
+  }
+  CHECK(sum < kChatLineMs, "реплика короче паузы между репликами");
+  CHECK(chat_phrase(key)[0] && text_width(chat_phrase(key)) <= kWidth - 2 * kSafeMargin, "фраза влезает");
+  // Для стенда с одним брелоком: обе стороны одной пищалкой.
+  Voice both;
+  both.init(&temperament(Archetype::grumpy), 1);
+  both.chat(key, true, 0, &temperament(Archetype::sweet));
+  int lines_heard = 0;
+  for (int line = 0; line < kChatLines; ++line) {
+    bool heard = false;
+    for (uint32_t t = line * kChatLineMs; t < line * kChatLineMs + 1200; t += 5) heard |= both.tone(t) != 0;
+    lines_heard += heard;
+  }
+  CHECK(lines_heard == kChatLines, "демо: слышны все %d реплики", lines_heard);
+}
+
+static void test_behavior_voice() {
+  FaceEngine eng;
+  Behavior bh;
+  Voice v;
+  eng.init(4, 0);
+  bh.init(&eng, 4, 0);
+  bh.set_temperament(&temperament(Archetype::dramatic));
+  v.init(&temperament(Archetype::dramatic), 4);
+  bh.attach_voice(&v);
+  bh.set_clock(12 * 60);
+  bh.update(0);
+  bh.on_event(Event::charge_start, 1000);
+  CHECK(v.started() == 1 && v.last_cue() == Cue::charge_start, "зарядка — всегда вслух");
+  // Тапы: иногда отвечает, но не чаще раза в 1.5 с.
+  uint32_t said = v.started(), t = 10000;
+  for (int i = 0; i < 40; ++i, t += 400) {
+    bh.on_event(Event::tap, t);
+    bh.update(t);
+    eng.update(t);
+    v.tone(t);
+  }
+  const uint32_t talk = v.started() - said;
+  CHECK(talk >= 2 && talk <= 11, "на 40 тапов за 16 с — %u реплик", (unsigned)talk);
+  // Ночью — тишина, кроме важного.
+  bh.set_clock(2 * 60);
+  bh.update(t);
+  said = v.started();
+  for (int i = 0; i < 10; ++i, t += 2000) bh.on_event(Event::double_tap, t);
+  CHECK(v.started() == said, "ночью на тапы молчит");
+  bh.on_event(Event::battery_low, t += 3000);
+  CHECK(v.started() == said + 1 && v.soft(), "ночью о батарее — тихо");
+}
+
+static void test_duel_then_chat() {
+  // Два брелока после дуэли: разговор начинается у обоих в одно время, ключ общий, начинает один.
+  const uint32_t ha = hash_of(Archetype::trickster), hb = hash_of(Archetype::shy);
+  FaceEngine ea, eb;
+  Behavior a, b;
+  Voice va, vb;
+  ea.init(1, 0), eb.init(2, 0);
+  a.init(&ea, 1, 0), b.init(&eb, 2, 0);
+  a.set_temperament(&temperament(Archetype::trickster)), b.set_temperament(&temperament(Archetype::shy));
+  a.set_identity_hash(ha), b.set_identity_hash(hb);
+  va.init(&temperament(Archetype::trickster), 1), vb.init(&temperament(Archetype::shy), 2);
+  a.attach_voice(&va), b.attach_voice(&vb);
+  a.duel("SH-0001", true, 1000, hb, 99);
+  b.duel("TR-0002", false, 1000, ha, 99);
+  uint32_t chat_a = 0, chat_b = 0;
+  for (uint32_t t = 1000; t < 30000; t += 20) {
+    // Касание посреди паузы не сдвигает разговор: у соседа его не было.
+    if (t == 8600) a.on_event(Event::tap, t);
+    a.update(t), b.update(t), ea.update(t), eb.update(t);
+    if (!chat_a && ea.scene() == Scene::chat) chat_a = t;
+    if (!chat_b && eb.scene() == Scene::chat) chat_b = t;
+  }
+  CHECK(chat_a && chat_a == chat_b, "разговор начался одновременно: %u и %u", (unsigned)chat_a, (unsigned)chat_b);
+  CHECK(chat_a >= 1000 + scene_duration_ms(Scene::duel), "сначала дуэль");
+  CHECK(ea.scene_params().key == eb.scene_params().key && ea.scene_params().value != eb.scene_params().value,
+        "ключ общий, начинает один");
+  CHECK(ea.expression() == Expr::innocent || ea.expression() == Expr::smug || ea.expression() == Expr::mischievous,
+        "после разговора — невинное лицо: %s", expression(ea.expression()).id);
+}
+
 int main() {
   test_framebuffer();
   test_catalog();
@@ -1257,6 +1480,12 @@ int main() {
   test_wake_merge_and_horizon();
   test_calm_breathing();
   test_brightness_levels();
+  test_sound_cues();
+  test_sound_playback();
+  test_scene_music();
+  test_chat_sync();
+  test_behavior_voice();
+  test_duel_then_chat();
   printf("%d проверок, %d ошибок\n", g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

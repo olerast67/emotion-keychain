@@ -18,6 +18,11 @@ constexpr uint32_t kFollowMs = 4000u;
 constexpr uint32_t kChainMaxMs = 20000u;
 // Сколько ждём, пока движок сам перейдёт по цепочке, если он обновляется после поведения.
 constexpr uint32_t kHoldSlackMs = 50u;
+// Реплики «по желанию» (на тапы, от скуки) — не чаще этого.
+constexpr uint32_t kSayGapMs = 1500u;
+// Между сценами очереди — эмоция-развязка прошлой сцены. Пауза постоянная: два брелока,
+// которые поставили в очередь одно и то же (дуэль → разговор), остаются синхронными.
+constexpr uint32_t kBetweenScenesMs = 2500u;
 
 const char* const kEventIds[] = {
 #define FACE_X(n) #n,
@@ -149,7 +154,10 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   loud_at_ = 0;
   last_calling_ = last_cyclops_ = now;
   queue_n_ = 0;
+  queue_at_ = now;
   after_scene_ = Expr::Count;
+  last_say_ = now - kSayGapMs;
+  chat_peer_ = 0;
   schedule_surprise(now);
   holiday_done_ = 0;
   dark = charging = upside = music_on = speech_on = cold = hot = moving = running = false;
@@ -240,6 +248,50 @@ void Behavior::show(Expr e, uint32_t now) {
   eng_->set_expression(e, now);
   seen_t0_ = eng_->expression_started_ms();
   chose_ms_ = now;
+}
+
+void Behavior::say(Cue c, uint32_t now, float chance) {
+  if (!voice_ || c == Cue::Count) return;
+  if (chance < 1.0f) {
+    if (now - last_say_ < kSayGapMs) return;
+    if (rng_.unit() >= chance * (temp_ ? temp_->talk : 0.7f)) return;
+  }
+  if (voice_->say(c, now)) last_say_ = now;
+}
+
+void Behavior::voice_event(Event e, uint32_t now) {
+  // Реплика по эмоции, которую только что показали; у тапа и кнопки — хотя бы «бип».
+  Cue c = cue_for(eng_->expression());
+  float chance = 0.0f;
+  switch (e) {
+    case Event::tap:
+      chance = 0.45f;
+      if (c == Cue::Count) c = Cue::boop;
+      break;
+    case Event::double_tap:
+      chance = 0.8f;
+      if (c == Cue::Count) c = Cue::happy;
+      break;
+    case Event::button:
+      chance = 0.9f;
+      if (c == Cue::Count) c = Cue::boop;
+      break;
+    case Event::shake:
+    case Event::shake_hard:
+    case Event::impact:
+    case Event::pick_up:
+    case Event::loud:
+    case Event::upside_down: chance = 0.7f; break;
+    case Event::free_fall: chance = 0.95f; break;
+    // Питание и выключение — всегда: это не болтовня, а сообщение хозяину.
+    case Event::charge_start: c = Cue::charge_start, chance = 1.0f; break;
+    case Event::charge_full: c = Cue::charge_full, chance = 1.0f; break;
+    case Event::battery_low:
+    case Event::battery_critical: c = Cue::battery_low, chance = 1.0f; break;
+    case Event::button_long: c = Cue::goodbye, chance = 1.0f; break;
+    default: break;
+  }
+  if (chance > 0.0f) say(c, now, chance);
 }
 
 void Behavior::age_marks(uint32_t now) {
@@ -605,6 +657,7 @@ void Behavior::on_event(Event e, uint32_t now) {
     case Event::duel_lose: duel("??", e == Event::duel_win, now); break;
     case Event::Count: break;
   }
+  voice_event(e, now);
 }
 
 Expr Behavior::choose_base(uint32_t now) {
@@ -660,7 +713,9 @@ void Behavior::idle_action(uint32_t now) {
     for (Expr x : temp_->idle)
       if (x != cur && usable(x)) opts[n++] = x;
     if (n) {
-      react(opts[rng_.next() % (uint32_t)n], now, 3500, "сам по себе, по характеру");
+      const Expr x = opts[rng_.next() % (uint32_t)n];
+      react(x, now, 3500, "сам по себе, по характеру");
+      say(cue_for(x), now, 0.15f);
       return;
     }
   }
@@ -718,6 +773,7 @@ void Behavior::idle_action(uint32_t now) {
   const IdleAct& a = kIdle[chosen];
   if (a.expr != Expr::Count) {
     react(a.expr, now, a.ms, "сам по себе");
+    say(cue_for(a.expr), now, 0.1f);
   } else {
     eng_->play_clip(a.clip, now);
     reason_ = "сам по себе";
@@ -728,6 +784,7 @@ void Behavior::update(uint32_t now) {
   if (!eng_) return;
   decay(now);
   last_now_ = now;
+  if (voice_) voice_->set_quiet(night());
   // Срок по умолчанию — горизонт сна; ветки ниже приближают его.
   next_ = now + kMaxSleepMs;
   auto wake = [&](uint32_t t) {
@@ -748,21 +805,25 @@ void Behavior::update(uint32_t now) {
     if (time_reached(now, next_surprise_)) schedule_surprise(now);
     return;
   }
-  // Пока идёт сцена, персонаж не отвлекается; после неё — эмоция-развязка.
+  // Пока идёт сцена, персонаж не отвлекается; после неё — эмоция-развязка,
+  // а если в очереди есть ещё сцены — следующая через постоянную паузу.
   if (eng_->scene() != Scene::None) {
     wake(eng_->scene_ends_ms());
     return;
   }
-  if (run_queue(now)) return;
   if (after_scene_ != Expr::Count) {
     const Expr e = after_scene_;
     after_scene_ = Expr::Count;
-    react(e, now, 3500, after_why_);
+    react(e, now, queue_n_ ? kBetweenScenesMs : 3500u, after_why_);
+    queue_at_ = now + kBetweenScenesMs;
+    if (queue_n_) wake(queue_at_);
     return;
   }
+  if (queue_n_ && time_reached(now, queue_at_) && run_queue(now)) return;
   if (reacting_) {
     if (!time_reached(now, react_until_)) {
       next_ = react_until_;
+      if (queue_n_) wake(queue_at_);
       return;
     }
     reacting_ = false;
@@ -837,6 +898,7 @@ void Behavior::update(uint32_t now) {
     next_idle_ = now + (uint32_t)((float)((12000u + rng_.next() % 28000u) * (sleepy ? 2u : 1u)) / activity);
   }
   if (reacting_) wake(react_until_);
+  if (queue_n_) wake(queue_at_);
   wake(next_eval_);
   wake(next_idle_);
   if (!time_reached(now, next_surprise_)) wake(next_surprise_);
@@ -911,7 +973,7 @@ void Behavior::queue_scene(Scene s, const SceneParams& p, Expr after, uint32_t n
   manual_ = false;
   reason_ = why;
   next_ = now;
-  if (eng_->scene() == Scene::None && after_scene_ == Expr::Count) run_queue(now);
+  if (eng_->scene() == Scene::None && after_scene_ == Expr::Count && time_reached(now, queue_at_)) run_queue(now);
 }
 
 bool Behavior::run_queue(uint32_t now) {
@@ -920,6 +982,12 @@ bool Behavior::run_queue(uint32_t now) {
   for (int i = 1; i < queue_n_; ++i) queue_[i - 1] = queue_[i];
   --queue_n_;
   eng_->play_scene(q.scene, now, q.params);
+  if (voice_) {
+    if (q.scene == Scene::chat && chat_both_ && chat_peer_)
+      voice_->chat(q.params.key, q.params.value != 0, now, &temperament(archetype_from_hash(chat_peer_)));
+    else
+      voice_->scene(q.scene, q.params, now);
+  }
   after_scene_ = q.after;
   after_why_ = q.why;
   reason_ = q.why;
@@ -1000,7 +1068,7 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_h
   if (progress_) grant(progress_->met_friend(is_new), now);
 }
 
-void Behavior::duel(const char* code, bool won, uint32_t now) {
+void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash, uint32_t nonce) {
   last_event_ = now;
   if (eng_) eng_->note_activity(now);
   SceneParams p;
@@ -1019,7 +1087,20 @@ void Behavior::duel(const char* code, bool won, uint32_t now) {
   mood_.valence = clamp11(mood_.valence + (won ? 0.25f : -0.15f));
   mood_.annoyance = clamp01(mood_.annoyance + (won ? 0.0f : 0.15f));
   queue_scene(Scene::duel, p, after, now, why);
+  // Сразу за дуэлью — разговор шифром: у соседа очередь та же, и он начнётся одновременно.
+  if (peer_hash) chat(code, peer_hash, nonce, now);
   if (progress_) grant(progress_->duel(won), now);
+}
+
+void Behavior::chat(const char* code, uint32_t peer_hash, uint32_t nonce, uint32_t now) {
+  SceneParams p;
+  p.set_text(code);
+  p.key = chat_key(self_hash_, peer_hash, nonce);
+  p.value = chat_first(self_hash_, peer_hash) ? 1 : 0;
+  chat_peer_ = peer_hash;
+  // После разговора — невинное лицо: «мы ничего не обсуждали».
+  queue_scene(Scene::chat, p, pick_unlocked({Expr::innocent, Expr::smug, Expr::mischievous}), now,
+              "секретный разговор с соседом");
 }
 
 void Behavior::set_date(uint16_t year, uint8_t month, uint8_t day) {

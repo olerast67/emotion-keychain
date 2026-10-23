@@ -1,5 +1,6 @@
 // Сцены — короткие полноэкранные сюжеты вместо лица: загрузка, «взлом»,
-// дождь данных, праздники, апгрейд, встреча с другим брелоком, дуэль.
+// дождь данных, праздники, апгрейд, встреча с другим брелоком, дуэль и секретный
+// разговор шифром после неё.
 // Запускаются через FaceEngine::play_scene и сами заканчиваются.
 #pragma once
 
@@ -22,7 +23,8 @@ namespace face {
   X(birthday)              \
   X(halloween)             \
   X(greet)                 \
-  X(duel)
+  X(duel)                  \
+  X(chat)
 
 enum class Scene : uint8_t {
 #define FACE_X(n) n,
@@ -34,12 +36,14 @@ enum class Scene : uint8_t {
 
 constexpr int kSceneCount = (int)Scene::Count;
 
-// Подписи и исход: имя импланта для upgrade, позывной для greet и duel,
-// value: greet — 1, если знакомый; duel — 1, если победа.
+// Подписи и исход: имя импланта для upgrade, позывной для greet, duel и chat,
+// value: greet — 1, если знакомый; duel — 1, если победа; chat — 1, если начинаем мы.
+// key — ключ секретного разговора (sound.h, chat_key).
 struct SceneParams {
   char text[16] = {};
   char sub[12] = {};  // вторая строка: например, характер встреченного брелока
   int value = 0;
+  uint32_t key = 0;
   void set_text(const char* s) { copy(text, s, 15); }
   void set_sub(const char* s) { copy(sub, s, 11); }
 

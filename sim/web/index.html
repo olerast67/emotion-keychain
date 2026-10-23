@@ -208,6 +208,7 @@
           <button data-speed="16" aria-pressed="false">×16</button>
         </div>
         <label class="clock">Время суток <input id="clock" type="range" min="0" max="1425" step="15"><output id="clockOut">12:00</output></label>
+        <button class="chip event" id="sound" aria-pressed="false">Пищалка: выкл</button>
       </div>
 
       <div class="tabs" role="tablist">
@@ -335,6 +336,34 @@
   // Тап по экрану.
   cv.addEventListener("pointerdown", () => { E.fe_event(evIndex.tap, now()); due = 0; });
 
+  // ---- Пищалка: меандр через WebAudio, как пьезо на ШИМ. Браузер разрешает звук только после нажатия ----
+  let actx = null, osc = null, amp = null, lastHz = -1;
+  let soundOn = false;
+  const btnSound = document.getElementById("sound");
+  function audioStart() {
+    if (actx) return actx.resume();
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    actx = new AC();
+    osc = actx.createOscillator(); osc.type = "square";
+    const lp = actx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 6000;  // пьезо не звенит выше
+    amp = actx.createGain(); amp.gain.value = 0;
+    osc.connect(lp); lp.connect(amp); amp.connect(actx.destination); osc.start();
+  }
+  function setTone(hz, soft) {
+    if (!actx) return;
+    const t = actx.currentTime;
+    if (hz > 0 && soundOn) { osc.frequency.setValueAtTime(hz, t); amp.gain.setTargetAtTime(soft ? 0.025 : 0.06, t, 0.002); }
+    else amp.gain.setTargetAtTime(0, t, 0.003);
+  }
+  function setSound(v) {
+    soundOn = v;
+    if (v) audioStart();
+    btnSound.setAttribute("aria-pressed", v); btnSound.textContent = v ? "Пищалка: вкл" : "Пищалка: выкл";
+    if (!v) setTone(0, false);
+  }
+  btnSound.onclick = () => setSound(!soundOn);
+
   // ---- Режим, скорость, часы ----
   let auto = true;
   const btnAuto = document.getElementById("modeAuto"), btnManual = document.getElementById("modeManual");
@@ -390,6 +419,24 @@
       };
       chips.append(b);
     }
+    g.append(chips); paneEv.append(g);
+  }
+  // Другой брелок рядом: каждый раз новый сосед со своим характером. После дуэли — разговор шифром.
+  {
+    const g = document.createElement("div"); g.className = "group";
+    g.innerHTML = "<h3>Другой брелок</h3>";
+    const chips = document.createElement("div"); chips.className = "chips";
+    const peerText = document.createElement("span"); peerText.className = "count";
+    const add = (title, fn) => {
+      const b = document.createElement("button"); b.className = "chip event"; b.textContent = title;
+      b.onclick = () => { fn(now()); peerText.textContent = "сосед: " + str(E.fe_peer_arch()); due = 0; };
+      chips.append(b);
+    };
+    add("Новый знакомый", t => E.fe_meet(1, t));
+    add("Старый знакомый", t => E.fe_meet(0, t));
+    add("Дуэль — победа", t => E.fe_duel(1, t));
+    add("Дуэль — проигрыш", t => E.fe_duel(0, t));
+    chips.append(peerText);
     g.append(chips); paneEv.append(g);
   }
 
@@ -524,6 +571,9 @@
       const ahead = t => Math.max(0, (t - now()) | 0);
       due = sim + Math.min(ahead(E.fe_next()), ahead(E.fe_bh_next()));
     }
+    // Пищалка: частота меняется только на сменах нот.
+    const hz = E.fe_voice_tone(now());
+    if (hz !== lastHz) { lastHz = hz; setTone(hz, E.fe_voice_soft()); }
     if (t - infoAt > 250) { updateInfo(); infoAt = t; }
     requestAnimationFrame(tick);
   }

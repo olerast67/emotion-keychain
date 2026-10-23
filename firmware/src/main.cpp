@@ -1,4 +1,5 @@
-// Тестовый стенд: ESP32 + SSD1306 128×64 по I2C и, по желанию, сенсорная кнопка TTP223.
+// Тестовый стенд: ESP32 + SSD1306 128×64 по I2C и, по желанию, сенсорная кнопка TTP223
+// и пассивная пищалка (голос брелока, sound.h).
 //
 // Режимы:
 //   «живой»  — работает характер (Behavior): моргает, скучает, реагирует на кнопку;
@@ -26,6 +27,7 @@
 #include "face/engine.h"
 #include "face/identity.h"
 #include "face/progress.h"
+#include "face/sound.h"
 #include "ssd1306.h"
 
 #ifndef PIN_SDA
@@ -46,6 +48,9 @@
 #ifndef I2C_HZ
 #define I2C_HZ 400000
 #endif
+#ifndef PIN_BUZZER
+#define PIN_BUZZER -1  // пассивная пищалка (пьезо) между выводом и GND; -1 — без неё
+#endif
 
 using namespace face;
 
@@ -59,6 +64,7 @@ constexpr uint32_t kOledRetryMs = 2000;  // как часто искать пр�
 
 FaceEngine eng;
 Behavior bh;
+Voice voice;
 Ssd1306 oled;
 bool have_oled = false;
 bool oled_full = false;  // прошлая отправка сорвалась: нужен весь кадр целиком
@@ -96,6 +102,20 @@ Preferences prefs;
 uint32_t last_save = 0;
 uint64_t day_t0 = 0;  // начало текущих «суток вместе» по времени работы
 uint8_t bday_m = 0, bday_d = 0;
+
+// Пищалка: частота меняется только на сменах нот. Тихий режим (ночь, скромник) — узкий импульс.
+bool sound_on = true;
+uint16_t buzzer_hz = 0;
+bool buzzer_soft = false;
+uint32_t sounds_seen = 0;
+
+void buzzer(uint16_t hz, bool soft) {
+  if (PIN_BUZZER < 0 || (hz == buzzer_hz && soft == buzzer_soft)) return;
+  buzzer_hz = hz;
+  buzzer_soft = soft;
+  ledcWriteTone(PIN_BUZZER, hz);  // 0 — тишина
+  if (hz && soft) ledcWrite(PIN_BUZZER, 128);  // скважность 1/8 вместо 1/2: примерно на 9 дБ тише
+}
 
 // millis() с учётом переполнений. Вызывается каждый проход цикла, так что ни одно не теряется.
 uint64_t uptime_ms(uint32_t now) {
@@ -205,6 +225,8 @@ void load_settings(uint32_t now) {
   saved = progress;
   if (ok && n != sizeof(Progress)) save_progress(now, true);
   eng.options().theme = prefs.getUChar("theme", 0) ? Theme::Cyber : Theme::Classic;
+  sound_on = prefs.getUChar("sound", 1) != 0;
+  voice.set_enabled(sound_on);
   bday_m = prefs.getUChar("bday_m", 0);
   bday_d = prefs.getUChar("bday_d", 0);
   if (bday_m) bh.set_birthday(bday_m, bday_d);
@@ -214,6 +236,9 @@ void apply_identity(uint64_t serial, uint32_t now) {
   me = make_identity(serial);
   bh.personality() = me.personality;
   bh.set_temperament(&temperament(me.archetype));
+  bh.set_identity_hash(me.hash);
+  voice.init(&temperament(me.archetype), me.hash);
+  voice.set_enabled(sound_on);
   eng.set_quirks(me.quirks, now);
 }
 
@@ -324,12 +349,18 @@ void help() {
       "  me           кто я: характер, редкость, опыт, импланты\n"
       "  theme cyber  тема оформления: cyber или classic\n"
       "  x <сцена>    сцена: boot hack data_rain error404 reboot hide upgrade\n"
-      "               new_year birthday halloween greet duel\n"
+      "               new_year birthday halloween greet duel chat\n"
       "  surprise     случайный сюрприз прямо сейчас\n"
       "  xp 200       добавить опыт; day — новый день; steps 3000 — шаги\n"
       "  meet [old]   рядом другой брелок (новый или знакомый)\n"
       "  duel win     дуэль с другим брелоком: win или lose\n"
       "  date 2026-12-31   дата для праздников; bday 05-14 — твой день рождения\n"
+      "Звук:\n"
+      "  snd          пищалка вкл/выкл (сохраняется)\n"
+      "  say laugh    реплика: boop happy laugh sad angry surprise scared love sleepy\n"
+      "               hello goodbye question idea error charge_start charge_full\n"
+      "               battery_low level_up friend_hi duel win lose boot\n"
+      "  chat         секретный разговор шифром с соседом (слышны обе стороны)\n"
       "  tilt 1 0     наклон: зрачки скатываются в сторону; jerk -1 0 — рывок\n"
       "  serial 42    посмотреть другой брелок; serial — вернуть свой\n"
       "  unlock all   открыть всё; reset yes — начать рост заново");
@@ -454,11 +485,20 @@ void command(char* s, uint32_t now) {
     Scene sc;
     if (!arg || !scene_from_id(arg, &sc)) return (void)Serial.println("Нет такой сцены, список — ?");
     SceneParams p;
+    const Identity peer = make_identity(now);
     if (sc == Scene::upgrade)
       p.set_text(implant(progress.implant + 1 < implant_count() ? progress.implant + 1 : 1).tag);
-    if (sc == Scene::greet || sc == Scene::duel) p.set_text(make_identity(now).code);
+    if (sc == Scene::greet || sc == Scene::duel || sc == Scene::chat) p.set_text(peer.code);
     if (sc == Scene::duel) p.value = (int)(now & 1u);
+    if (sc == Scene::chat) {
+      p.key = chat_key(me.hash, peer.hash, now);
+      p.value = chat_first(me.hash, peer.hash) ? 1 : 0;
+    }
     eng.play_scene(sc, now, p);
+    if (sc == Scene::chat)
+      voice.chat(p.key, p.value != 0, now, &temperament(peer.archetype));
+    else
+      voice.scene(sc, p, now);
     Serial.printf("Сцена: %s\n", scene_name(sc));
     return;
   }
@@ -490,8 +530,32 @@ void command(char* s, uint32_t now) {
   }
   if (!strcmp(s, "duel")) {
     if (mode != Mode::Alive) set_mode(Mode::Alive, now);
-    bh.duel(make_identity(now ^ 0x55u).code, !(arg && !strcmp(arg, "lose")), now);
+    // После дуэли — разговор шифром: на стенде соседа нет, его реплики играет та же пищалка.
+    const Identity peer = make_identity(now ^ 0x55u);
+    bh.duel(peer.code, !(arg && !strcmp(arg, "lose")), now, peer.hash, now);
     save_progress(now, true);
+    return;
+  }
+  if (!strcmp(s, "chat")) {
+    if (mode != Mode::Alive) set_mode(Mode::Alive, now);
+    const Identity peer = make_identity(now ^ 0xC4A7u);
+    Serial.printf("Разговор с %s (%s)\n", peer.code, archetype_name(peer.archetype));
+    bh.chat(peer.code, peer.hash, now, now);
+    return;
+  }
+  if (!strcmp(s, "snd")) {
+    sound_on = arg ? !strcmp(arg, "on") : !sound_on;
+    voice.set_enabled(sound_on);
+    prefs.putUChar("sound", sound_on ? 1 : 0);
+    Serial.println(PIN_BUZZER < 0 ? (sound_on ? "Звук включён, но пищалки нет: задайте -DPIN_BUZZER"
+                                              : "Звук выключен")
+                                  : (sound_on ? "Звук включён" : "Звук выключен"));
+    return;
+  }
+  if (!strcmp(s, "say")) {
+    Cue c;
+    if (!arg || !cue_from_id(arg, &c)) return (void)Serial.println("Нет такой реплики, список — ?");
+    if (!voice.say(c, now)) Serial.println(sound_on ? "Пищалка занята или тихие часы" : "Звук выключен: snd");
     return;
   }
   if (!strcmp(s, "date")) {
@@ -638,6 +702,7 @@ void setup() {
 
   if (PIN_BUTTON >= 0) pinMode(PIN_BUTTON, BUTTON_ACTIVE_LOW ? INPUT_PULLUP : INPUT_PULLDOWN);
   if (PIN_BOOT >= 0) pinMode(PIN_BOOT, INPUT_PULLUP);
+  if (PIN_BUZZER >= 0) ledcAttach(PIN_BUZZER, 2000, 10);
   Wire.begin(PIN_SDA, PIN_SCL);
   Wire.setClock(I2C_HZ);
 
@@ -646,6 +711,8 @@ void setup() {
   const uint32_t seed = (uint32_t)esp_random();
   eng.init(seed, now);
   bh.init(&eng, seed ^ 0x9E3779B9u, now);
+  bh.attach_voice(&voice);
+  bh.set_chat_both_sides(true);  // на стенде один брелок: реплики соседа играет та же пищалка
   clock_base_up = uptime;
   day_t0 = uptime;
 
@@ -655,9 +722,10 @@ void setup() {
   apply_identity(chip_serial, now);
   if (progress.days == 0) bh.new_day(now);  // первый день вместе
   eng.play_scene(Scene::boot, now);
+  voice.scene(Scene::boot, SceneParams{}, now);
 
-  Serial.printf("\nБрелок с эмоциями — стенд. SDA %d, SCL %d, кнопка %d, BOOT %d, I2C %d кГц\n", PIN_SDA, PIN_SCL,
-                PIN_BUTTON, PIN_BOOT, I2C_HZ / 1000);
+  Serial.printf("\nБрелок с эмоциями — стенд. SDA %d, SCL %d, кнопка %d, BOOT %d, пищалка %d, I2C %d кГц\n", PIN_SDA,
+                PIN_SCL, PIN_BUTTON, PIN_BOOT, PIN_BUZZER, I2C_HZ / 1000);
   if (!start_oled()) {
     Serial.println("Экран не найден.");
     scan_i2c();
@@ -710,6 +778,12 @@ void loop() {
       display_lost(now);
   }
   apply_brightness(now);
+  buzzer(voice.tone(now), voice.soft());
+  if (voice.started() != sounds_seen) {
+    sounds_seen = voice.started();
+    const Cue c = voice.last_cue();
+    Serial.printf("Звук: %s%s\n", c == Cue::Count ? "музыка сцены" : cue_id(c), voice.soft() ? " (тихо)" : "");
+  }
 
   static Scene shown_scene = Scene::None;
   if (eng.scene() != shown_scene) {
