@@ -8,7 +8,11 @@
 // Кнопка: короткое касание — тап (в показе — следующая эмоция), два быстрых —
 // двойной тап, удержание 1.5 с — переключить «живой» ↔ «показ».
 // Команды Serial — `?` выводит список.
+//
+// Персонаж выводится из серийного номера чипа (identity.h), прогресс роста,
+// тема и день рождения хранятся во флеше (Preferences) и переживают перезагрузку.
 #include <Arduino.h>
+#include <Preferences.h>
 #include <Wire.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +20,8 @@
 
 #include "face/behavior.h"
 #include "face/engine.h"
+#include "face/identity.h"
+#include "face/progress.h"
 #include "ssd1306.h"
 
 #ifndef PIN_SDA
@@ -68,6 +74,17 @@ uint32_t stat_t0 = 0, stat_frames = 0, stat_bytes = 0, stat_render_us = 0, stat_
 char line[64];
 size_t line_n = 0;
 
+// Персонаж, рост и настройки.
+Identity me;
+uint64_t chip_serial = 0;
+Progress progress;
+Preferences prefs;
+uint32_t saved_xp = 0xFFFFFFFFu;
+uint8_t saved_unlocked = 0;
+uint32_t last_save = 0;
+uint32_t day_t0 = 0;  // начало текущих «суток вместе» по времени работы
+uint8_t bday_m = 0, bday_d = 0;
+
 // ---------------------------------------------------------------- экран
 
 void push_frame() {
@@ -100,6 +117,59 @@ bool start_oled() {
   oled.send_full(eng.frame());
   Serial.printf("Экран %s на 0x%02X\n", use_sh1106 ? "SH1106" : "SSD1306", oled.address());
   return true;
+}
+
+// ---------------------------------------------------------------- персонаж и флеш
+
+void save_progress(uint32_t now, bool force) {
+  const uint8_t cnt = (uint8_t)progress.unlocked_count();
+  if (!force && progress.xp == saved_xp && cnt == saved_unlocked) return;
+  if (!force && now - last_save < 60000u && cnt == saved_unlocked) return;  // флеш бережём
+  progress.seal();
+  prefs.putBytes("progress", &progress, sizeof(progress));
+  saved_xp = progress.xp;
+  saved_unlocked = cnt;
+  last_save = now;
+}
+
+void load_settings() {
+  prefs.begin("keychain", false);
+  if (prefs.getBytes("progress", &progress, sizeof(progress)) != sizeof(progress) || !progress.valid()) {
+    progress.reset();
+    Serial.println("Новый брелок: открыта база эмоций");
+  }
+  saved_xp = progress.xp;
+  saved_unlocked = (uint8_t)progress.unlocked_count();
+  eng.options().theme = prefs.getUChar("theme", 0) ? Theme::Cyber : Theme::Classic;
+  bday_m = prefs.getUChar("bday_m", 0);
+  bday_d = prefs.getUChar("bday_d", 0);
+  if (bday_m) bh.set_birthday(bday_m, bday_d);
+}
+
+void apply_identity(uint64_t serial, uint32_t now) {
+  me = make_identity(serial);
+  bh.personality() = me.personality;
+  eng.set_quirks(me.quirks, now);
+}
+
+void print_me() {
+  const Personality& p = me.personality;
+  Serial.printf("Я %s: %s, %s%s\n", me.code, archetype_name(me.archetype), rarity_name(me.rarity),
+                me.quirks.cyber_eye ? ", золотой кибер-глаз" : "");
+  Serial.printf("Характер: игривость %.2f, ворчливость %.2f, сонливость %.2f, застенчивость %.2f\n", p.playful,
+                p.grumpy, p.sleepy, p.shy);
+  const Implant& cur = implant(progress.implant);
+  Serial.printf("Рост: день %u, опыт %u, имплант %d/%d «%s», открыто %d/%d эмоций", progress.days,
+                (unsigned)progress.xp, progress.implant, implant_count() - 1, cur.name, progress.unlocked_count(),
+                kExprCount);
+  if (progress.xp_to_next())
+    Serial.printf(", до «%s» ещё %u опыта\n", implant(progress.implant + 1).name, (unsigned)progress.xp_to_next());
+  else
+    Serial.println(", открыто всё");
+  Serial.printf("Касаний %u, шагов %u, друзей %u, дуэлей %u/%u, тема %s\n", (unsigned)progress.touches,
+                (unsigned)progress.steps, progress.friends, progress.duels_won,
+                progress.duels_won + progress.duels_lost,
+                eng.options().theme == Theme::Cyber ? "киберпанк" : "классика");
 }
 
 // ---------------------------------------------------------------- эмоции
@@ -167,7 +237,20 @@ void help() {
       "  t ЧЧ:ММ      время суток для характера\n"
       "  l            список эмоций, клипов и событий\n"
       "  v            раз в 10 с печатать кадры, байты и время\n"
-      "  i            что сейчас на экране");
+      "  i            что сейчас на экране\n"
+      "Характер и рост:\n"
+      "  me           кто я: характер, редкость, опыт, импланты\n"
+      "  theme cyber  тема оформления: cyber или classic\n"
+      "  x <сцена>    сцена: boot hack data_rain error404 reboot hide upgrade\n"
+      "               new_year birthday halloween greet duel\n"
+      "  surprise     случайный сюрприз прямо сейчас\n"
+      "  xp 200       добавить опыт; day — новый день; steps 3000 — шаги\n"
+      "  meet [old]   рядом другой брелок (новый или знакомый)\n"
+      "  duel win     дуэль с другим брелоком: win или lose\n"
+      "  date 2026-12-31   дата для праздников; bday 05-14 — твой день рождения\n"
+      "  tilt 1 0     наклон: зрачки скатываются в сторону; jerk -1 0 — рывок\n"
+      "  serial 42    посмотреть другой брелок; serial — вернуть свой\n"
+      "  unlock all   открыть всё; reset yes — начать рост заново");
 }
 
 void info(uint32_t now) {
@@ -261,6 +344,96 @@ void command(char* s, uint32_t now) {
     return;
   }
 
+  if (!strcmp(s, "me")) return print_me();
+  if (!strcmp(s, "theme")) {
+    const bool cyber = arg && !strcmp(arg, "cyber");
+    eng.options().theme = cyber ? Theme::Cyber : Theme::Classic;
+    prefs.putUChar("theme", cyber ? 1 : 0);
+    eng.set_expression(eng.expression(), now);
+    Serial.println(cyber ? "Тема: киберпанк" : "Тема: классика");
+    return;
+  }
+  if (!strcmp(s, "x")) {
+    Scene sc;
+    if (!arg || !scene_from_id(arg, &sc)) return (void)Serial.println("Нет такой сцены, список — ?");
+    SceneParams p;
+    if (sc == Scene::upgrade)
+      p.set_text(implant(progress.implant + 1 < implant_count() ? progress.implant + 1 : 1).tag);
+    if (sc == Scene::greet || sc == Scene::duel) p.set_text(make_identity(now).code);
+    if (sc == Scene::duel) p.value = (int)(now & 1u);
+    eng.play_scene(sc, now, p);
+    Serial.printf("Сцена: %s\n", scene_name(sc));
+    return;
+  }
+  if (!strcmp(s, "surprise")) {
+    if (mode != Mode::Alive) set_mode(Mode::Alive, now);
+    return bh.surprise(now);
+  }
+  if (!strcmp(s, "xp") || !strcmp(s, "day") || !strcmp(s, "steps")) {
+    if (mode != Mode::Alive) set_mode(Mode::Alive, now);
+    if (*s == 'x')
+      bh.add_xp(arg ? (uint32_t)atoi(arg) : 100u, now);
+    else if (*s == 'd')
+      bh.new_day(now);
+    else
+      bh.add_steps(arg ? (uint32_t)atoi(arg) : 1000u, now);
+    save_progress(now, true);
+    return print_me();
+  }
+  if (!strcmp(s, "meet")) {
+    if (mode != Mode::Alive) set_mode(Mode::Alive, now);
+    bh.meet(make_identity(now).code, !(arg && !strcmp(arg, "old")), now);
+    save_progress(now, true);
+    return;
+  }
+  if (!strcmp(s, "duel")) {
+    if (mode != Mode::Alive) set_mode(Mode::Alive, now);
+    bh.duel(make_identity(now ^ 0x55u).code, !(arg && !strcmp(arg, "lose")), now);
+    save_progress(now, true);
+    return;
+  }
+  if (!strcmp(s, "date")) {
+    int y = 0, mo = 0, d = 0;
+    if (!arg || sscanf(arg, "%d-%d-%d", &y, &mo, &d) != 3) return (void)Serial.println("Формат: date 2026-12-31");
+    if (mode != Mode::Alive) set_mode(Mode::Alive, now);
+    bh.set_date((uint16_t)y, (uint8_t)mo, (uint8_t)d);
+    Serial.printf("Дата %04d-%02d-%02d\n", y, mo, d);
+    return;
+  }
+  if (!strcmp(s, "bday")) {
+    int mo = 0, d = 0;
+    if (!arg || sscanf(arg, "%d-%d", &mo, &d) != 2) return (void)Serial.println("Формат: bday 05-14");
+    bday_m = (uint8_t)mo, bday_d = (uint8_t)d;
+    bh.set_birthday(bday_m, bday_d);
+    prefs.putUChar("bday_m", bday_m);
+    prefs.putUChar("bday_d", bday_d);
+    Serial.printf("День рождения: %02d-%02d\n", mo, d);
+    return;
+  }
+  if (!strcmp(s, "tilt") || !strcmp(s, "jerk")) {
+    float x = 0, y = 0;
+    if (arg) sscanf(arg, "%f %f", &x, &y);
+    if (*s == 't')
+      eng.set_tilt(x, y);
+    else
+      eng.jerk(x, y, now);
+    return;
+  }
+  if (!strcmp(s, "serial")) {
+    apply_identity(arg ? (uint64_t)strtoull(arg, nullptr, 10) : chip_serial, now);
+    return print_me();
+  }
+  if (!strcmp(s, "unlock") && arg && !strcmp(arg, "all")) {
+    progress.unlock_all();
+    save_progress(now, true);
+    return print_me();
+  }
+  if (!strcmp(s, "reset") && arg && !strcmp(arg, "yes")) {
+    progress.reset();
+    save_progress(now, true);
+    return print_me();
+  }
+
   // Иначе это эмоция: по id или по номеру из списка.
   Expr e;
   const int num = atoi(s);
@@ -351,6 +524,14 @@ void setup() {
   eng.init(seed, now);
   bh.init(&eng, seed ^ 0x9E3779B9u, now);
   clock_base_ms = now;
+  day_t0 = now;
+
+  load_settings();
+  bh.attach_progress(&progress);
+  chip_serial = ESP.getEfuseMac();
+  apply_identity(chip_serial, now);
+  if (progress.days == 0) bh.new_day(now);  // первый день вместе
+  eng.play_scene(Scene::boot, now);
 
   Serial.printf("\nБрелок с эмоциями — стенд. SDA %d, SCL %d, кнопка %d, BOOT %d, I2C %d кГц\n", PIN_SDA, PIN_SCL,
                 PIN_BUTTON, PIN_BOOT, I2C_HZ / 1000);
@@ -359,6 +540,7 @@ void setup() {
     scan_i2c();
   }
   help();
+  print_me();
   stat_t0 = now;
 }
 
@@ -377,6 +559,12 @@ void loop() {
   poll_button(now);
 
   bh.set_clock((uint16_t)((clock_base_min + (now - clock_base_ms) / 60000) % 1440));
+  // Часов нет: «день вместе» — каждые сутки работы.
+  if (now - day_t0 >= 24u * 3600000u) {
+    day_t0 += 24u * 3600000u;
+    bh.new_day(now);
+  }
+  save_progress(now, false);
   if (mode == Mode::Alive && now >= bh.next_update_ms()) bh.update(now);
   if (mode == Mode::Showcase && now >= showcase_next) {
     showcase_next = now + showcase_ms;
@@ -391,6 +579,11 @@ void loop() {
     if (changed && have_oled) push_frame();
   }
 
+  static Scene shown_scene = Scene::None;
+  if (eng.scene() != shown_scene) {
+    shown_scene = eng.scene();
+    if (shown_scene != Scene::None) Serial.printf("Сцена: %s\n", scene_name(shown_scene));
+  }
   if (eng.expression() != shown) {
     shown = eng.expression();
     print_expr(shown);

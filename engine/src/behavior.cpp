@@ -45,6 +45,10 @@ const char* const kEventNames[] = {
     "Заряд почти ноль",
     "Кнопка",
     "Долгое нажатие",
+    "Новый знакомый брелок",
+    "Знакомый брелок рядом",
+    "Победа в дуэли",
+    "Поражение в дуэли",
 };
 static_assert(sizeof(kEventNames) / sizeof(kEventNames[0]) == kEventCount, "названия событий");
 
@@ -129,10 +133,15 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   for (uint8_t& r : recent_idle_) r = 255;
   for (Expr& r : recent_react_) r = Expr::Count;
   loud_at_ = last_calling_ = last_cyclops_ = 0;
+  queue_n_ = 0;
+  after_scene_ = Expr::Count;
+  next_surprise_ = now + surprise_min_ + rng_.next() % (surprise_max_ - surprise_min_ + 1u);
+  holiday_done_ = 0;
   dark = charging = upside = music_on = speech_on = cold = hot = moving = running = false;
   battery = 2;
   reason_ = "";
   next_ = now;
+  if (progress_) attach_progress(progress_);
 }
 
 Expr Behavior::pick(const Option* opts, int n) {
@@ -141,11 +150,12 @@ Expr Behavior::pick(const Option* opts, int n) {
   n = n > 16 ? 16 : n;
   for (int i = 0; i < n; ++i) {
     w[i] = opts[i].weight > 0.0f ? opts[i].weight : 0.0f;
+    if (progress_ && !progress_->is_unlocked(opts[i].expr)) w[i] = 0.0f;
     for (Expr r : recent_react_)
       if (r == opts[i].expr) w[i] *= 0.35f;
     total += w[i];
   }
-  Expr chosen = opts[0].expr;
+  Expr chosen = allowed(opts[0].expr);
   if (total > 0.0f) {
     float x = rng_.unit() * total;
     for (int i = 0; i < n; ++i) {
@@ -162,7 +172,7 @@ Expr Behavior::pick(const Option* opts, int n) {
 }
 
 void Behavior::react(Expr e, uint32_t now, uint32_t ms, const char* why, Clip clip) {
-  if (e != Expr::Count) eng_->set_expression(e, now);
+  if (e != Expr::Count) eng_->set_expression(allowed(e), now);
   if (clip != Clip::None) eng_->play_clip(clip, now);
   react_until_ = now + ms;
   next_eval_ = react_until_;
@@ -203,6 +213,7 @@ void Behavior::on_event(Event e, uint32_t now) {
     case Event::tap:
     case Event::double_tap: {
       last_touch_ = now;
+      if (progress_) grant(progress_->touch(), now);
       const int add = e == Event::double_tap ? 2 : 1;
       for (int a = 0; a < add; ++a) {
         for (int i = 7; i > 0; --i) tap_times_[i] = tap_times_[i - 1];
@@ -481,6 +492,10 @@ void Behavior::on_event(Event e, uint32_t now) {
       break;
     }
     case Event::button_long: react(Expr::goodbye, now, 2500, "выключают"); break;
+    case Event::friend_new:
+    case Event::friend_known: meet("??", e == Event::friend_new, now); break;
+    case Event::duel_win:
+    case Event::duel_lose: duel("??", e == Event::duel_win, now); break;
     case Event::Count: break;
   }
 }
@@ -563,6 +578,7 @@ void Behavior::idle_action(uint32_t now) {
   w[kCyclops] = (happy && now - last_cyclops_ > 120u * kMin) ? 0.05f : 0.0f;
   float total = 0;
   for (int i = 0; i < kIdleCount; ++i) {
+    if (progress_ && kIdle[i].expr != Expr::Count && !progress_->is_unlocked(kIdle[i].expr)) w[i] = 0.0f;
     for (uint8_t r : recent_idle_)
       if (r == i) w[i] *= 0.15f;  // не повторяться
     total += w[i];
@@ -599,8 +615,48 @@ void Behavior::update(uint32_t now) {
     next_ = kNever;
     return;
   }
+  // Пока идёт сцена, персонаж не отвлекается; после неё — эмоция-развязка.
+  if (eng_->scene() != Scene::None) {
+    next_ = eng_->scene_ends_ms();
+    return;
+  }
+  if (run_queue(now)) return;
+  if (after_scene_ != Expr::Count) {
+    const Expr e = after_scene_;
+    after_scene_ = Expr::Count;
+    react(e, now, 3500, after_why_);
+    return;
+  }
   if (now < react_until_) {
     next_ = react_until_;
+    return;
+  }
+  const Expr curx = eng_->expression();
+  const bool awake = curx != Expr::sleeping && curx != Expr::sleepy && curx != Expr::pocket_peek && !dark;
+  // Праздник показываем один раз за дату, когда персонаж бодрствует.
+  if (awake && year_ && holiday_done_ != (uint32_t)year_ * 400u + month_ * 32u + day_) {
+    holiday_done_ = (uint32_t)year_ * 400u + month_ * 32u + day_;
+    SceneParams p;
+    if ((month_ == 12 && day_ == 31) || (month_ == 1 && day_ == 1)) {
+      char y[6];
+      const uint16_t yy = month_ == 12 ? (uint16_t)(year_ + 1) : year_;
+      y[0] = (char)('0' + yy / 1000 % 10), y[1] = (char)('0' + yy / 100 % 10), y[2] = (char)('0' + yy / 10 % 10);
+      y[3] = (char)('0' + yy % 10), y[4] = 0;
+      p.set_text(y);
+      queue_scene(Scene::new_year, p, pick_unlocked({Expr::party, Expr::happy}), now, "Новый год");
+      return;
+    }
+    if (bday_m_ && month_ == bday_m_ && day_ == bday_d_) {
+      queue_scene(Scene::birthday, p, pick_unlocked({Expr::party, Expr::love}), now, "день рождения хозяина");
+      return;
+    }
+    if (month_ == 10 && day_ == 31) {
+      queue_scene(Scene::halloween, p, pick_unlocked({Expr::spooky, Expr::boo, Expr::scared}), now, "Хэллоуин");
+      return;
+    }
+  }
+  if (awake && !charging && now >= next_surprise_) {
+    surprise(now);
     return;
   }
   // Не перебиваем цепочку эмоции (например, смех → радость), пока она не доиграла.
@@ -611,7 +667,7 @@ void Behavior::update(uint32_t now) {
     return;
   }
   if (now >= next_eval_) {
-    const Expr want = choose_base(now);
+    const Expr want = allowed(choose_base(now));
     if (want != eng_->expression()) {
       eng_->set_expression(want, now);
       reason_ = "настроение и обстановка";
@@ -625,7 +681,198 @@ void Behavior::update(uint32_t now) {
     next_idle_ = now + (12000u + rng_.next() % 28000u) * (sleepy ? 2u : 1u);
   }
   next_ = next_eval_ < next_idle_ ? next_eval_ : next_idle_;
+  if (next_surprise_ > now && next_surprise_ < next_) next_ = next_surprise_;
   if (react_until_ > now && react_until_ < next_) next_ = react_until_;
+}
+
+// ---------------------------------------------------------------- рост, сцены, встречи
+
+void Behavior::attach_progress(Progress* p) {
+  progress_ = p;
+  FaceEngine::ExprFilter f = [](Expr e, const void* self) { return ((const Behavior*)self)->allowed(e); };
+  if (eng_) eng_->set_expr_filter(p ? f : nullptr, this);
+}
+
+Expr Behavior::allowed(Expr e) const {
+  if (!progress_ || (int)e >= kExprCount || progress_->is_unlocked(e)) return e;
+  struct Fb {
+    Expr from, to;
+  };
+  static const Fb kFallback[] = {
+      {Expr::furious, Expr::angry},      {Expr::rage, Expr::angry},
+      {Expr::disgusted, Expr::annoyed},  {Expr::sobbing, Expr::crying},
+      {Expr::exhausted, Expr::tired},    {Expr::knocked_out, Expr::dizzy},
+      {Expr::terrified, Expr::scared},   {Expr::shocked, Expr::surprised},
+      {Expr::amazed, Expr::surprised},   {Expr::startled, Expr::surprised},
+      {Expr::excited, Expr::happy},      {Expr::starstruck, Expr::love},
+      {Expr::adoring, Expr::love},       {Expr::kiss, Expr::love},
+      {Expr::joy, Expr::happy},          {Expr::giggle, Expr::laugh},
+      {Expr::tears_of_joy, Expr::laugh}, {Expr::vibing, Expr::music},
+      {Expr::singing, Expr::music},      {Expr::sleep_deprived, Expr::tired},
+      {Expr::sick, Expr::tired},         {Expr::queasy, Expr::dizzy},
+      {Expr::smug, Expr::wink},          {Expr::playful, Expr::wink},
+      {Expr::mischievous, Expr::wink},   {Expr::evil_laugh, Expr::laugh},
+      {Expr::nervous, Expr::worried},    {Expr::embarrassed, Expr::shy},
+      {Expr::flustered, Expr::shy},      {Expr::guilty, Expr::worried},
+      {Expr::apologetic, Expr::worried}, {Expr::disappointed, Expr::sad},
+      {Expr::hurt, Expr::sad},           {Expr::pleading, Expr::sad},
+      {Expr::focused, Expr::thinking},   {Expr::idea, Expr::thinking},
+      {Expr::skeptical, Expr::confused}, {Expr::suspicious, Expr::annoyed},
+      {Expr::unamused, Expr::annoyed},   {Expr::bruh, Expr::annoyed},
+      {Expr::alert, Expr::surprised},    {Expr::calling, Expr::lonely},
+      {Expr::afraid_dark, Expr::scared}, {Expr::processing, Expr::thinking},
+      {Expr::daydreaming, Expr::calm},   {Expr::party, Expr::happy},
+      {Expr::proud, Expr::happy},        {Expr::spooky, Expr::scared},
+      {Expr::boo, Expr::surprised},
+  };
+  Expr to = Expr::Count;
+  for (const Fb& f : kFallback)
+    if (f.from == e) to = f.to;
+  if (to == Expr::Count) {
+    switch (expression(e).cat) {
+      case Category::Positive:
+      case Category::Social:
+      case Category::Fun: to = Expr::happy; break;
+      case Category::Negative: to = Expr::sad; break;
+      case Category::Surprise: to = Expr::surprised; break;
+      case Category::Cognitive: to = Expr::thinking; break;
+      default: to = Expr::neutral; break;
+    }
+  }
+  return progress_->is_unlocked(to) ? to : Expr::neutral;
+}
+
+Expr Behavior::pick_unlocked(const Expr* opts, int n) {
+  for (int i = 0; i < n; ++i)
+    if (!progress_ || progress_->is_unlocked(opts[i])) return opts[i];
+  return allowed(opts[0]);
+}
+
+void Behavior::queue_scene(Scene s, const SceneParams& p, Expr after, uint32_t now, const char* why) {
+  if (queue_n_ < 4) queue_[queue_n_++] = Queued{s, p, after, why};
+  manual_until_ = 0;
+  reason_ = why;
+  next_ = now;
+  if (eng_->scene() == Scene::None && after_scene_ == Expr::Count) run_queue(now);
+}
+
+bool Behavior::run_queue(uint32_t now) {
+  if (!queue_n_ || eng_->scene() != Scene::None) return false;
+  const Queued q = queue_[0];
+  for (int i = 1; i < queue_n_; ++i) queue_[i - 1] = queue_[i];
+  --queue_n_;
+  eng_->play_scene(q.scene, now, q.params);
+  after_scene_ = q.after;
+  after_why_ = q.why;
+  reason_ = q.why;
+  next_ = eng_->scene_ends_ms();
+  return true;
+}
+
+void Behavior::grant(int installed, uint32_t now) {
+  if (installed < 0 || !progress_) return;
+  // Показываем апгрейд и сразу хвастаемся одной из новых эмоций.
+  SceneParams p;
+  p.set_text(implant(installed).tag);
+  Expr show = Expr::happy;
+  int seen = 0;
+  for (int i = 0; i < kExprCount; ++i) {
+    if (implant_of((Expr)i) != installed) continue;
+    if (rng_.next() % (uint32_t)(++seen) == 0) show = (Expr)i;
+  }
+  queue_scene(Scene::upgrade, p, show, now, "новый имплант");
+}
+
+void Behavior::new_day(uint32_t now) {
+  if (progress_) grant(progress_->new_day(), now);
+}
+
+void Behavior::add_xp(uint32_t xp, uint32_t now) {
+  if (progress_) grant(progress_->add_xp(xp), now);
+}
+
+void Behavior::add_steps(uint32_t steps, uint32_t now) {
+  if (progress_) grant(progress_->add_steps(steps), now);
+}
+
+void Behavior::meet(const char* code, bool is_new, uint32_t now) {
+  last_event_ = last_touch_ = now;
+  mood_.valence = clamp11(mood_.valence + 0.2f);
+  mood_.affection = clamp01(mood_.affection + 0.05f);
+  SceneParams p;
+  p.set_text(code);
+  p.value = is_new ? 0 : 1;
+  queue_scene(Scene::greet, p, is_new ? pick_unlocked({Expr::excited, Expr::hello}) : pick_unlocked({Expr::hello}), now,
+              is_new ? "новый знакомый брелок" : "встретил знакомого");
+  if (progress_) grant(progress_->met_friend(is_new), now);
+}
+
+void Behavior::duel(const char* code, bool won, uint32_t now) {
+  last_event_ = now;
+  SceneParams p;
+  p.set_text(code);
+  p.value = won ? 1 : 0;
+  Expr after =
+      won ? pick_unlocked({Expr::proud, Expr::smug, Expr::happy}) : pick_unlocked({Expr::sulking, Expr::grumpy});
+  const char* why = won ? "выиграл дуэль" : "проиграл дуэль";
+  if (won && progress_) {
+    const Expr stolen = progress_->steal_one(rng_);
+    if (stolen != Expr::Count) {
+      after = stolen;
+      why = "выиграл в дуэли новую эмоцию";
+    }
+  }
+  mood_.valence = clamp11(mood_.valence + (won ? 0.25f : -0.15f));
+  mood_.annoyance = clamp01(mood_.annoyance + (won ? 0.0f : 0.15f));
+  queue_scene(Scene::duel, p, after, now, why);
+  if (progress_) grant(progress_->duel(won), now);
+}
+
+void Behavior::set_date(uint16_t year, uint8_t month, uint8_t day) {
+  year_ = year;
+  month_ = month;
+  day_ = day;
+}
+
+void Behavior::set_surprise_interval(uint32_t min_ms, uint32_t max_ms, uint32_t now) {
+  surprise_min_ = min_ms;
+  surprise_max_ = max_ms > min_ms ? max_ms : min_ms + 1;
+  next_surprise_ = now + surprise_min_ + rng_.next() % (surprise_max_ - surprise_min_ + 1u);
+}
+
+void Behavior::surprise(uint32_t now) {
+  next_surprise_ = now + surprise_min_ + rng_.next() % (surprise_max_ - surprise_min_ + 1u);
+  const bool cyber = eng_->options().theme == Theme::Cyber;
+  struct Opt {
+    Scene s;
+    float w;
+  };
+  const Opt opts[] = {{Scene::hide, cyber ? 1.0f : 3.0f},
+                      {Scene::reboot, 1.5f},
+                      {Scene::error404, cyber ? 2.0f : 1.0f},
+                      {Scene::hack, cyber ? 3.0f : 1.0f},
+                      {Scene::data_rain, cyber ? 2.0f : 0.7f}};
+  float total = 0;
+  for (const Opt& o : opts) total += o.w;
+  float x = rng_.unit() * total;
+  Scene s = Scene::hide;
+  for (const Opt& o : opts) {
+    x -= o.w;
+    if (x <= 0) {
+      s = o.s;
+      break;
+    }
+  }
+  Expr after = Expr::neutral;
+  switch (s) {
+    case Scene::hack: after = pick_unlocked({Expr::troll_grin, Expr::smug, Expr::wink}); break;
+    case Scene::data_rain: after = pick_unlocked({Expr::hypnotized, Expr::zoned_out, Expr::dizzy}); break;
+    case Scene::error404: after = pick_unlocked({Expr::shrug, Expr::confused}); break;
+    case Scene::reboot: after = Expr::waking; break;
+    case Scene::hide: after = pick_unlocked({Expr::playful, Expr::giggle, Expr::laugh}); break;
+    default: break;
+  }
+  queue_scene(s, SceneParams{}, after, now, "сюрприз");
 }
 
 }  // namespace face

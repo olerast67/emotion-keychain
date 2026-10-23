@@ -5,6 +5,10 @@
 
 #include "face/behavior.h"
 #include "face/engine.h"
+#include "face/identity.h"
+#include "face/progress.h"
+#include "face/scenes.h"
+#include "face/text.h"
 
 using namespace face;
 
@@ -301,6 +305,222 @@ static void test_behavior_day() {
   CHECK(fps < 12.0, "в среднем %.2f кадра/с", fps);
 }
 
+static void test_identity() {
+  const Identity a = make_identity(123456789ull), b = make_identity(123456789ull), c = make_identity(123456790ull);
+  CHECK(a.hash == b.hash && a.archetype == b.archetype && a.quirks.spacing == b.quirks.spacing,
+        "один номер — один персонаж");
+  CHECK(a.hash != c.hash, "соседние номера — разные персонажи");
+  CHECK(a.code[2] == '-' && a.code[7] == 0, "позывной вида XX-XXXX: %s", a.code);
+  int arch[(int)Archetype::Count] = {}, rare = 0, legend = 0;
+  const int n = 20000;
+  bool ranges = true;
+  for (int i = 0; i < n; ++i) {
+    const Identity id = make_identity((uint64_t)i * 7919ull + 17ull);
+    ++arch[(int)id.archetype];
+    rare += id.rarity == Rarity::Rare;
+    legend += id.rarity == Rarity::Legendary;
+    const Quirks& q = id.quirks;
+    if (fabs_(q.spacing) > 4.0f || q.eye_scale < 0.94f || q.eye_scale > 1.06f || q.pupil_scale < 0.84f ||
+        q.pupil_scale > 1.31f || q.blink_rate < 0.79f || q.blink_rate > 1.31f ||
+        q.cyber_eye != (id.rarity == Rarity::Legendary))
+      ranges = false;
+  }
+  CHECK(ranges, "особенности внешности в своих пределах");
+  for (int i = 0; i < (int)Archetype::Count; ++i)
+    CHECK(arch[i] > n / 12, "архетип %s встречается: %d", archetype_id((Archetype)i), arch[i]);
+  CHECK(legend > n / 200 && legend < n / 60, "легендарных около 1%%: %d из %d", legend, n);
+  CHECK(rare > n / 14 && rare < n / 8, "редких около 10%%: %d из %d", rare, n);
+}
+
+static void test_progress() {
+  Progress p;
+  p.reset();
+  const int base = p.unlocked_count();
+  CHECK(base >= 38 && base <= 50, "на старте открыто около 40 эмоций: %d", base);
+  CHECK(p.is_unlocked(Expr::sleeping) && p.is_unlocked(Expr::charging) && p.is_unlocked(Expr::low_battery),
+        "без сна, зарядки и батареи персонаж не живёт");
+  for (int i = 1; i < implant_count(); ++i) CHECK(implant(i).xp > implant(i - 1).xp, "импланты по возрастанию опыта");
+  // Каждая эмоция ровно в одном импланте: по мере роста открывается ровно то, что в нём числится.
+  int total = base;
+  for (int i = 1; i < implant_count(); ++i) {
+    const int before = p.unlocked_count();
+    const int got = p.add_xp(implant(i).xp - p.xp);
+    int listed = 0;
+    for (int e = 0; e < kExprCount; ++e) listed += implant_of((Expr)e) == i;
+    CHECK(got == i, "имплант %d установился (%d)", i, got);
+    CHECK(p.unlocked_count() - before == listed, "имплант %s открыл %d из %d", implant(i).tag,
+          p.unlocked_count() - before, listed);
+    total += listed;
+  }
+  CHECK(total == kExprCount && p.unlocked_count() == kExprCount, "все %d эмоции открываются: %d", kExprCount,
+        p.unlocked_count());
+  CHECK(p.xp_to_next() == 0 && p.add_xp(1000) == -1, "после последнего импланта ставить нечего");
+
+  // Касания и шаги ограничены за день.
+  Progress q;
+  q.reset();
+  for (int i = 0; i < 500; ++i) q.touch();
+  q.add_steps(100000);
+  const XpRules r;
+  CHECK(q.xp == (uint32_t)(r.touch_day_cap + r.steps_day_cap), "дневной предел: %u", q.xp);
+  q.new_day();
+  q.touch();
+  CHECK(q.xp == (uint32_t)(r.touch_day_cap + r.steps_day_cap + r.day + r.touch), "новый день снимает предел");
+  // Обычный день ≈ день + касания + шаги: полный набор — за несколько недель.
+  const uint32_t per_day = r.day + r.touch_day_cap + r.steps_day_cap;
+  const uint32_t days = implant(implant_count() - 1).xp / per_day;
+  CHECK(days >= 21 && days <= 60, "всё открывается за %u дней активной носки", days);
+
+  // Флеш: контрольная сумма ловит порчу.
+  q.seal();
+  CHECK(q.valid(), "целая запись проходит проверку");
+  Progress broken = q;
+  broken.xp ^= 1;
+  CHECK(!broken.valid(), "испорченная запись не проходит");
+
+  // Дуэль: досрочно открывается эмоция из ближайшего импланта.
+  Progress d;
+  d.reset();
+  Rng rng;
+  rng.seed(3);
+  const Expr e = d.steal_one(rng);
+  CHECK(e != Expr::Count && d.is_unlocked(e) && implant_of(e) == 1, "выигранная эмоция — из следующего импланта");
+}
+
+static void test_scenes() {
+  for (int i = 0; i < kSceneCount; ++i) {
+    const Scene s = (Scene)i;
+    Scene back;
+    CHECK(scene_from_id(scene_id(s), &back) && back == s, "id сцены %s", scene_id(s));
+    FaceEngine eng;
+    eng.init(5, 0);
+    SceneParams p;
+    p.set_text("K7-3F2A");
+    eng.play_scene(s, 0, p);
+    int margin = 99, frames = 0;
+    uint32_t t = 0;
+    for (; t < 20000 && eng.scene() != Scene::None; t += 20) {
+      if (eng.update(t)) ++frames;
+      const Framebuffer& f = eng.frame();
+      for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kWidth; ++x)
+          if (f.get(x, y)) margin = imin(margin, imin(imin(x, kWidth - 1 - x), imin(y, kHeight - 1 - y)));
+    }
+    CHECK(eng.scene() == Scene::None && t <= scene_duration_ms(s) + 40u, "сцена %s заканчивается сама", scene_id(s));
+    CHECK(frames > 3, "сцена %s анимирована: %d кадров", scene_id(s), frames);
+    // В прятках лицо уходит за нижний край — так задумано.
+    if (s != Scene::hide) CHECK(margin >= kSafeMargin - 1, "сцена %s: до края %d px", scene_id(s), margin);
+  }
+  CHECK(text_width("ABC") == 22 && text_height() == 10, "размер надписи");
+}
+
+static void test_cyber_theme_and_tilt() {
+  // Кибер-тема и кибер-глаз не выводят эмоции за безопасное поле.
+  Quirks q;
+  q.cyber_eye = true;
+  for (int i = 0; i < kExprCount; ++i) {
+    const Expr e = (Expr)i;
+    if (expression(e).overlays & ov(Overlay::Bat)) continue;
+    FaceEngine eng;
+    eng.options().drift = false;
+    eng.options().theme = Theme::Cyber;
+    eng.init(77 + i, 0);
+    eng.set_quirks(q, 0);
+    eng.set_expression(e, 0, 0);
+    int margin = 99;
+    for (uint32_t t = 0; t < 6000; t += 50) {
+      eng.update(t);
+      if (eng.expression() != e) eng.set_expression(e, t, 0);
+      const Framebuffer& f = eng.frame();
+      for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kWidth; ++x)
+          if (f.get(x, y)) margin = imin(margin, imin(imin(x, kWidth - 1 - x), imin(y, kHeight - 1 - y)));
+    }
+    CHECK(margin >= kSafeMargin - 1, "кибер-тема, %s: до края %d px", expression(e).id, margin);
+  }
+  // Наклон: зрачки уходят в нижнюю сторону.
+  FaceEngine eng;
+  eng.options().idle_motion = false;
+  eng.init(1, 0);
+  eng.set_tilt(1.0f, 0.0f);
+  for (uint32_t t = 0; t < 1000; t += 33) eng.update(t);
+  CHECK(eng.face().gx > 0.6f, "наклон вправо — взгляд вправо: %.2f", eng.face().gx);
+  eng.set_tilt(0.0f, 0.0f);
+  for (uint32_t t = 1000; t < 2500; t += 33) eng.update(t);
+  CHECK(fabs_(eng.face().gx) < 0.1f, "выровняли — взгляд вернулся: %.2f", eng.face().gx);
+}
+
+static void test_growth_behavior() {
+  // С новым прогрессом персонаж сутки показывает только открытые эмоции.
+  FaceEngine eng;
+  Behavior bh;
+  Progress p;
+  p.reset();
+  eng.init(9, 0);
+  bh.init(&eng, 9, 0);
+  bh.attach_progress(&p);
+  bh.set_surprise_interval(3600000u, 7200000u, 0);
+  bool ok = true;
+  Expr bad = Expr::Count;
+  int scenes = 0;
+  Scene last = Scene::None;
+  for (uint32_t t = 0; t < 24u * 3600000u; t += 1000) {
+    bh.set_clock((uint16_t)((t / 60000u + 12 * 60) % 1440));
+    if (t % 600000u == 0) bh.on_event(Event::tap, t);
+    bh.update(t);
+    eng.update(t);
+    if (eng.scene() != last && eng.scene() != Scene::None) ++scenes;
+    last = eng.scene();
+    if (eng.scene() == Scene::None && !p.is_unlocked(eng.expression())) ok = false, bad = eng.expression();
+  }
+  CHECK(ok, "показана закрытая эмоция: %s", bad == Expr::Count ? "-" : expression(bad).id);
+  CHECK(scenes >= 5, "за сутки были сюрпризы и апгрейды: %d сцен", scenes);
+  CHECK(p.touches > 100 && p.xp > 0, "касания дают опыт: %u", p.xp);
+
+  // Встреча и дуэль.
+  bh.meet("K7-3F2A", true, 100000000u);
+  eng.update(100000000u);
+  CHECK(eng.scene() == Scene::greet, "встреча — сцена приветствия");
+  const int before = p.unlocked_count();
+  uint32_t t = 100000000u;
+  for (; t < 100060000u; t += 50) {
+    bh.update(t);
+    eng.update(t);
+  }
+  bh.duel("K7-3F2A", true, t);
+  for (uint32_t end = t + 30000u; t < end; t += 50) {
+    bh.update(t);
+    eng.update(t);
+  }
+  CHECK(p.unlocked_count() > before, "победа в дуэли открыла эмоцию: %d → %d", before, p.unlocked_count());
+  CHECK(p.duels_won == 1 && p.friends == 1, "счётчики встреч и дуэлей");
+
+  // Праздник — один раз за дату.
+  FaceEngine e2;
+  Behavior b2;
+  e2.init(4, 0);
+  b2.init(&e2, 4, 0);
+  b2.set_date(2026, 12, 31);
+  int ny = 0;
+  Scene prev = Scene::None;
+  for (uint32_t tt = 0; tt < 120000; tt += 100) {
+    b2.update(tt);
+    e2.update(tt);
+    if (e2.scene() == Scene::new_year && prev != Scene::new_year) ++ny;
+    prev = e2.scene();
+  }
+  CHECK(ny == 1, "Новый год показан ровно раз: %d", ny);
+  b2.set_birthday(5, 14);
+  b2.set_date(2027, 5, 14);
+  bool bday = false;
+  for (uint32_t tt = 120000; tt < 140000; tt += 100) {
+    b2.update(tt);
+    e2.update(tt);
+    bday |= e2.scene() == Scene::birthday;
+  }
+  CHECK(bday, "день рождения хозяина");
+}
+
 int main() {
   test_framebuffer();
   test_catalog();
@@ -313,6 +533,11 @@ int main() {
   test_clips_finish();
   test_behavior_reactions();
   test_behavior_day();
+  test_identity();
+  test_progress();
+  test_scenes();
+  test_cyber_theme_and_tilt();
+  test_growth_behavior();
   printf("%d проверок, %d ошибок\n", g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

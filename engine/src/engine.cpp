@@ -174,6 +174,12 @@ void FaceEngine::init(uint32_t seed, uint32_t now_ms) {
   g_moving_ = false;
   g_ext_until_ = 0;
   expression_face(Expr::neutral, &base_);
+  apply_quirks(base_);
+  scene_ = Scene::None;
+  tilt_x_ = tilt_y_ = tilt_cx_ = tilt_cy_ = 0;
+  tilt_last_ = now_ms;
+  micro_glitch_next_ = now_ms + 45000u + rng_.next() % 60000u;
+  micro_glitch_until_ = 0;
   last_now_ = now_ms;
   set_expression(Expr::neutral, now_ms, 0);
 }
@@ -185,6 +191,7 @@ void FaceEngine::set_expression(Expr e, uint32_t now_ms, int transition_ms) {
   expr_t0_ = now_ms;
   from_ = base_;
   expression_face(e, &to_);
+  apply_quirks(to_);
   for (int i = 0; i < 2; ++i) eye_swap_[i] = from_.eye[i].kind != to_.eye[i].kind;
   mouth_swap_ = from_.mouth.kind != to_.mouth.kind;
   tr_ms_ = (uint16_t)(transition_ms < 0 ? preset_->in_ms : transition_ms);
@@ -276,6 +283,44 @@ Pad motion_pad(const Expression& e) {
 
 }  // namespace
 
+void FaceEngine::apply_quirks(Face& f) const {
+  const Quirks& q = quirks_;
+  f.layout.spacing += q.spacing;
+  for (int i = 0; i < 2; ++i) {
+    f.eye[i].sx *= q.eye_scale;
+    f.eye[i].sy *= q.eye_scale;
+    f.eye[i].pr *= q.pupil_scale;
+    if (f.brow[i].len > 0.5f) f.brow[i].gap += q.brow_lift;
+  }
+}
+
+void FaceEngine::set_quirks(const Quirks& q, uint32_t now_ms) {
+  quirks_ = q;
+  expression_face(expr_, &base_);
+  apply_quirks(base_);
+  set_expression(expr_, now_ms, 0);
+}
+
+void FaceEngine::set_tilt(float x, float y) {
+  tilt_x_ = clampf(x, -1.0f, 1.0f);
+  tilt_y_ = clampf(y, -1.0f, 1.0f);
+  next_update_ = last_now_;
+}
+
+void FaceEngine::jerk(float dx, float dy, uint32_t now_ms) {
+  const float m = fmax_(fabs_(dx), fabs_(dy));
+  if (m < 0.05f) return;
+  look_at(clampf(dx / m, -1.0f, 1.0f), clampf(dy / m * 0.5f, -0.5f, 0.5f), now_ms, 700);
+}
+
+void FaceEngine::play_scene(Scene s, uint32_t now_ms, const SceneParams& p) {
+  if ((int)s >= kSceneCount) return;
+  scene_ = s;
+  scene_t0_ = now_ms;
+  scene_p_ = p;
+  next_update_ = now_ms;
+}
+
 void FaceEngine::compute_fit() {
   // Рисуем целевое лицо со значками в черновой буфер и смотрим, где оказались
   // крайние пиксели. Значки, привязанные к экрану, а не к лицу, сами держат поле.
@@ -288,6 +333,7 @@ void FaceEngine::compute_fit() {
     if (!((ov_target_ >> i) & 1ull) || overlay_screen_space((Overlay)i)) continue;
     for (int k = 0; k < 8; ++k) render_overlay(back_, (Overlay)i, a, 1.0f, (float)k * 0.31f);
   }
+  // Рамка темы и риски кибер-глаза сами прижаты к безопасному полю, в расчёт не входят.
   int x0 = kWidth, x1 = -1, y0 = kHeight, y1 = -1;
   for (int p = 0; p < kPages; ++p)
     for (int x = 0; x < kWidth; ++x) {
@@ -487,7 +533,7 @@ void FaceEngine::schedule_blink(uint32_t from) {
     case Blink::Normal:
     default: lo = 2500, hi = 6500; break;
   }
-  blink_next_ = from + lo + rng_.next() % (hi - lo);
+  blink_next_ = from + (uint32_t)((float)(lo + rng_.next() % (hi - lo)) * quirks_.blink_rate);
 }
 
 void FaceEngine::update_blink(uint32_t now, uint32_t& period) {
@@ -873,7 +919,8 @@ void FaceEngine::overlays_update(uint32_t now, uint32_t& period) {
 
 bool FaceEngine::update(uint32_t now) {
   if (!preset_) init(1, now);
-  if (preset_->hold_ms && now - expr_t0_ >= preset_->hold_ms) set_expression(preset_->next, now);
+  if (preset_->hold_ms && now - expr_t0_ >= preset_->hold_ms)
+    set_expression(filter_ ? filter_(preset_->next, filter_ctx_) : preset_->next, now);
 
   uint32_t period = kNever;  // когда нужен следующий кадр; kNever — лицо статично
 
@@ -939,6 +986,53 @@ bool FaceEngine::update(uint32_t now) {
   update_blink(now, period);
   apply_clip(now, period);
 
+  // Наклон: зрачки догоняют силу тяжести с небольшой инерцией.
+  {
+    const float dt = (float)(now - tilt_last_);
+    tilt_last_ = now;
+    const float k = dt / (dt + 120.0f);
+    tilt_cx_ += (tilt_x_ - tilt_cx_) * k;
+    tilt_cy_ += (tilt_y_ - tilt_cy_) * k;
+    if (fabs_(tilt_x_ - tilt_cx_) > 0.02f || fabs_(tilt_y_ - tilt_cy_) > 0.02f) want(period, opt_.frame_ms);
+    if (fabs_(tilt_cx_) > 0.01f || fabs_(tilt_cy_) > 0.01f) {
+      // Чем сильнее наклон, тем меньше остаётся от собственного взгляда.
+      const float wx = fabs_(tilt_cx_), wy = fabs_(tilt_cy_);
+      composed_.gx = clampf(composed_.gx * (1.0f - 0.85f * wx) + tilt_cx_ * 0.95f, -1.0f, 1.0f);
+      composed_.gy = clampf(composed_.gy * (1.0f - 0.6f * wy) + tilt_cy_ * 0.4f, -0.6f, 0.6f);
+    }
+  }
+
+  // Киберпанк: редкие короткие сбои сигнала, раз в 45–150 с.
+  const bool cyber = opt_.theme == Theme::Cyber;
+  if (cyber && opt_.idle_motion && scene_ == Scene::None) {
+    if (now >= micro_glitch_next_) {
+      micro_glitch_until_ = now + 140u;
+      micro_glitch_next_ = now + 45000u + rng_.next() % 105000u;
+    }
+    if (now < micro_glitch_until_) {
+      glitch_ = fmax_(glitch_, 0.3f);
+      want(period, 50);
+    }
+  }
+  const float lock = cyber ? ease_out(clampf((float)(now - expr_t0_) / 350.0f, 0.0f, 1.0f)) : 1.0f;
+  if (cyber && lock < 1.0f) want(period, opt_.frame_ms);
+  const bool glint = quirks_.cyber_eye && (now % 5000u) < 400u;
+  if (glint) want(period, 100);
+
+  // Сцена поверх всего: лицо живёт под ней, но на экран идёт сцена.
+  uint32_t scene_t = 0;
+  if (scene_ != Scene::None) {
+    scene_t = now - scene_t0_;
+    if (scene_t >= scene_duration_ms(scene_)) {
+      scene_ = Scene::None;
+      want(period, opt_.frame_ms);
+    } else {
+      const uint16_t sp = scene_frame_ms(scene_, scene_t);
+      scene_t -= scene_t % sp;
+      want(period, sp);
+    }
+  }
+
   if (opt_.drift && now >= drift_next_) {
     // Шаг дрейфа на 1 px раз в 20–40 с: глаза не стоят часами на одних пикселях.
     int nx = drift_x_ + rng_.irange(-1, 1), ny = drift_y_ + rng_.irange(-1, 1);
@@ -972,6 +1066,10 @@ bool FaceEngine::update(uint32_t now) {
   hs.f(glitch_);
   hs.u32(glitch_ > 0.0f ? now / 50u : 0u);
   hs.byte((uint8_t)(opt_.scanlines | opt_.upside_down << 1));
+  hs.byte((uint8_t)((uint8_t)opt_.theme | quirks_.cyber_eye << 2 | glint << 3));
+  hs.f(lock);
+  hs.byte((uint8_t)scene_);
+  hs.u32(scene_t);
   hs.u32(opt_.scanlines ? (expr_t0_ / 1000u + now / 20000u) & 1u : 0u);
 
   // Ничего не изменилось — не рисуем вовсе (на МК это экономит процессорное время).
@@ -982,10 +1080,15 @@ bool FaceEngine::update(uint32_t now) {
     dirty_n_ = 0;
   } else {
     back_.clear();
-    Anchors anchors;
-    render_face(back_, composed_, &anchors);
-    for (int i = 0; i < (int)Overlay::Count; ++i) {
-      if (ov_alpha_[i] > 0.0f) render_overlay(back_, (Overlay)i, anchors, ov_alpha_[i], (float)ov_local[i] * 0.001f);
+    if (scene_ != Scene::None) {
+      render_scene(back_, scene_, scene_t, scene_p_, composed_);
+    } else {
+      Anchors anchors;
+      render_face(back_, composed_, &anchors);
+      for (int i = 0; i < (int)Overlay::Count; ++i) {
+        if (ov_alpha_[i] > 0.0f) render_overlay(back_, (Overlay)i, anchors, ov_alpha_[i], (float)ov_local[i] * 0.001f);
+      }
+      render_theme(back_, anchors, cyber, quirks_.cyber_eye, lock, glint);
     }
 
     if (glitch_ > 0.0f) {
@@ -1040,6 +1143,15 @@ bool FaceEngine::update(uint32_t now) {
   if (opt_.scanlines) {
     uint32_t s = (now / 20000u + 1u) * 20000u;
     if (s < next) next = s;
+  }
+  if (quirks_.cyber_eye) {
+    const uint32_t g = now - now % 5000u + (glint ? 400u : 5000u);
+    if (g < next) next = g;
+  }
+  if (cyber && opt_.idle_motion && micro_glitch_next_ > now && micro_glitch_next_ < next) next = micro_glitch_next_;
+  if (scene_ != Scene::None) {
+    const uint32_t e = scene_ends_ms();
+    if (e > now && e < next) next = e;
   }
   next_update_ = next <= now ? now + 1 : next;
   last_now_ = now;

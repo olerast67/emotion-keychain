@@ -17,6 +17,7 @@
 #include "face/framebuffer.h"
 #include "face/params.h"
 #include "face/render.h"
+#include "face/scenes.h"
 
 namespace face {
 
@@ -54,12 +55,26 @@ uint16_t clip_duration_ms(Clip c);
 // Сколько пикселей движок оставляет между эмоцией и краем экрана.
 constexpr int kSafeMargin = 4;
 
+// Внешность конкретного брелока: небольшие отличия, по которым два брелока
+// с одной эмоцией всё равно выглядят по-разному (см. identity.h).
+struct Quirks {
+  float spacing = 0;       // расстояние между глазами, ±px
+  float eye_scale = 1;     // размер глаз
+  float pupil_scale = 1;   // размер зрачков
+  float blink_rate = 1;    // множитель интервала моргания: >1 — моргает реже
+  float brow_lift = 0;     // брови выше (+) или ниже (−), px
+  bool cyber_eye = false;  // правый глаз — кибер-глаз (редкий брелок)
+};
+
+enum class Theme : uint8_t { Classic, Cyber };
+
 struct EngineOptions {
   bool drift = true;         // медленный дрейф лица против выгорания
   bool idle_motion = true;   // моргание и взгляд
   bool scanlines = false;    // ретро-режим: горит каждая вторая строка
   bool upside_down = false;  // повернуть кадр на 180°
   uint16_t frame_ms = 33;    // период кадров во время анимации (~30 fps)
+  Theme theme = Theme::Classic;
 };
 
 struct EngineStats {
@@ -79,6 +94,26 @@ class FaceEngine {
   Clip clip() const { return clip_active_ ? clip_ : Clip::None; }
   // Внешнее управление взглядом (например, «смотрит туда, откуда звук»).
   void look_at(float gx, float gy, uint32_t now_ms, uint32_t hold_ms);
+
+  // Фильтр эмоций: движок сам переходит по цепочкам (смех → радость) и через
+  // фильтр не покажет то, что ещё не открыто. nullptr — без фильтра.
+  using ExprFilter = Expr (*)(Expr e, const void* ctx);
+  void set_expr_filter(ExprFilter f, const void* ctx) { filter_ = f, filter_ctx_ = ctx; }
+
+  // Внешность конкретного брелока (identity.h). Применяется сразу.
+  void set_quirks(const Quirks& q, uint32_t now_ms);
+  const Quirks& quirks() const { return quirks_; }
+
+  // Наклон из акселерометра: проекция силы тяжести на плоскость экрана, −1…1
+  // (x вправо, y вниз). Зрачки плавно «скатываются» в нижнюю сторону.
+  void set_tilt(float x, float y);
+  // Резкое движение брелока: персонаж на миг смотрит в ту сторону.
+  void jerk(float dx, float dy, uint32_t now_ms);
+
+  // Полноэкранная сцена вместо лица (scenes.h). Лицо продолжает жить под ней.
+  void play_scene(Scene s, uint32_t now_ms, const SceneParams& p = {});
+  Scene scene() const { return scene_; }
+  uint32_t scene_ends_ms() const { return scene_ == Scene::None ? 0 : scene_t0_ + scene_duration_ms(scene_); }
 
   EngineOptions& options() { return opt_; }
   const EngineOptions& options() const { return opt_; }
@@ -154,6 +189,19 @@ class FaceEngine {
   // и сколько места остаётся на дрейф в каждую сторону.
   float fit_from_x_ = 0, fit_from_y_ = 0, fit_to_x_ = 0, fit_to_y_ = 0, fit_x_ = 0, fit_y_ = 0;
   int drift_lo_x_ = -3, drift_hi_x_ = 3, drift_lo_y_ = -2, drift_hi_y_ = 2;
+
+  ExprFilter filter_ = nullptr;
+  const void* filter_ctx_ = nullptr;
+
+  // Внешность, тема, сцена, наклон.
+  Quirks quirks_;
+  Scene scene_ = Scene::None;
+  uint32_t scene_t0_ = 0;
+  SceneParams scene_p_;
+  float tilt_x_ = 0, tilt_y_ = 0, tilt_cx_ = 0, tilt_cy_ = 0;
+  uint32_t tilt_last_ = 0;
+  uint32_t micro_glitch_next_ = 0, micro_glitch_until_ = 0;
+  void apply_quirks(Face& f) const;
 
   // Оверлеи.
   float ov_alpha_[(int)Overlay::Count] = {};

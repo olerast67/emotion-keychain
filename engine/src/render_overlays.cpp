@@ -3,6 +3,7 @@
 #include "face/engine.h"
 #include "face/raster.h"
 #include "face/render.h"
+#include "face/text.h"
 
 namespace face {
 
@@ -34,31 +35,6 @@ void note(Framebuffer& fb, float x, float y, float s) {
   float sx = x + 1.8f * s;
   capsule(fb, sx, y, sx, y - 7.0f * s, 1.6f);
   capsule(fb, sx, y - 7.0f * s, sx + 3.0f * s, y - 4.5f * s, 1.6f);
-}
-
-// Шрифт 3×5 для надписей-пасхалок (только нужные буквы), каждый пиксель
-// рисуется квадратом 2×2: однопиксельные буквы на 0.96″ не читаются.
-void text3x5(Framebuffer& fb, int x, int y, const char* s) {
-  struct G {
-    char c;
-    uint8_t rows[5];
-  };
-  static const G kGlyphs[] = {{'G', {3, 4, 5, 5, 3}}, {'A', {2, 5, 7, 5, 5}}, {'M', {5, 7, 7, 5, 5}},
-                              {'E', {7, 4, 6, 4, 7}}, {'O', {2, 5, 5, 5, 2}}, {'V', {5, 5, 5, 5, 2}},
-                              {'R', {6, 5, 6, 5, 5}}, {'H', {5, 5, 7, 5, 5}}, {'I', {7, 2, 2, 2, 7}},
-                              {'U', {5, 5, 5, 5, 7}}, {'P', {6, 5, 6, 4, 4}}, {'0', {7, 5, 5, 5, 7}},
-                              {'1', {2, 6, 2, 2, 7}}, {'4', {5, 5, 7, 1, 1}}};
-  for (int i = 0; s[i]; ++i) {
-    for (const G& g : kGlyphs) {
-      if (g.c != s[i]) continue;
-      for (int r = 0; r < 5; ++r)
-        for (int c = 0; c < 3; ++c)
-          if (g.rows[r] & (4 >> c)) {
-            const int px = x + (i * 4 + c) * 2, py = y + r * 2;
-            fb.set(px, py), fb.set(px + 1, py), fb.set(px, py + 1), fb.set(px + 1, py + 1);
-          }
-    }
-  }
 }
 
 void sparkle_at(Framebuffer& fb, float x, float y, float r) {
@@ -567,7 +543,7 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
     }
     case Overlay::GameOver: {
       if (s < 0.5f) return;
-      text3x5(fb, iround(cx) - 35, (int)kB - 10, "GAME OVER");
+      draw_text_centered(fb, iround(cx), (int)kB - 10, "GAME OVER");
       return;
     }
     case Overlay::QueasyLines: {
@@ -583,6 +559,50 @@ void render_overlay(Framebuffer& fb, Overlay o, const Anchors& a, float alpha, f
       return;
     }
     case Overlay::Count: return;
+  }
+}
+
+namespace {
+
+void corner_rect(Framebuffer& fb, int x0, int y0, int x1, int y1) {
+  for (int y = y0; y <= y1; ++y) fb.hspan(y, x0, x1, Ink::Set);
+}
+
+}  // namespace
+
+void render_theme(Framebuffer& fb, const Anchors& a, bool cyber, bool cyber_eye, float lock, bool glint) {
+  const int lo_x = kSafeMargin, hi_x = kWidth - 1 - kSafeMargin, lo_y = kSafeMargin, hi_y = kHeight - 1 - kSafeMargin;
+  if (cyber) {
+    // Прицельная рамка вокруг всего лица. После смены эмоции уголки съезжаются
+    // к лицу — «захват цели».
+    const float pad = 3.0f + 10.0f * (1.0f - clampf(lock, 0.0f, 1.0f));
+    float fx0 = a.mx - a.mw * 0.5f, fx1 = a.mx + a.mw * 0.5f, fy0 = a.my, fy1 = a.my + 6.0f;
+    for (int i = 0; i < 2; ++i) {
+      fx0 = fmin_(fx0, a.ex[i] - a.ew[i] * 0.5f), fx1 = fmax_(fx1, a.ex[i] + a.ew[i] * 0.5f);
+      fy0 = fmin_(fy0, a.ey[i] - fmax_(a.eh[i] * 0.5f, 6.0f) - 6.0f);  // место под брови
+    }
+    const int x0 = imax(iround(fx0 - pad - 6.0f), lo_x), x1 = imin(iround(fx1 + pad + 6.0f), hi_x);
+    const int y0 = imax(iround(fy0 - pad), lo_y), y1 = imin(iround(fy1 + pad), hi_y);
+    const int len = 7;
+    corner_rect(fb, x0, y0, x0 + len, y0 + 1);
+    corner_rect(fb, x0, y0, x0 + 1, y0 + len);
+    corner_rect(fb, x1 - len, y0, x1, y0 + 1);
+    corner_rect(fb, x1 - 1, y0, x1, y0 + len);
+    corner_rect(fb, x0, y1 - 1, x0 + len, y1);
+    corner_rect(fb, x0, y1 - len, x0 + 1, y1);
+    corner_rect(fb, x1 - len, y1 - 1, x1, y1);
+    corner_rect(fb, x1 - 1, y1 - len, x1, y1);
+  }
+  if (cyber_eye) {
+    // Кибер-глаз: риски прицела вокруг правого глаза и редкая вспышка.
+    const float ex = a.ex[1], ey = a.ey[1];
+    const float rx = a.ew[1] * 0.5f + 3.0f, ry = fmax_(a.eh[1] * 0.5f, 5.0f) + 3.0f;
+    const int cx = iround(ex), cy = iround(ey);
+    corner_rect(fb, cx - 1, imax(iround(ey - ry) - 3, lo_y), cx, iround(ey - ry));
+    corner_rect(fb, imax(iround(ex - rx) - 3, lo_x), cy - 1, iround(ex - rx), cy);
+    corner_rect(fb, iround(ex + rx), cy - 1, imin(iround(ex + rx) + 3, hi_x), cy);
+    if (glint)
+      sparkle_at(fb, fmin_(ex + rx + 2.0f, (float)hi_x - 4.0f), fmax_(ey - ry - 1.0f, (float)lo_y + 4.0f), 4.0f);
   }
 }
 

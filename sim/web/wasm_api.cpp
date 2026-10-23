@@ -2,6 +2,8 @@
 // Собирается без libc (см. build.sh), поэтому здесь свои memset/memcpy.
 #include "face/behavior.h"
 #include "face/engine.h"
+#include "face/identity.h"
+#include "face/progress.h"
 
 #define EXPORT(name) extern "C" __attribute__((export_name(#name)))
 
@@ -112,3 +114,29 @@ EXPORT(fe_mood) float fe_mood(int i) {
 EXPORT(fe_event_count) int fe_event_count() { return kEventCount; }
 EXPORT(fe_event_id) const char* fe_event_id(int i) { return event_id((Event)i); }
 EXPORT(fe_event_name) const char* fe_event_name(int i) { return event_name((Event)i); }
+
+// ---- Характер, тема, сцены, наклон ----
+static Identity g_id;
+EXPORT(fe_set_theme) void fe_set_theme(int cyber) { g_eng.options().theme = cyber ? Theme::Cyber : Theme::Classic; }
+EXPORT(fe_identity) void fe_identity(uint32_t lo, uint32_t hi, uint32_t now) {
+  g_id = make_identity((uint64_t)hi << 32 | lo);
+  g_bh.personality() = g_id.personality;
+  g_eng.set_quirks(g_id.quirks, now);
+}
+EXPORT(fe_id_code) const char* fe_id_code() { return g_id.code; }
+EXPORT(fe_id_arch) const char* fe_id_arch() { return archetype_name(g_id.archetype); }
+EXPORT(fe_id_rarity) const char* fe_id_rarity() { return rarity_name(g_id.rarity); }
+EXPORT(fe_id_cyber) int fe_id_cyber() { return g_id.quirks.cyber_eye ? 1 : 0; }
+EXPORT(fe_scene_count) int fe_scene_count() { return kSceneCount; }
+EXPORT(fe_scene_id) const char* fe_scene_id(int i) { return scene_id((Scene)i); }
+EXPORT(fe_scene_name) const char* fe_scene_name(int i) { return scene_name((Scene)i); }
+EXPORT(fe_play_scene) void fe_play_scene(int i, uint32_t now) {
+  SceneParams p;
+  if ((Scene)i == Scene::upgrade) p.set_text(implant(1 + (int)(now / 1000u) % (implant_count() - 1)).tag);
+  if ((Scene)i == Scene::greet || (Scene)i == Scene::duel) p.set_text(make_identity(now).code);
+  if ((Scene)i == Scene::duel) p.value = (int)(now & 1u);
+  if ((Scene)i == Scene::new_year) p.set_text("2027");
+  g_eng.play_scene((Scene)i, now, p);
+}
+EXPORT(fe_scene_active) int fe_scene_active() { return g_eng.scene() == Scene::None ? -1 : (int)g_eng.scene(); }
+EXPORT(fe_set_tilt) void fe_set_tilt(float x, float y) { g_eng.set_tilt(x, y); }

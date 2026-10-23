@@ -9,6 +9,9 @@
 //   facegen clip <emotion> <clip> out.gif [--scale 4]
 //   facegen demo out.gif [--scale 3] [--per 2.5] [--ids a,b] [--module]
 //   facegen bench [--seconds 60]
+//   facegen scene <scene> out.gif [--text X] [--value 1] [--scale 4]
+//   facegen id <serial>                 — характер и внешность брелока по серийному номеру
+// Общие ключи: --theme cyber, --serial N (внешность конкретного брелока).
 //   facegen catalog [docs/emotions.md]
 #include <chrono>
 #include <cstdio>
@@ -18,6 +21,7 @@
 #include <vector>
 
 #include "face/engine.h"
+#include "face/identity.h"
 #include "gif_writer.h"
 #include "oled_look.h"
 
@@ -37,9 +41,21 @@ struct Args {
   bool raw = false;
   bool anim = false;
   bool drift = false;
-  std::string ids;      // --ids a,b,c — свой набор эмоций
-  bool module = false;  // --module — кадр в виде модуля SSD1306 на синей плате
+  std::string ids;        // --ids a,b,c — свой набор эмоций
+  bool module = false;    // --module — кадр в виде модуля SSD1306 на синей плате
+  bool cyber = false;     // --theme cyber
+  long long serial = -1;  // --serial N
+  std::string text;       // --text — подпись для сцены
+  int value = 0;          // --value — исход сцены
 };
+
+// Тема и внешность для всех движков, которые создаёт facegen.
+Args g_style;
+
+void style(FaceEngine& eng) {
+  if (g_style.cyber) eng.options().theme = Theme::Cyber;
+  if (g_style.serial >= 0) eng.set_quirks(make_identity((uint64_t)g_style.serial).quirks, 0);
+}
 
 Args parse(int argc, char** argv) {
   Args a;
@@ -68,6 +84,14 @@ Args parse(int argc, char** argv) {
       a.ids = next();
     else if (s == "--module")
       a.module = true;
+    else if (s == "--theme")
+      a.cyber = std::string(next()) == "cyber";
+    else if (s == "--serial")
+      a.serial = atoll(next());
+    else if (s == "--text")
+      a.text = next();
+    else if (s == "--value")
+      a.value = atoi(next());
     else
       a.pos.push_back(s);
   }
@@ -129,6 +153,7 @@ void settled_frame(Expr e, Framebuffer& out) {
   eng.options().drift = false;
   eng.options().idle_motion = false;
   eng.init(1, 0);
+  style(eng);
   eng.set_expression(e, 0, 0);
   // Немного времени, чтобы оверлеи успели появиться.
   for (uint32_t t = 0; t <= 600; t += 33) eng.update(t);
@@ -204,6 +229,7 @@ int record(const std::string& path, float seconds, int scale, bool raw, uint32_t
   FaceEngine eng;
   eng.options().drift = drift;
   eng.init(seed, 0);
+  style(eng);
   Screen s{scale, scale * 2};
   Canvas cv;
   if (module)
@@ -320,6 +346,7 @@ int cmd_sheet(const Args& a) {
   for (size_t i = 0; i < list.size(); ++i) {
     engines[i].options().drift = false;
     engines[i].init((uint32_t)(i * 7919 + 1), 0);
+    style(engines[i]);
     engines[i].set_expression(list[i], 0, 0);
   }
   const float sec = a.seconds > 0 ? a.seconds : 4.0f;
@@ -375,6 +402,36 @@ int cmd_bench(const Args& a) {
   return 0;
 }
 
+int cmd_scene(const Args& a) {
+  if (a.pos.size() < 2) return 2;
+  Scene sc;
+  if (!scene_from_id(a.pos[0].c_str(), &sc)) {
+    fprintf(stderr, "Нет такой сцены: %s\n", a.pos[0].c_str());
+    return 1;
+  }
+  SceneParams p;
+  p.set_text(a.text.c_str());
+  p.value = a.value;
+  const float sec = a.seconds > 0 ? a.seconds : scene_duration_ms(sc) / 1000.0f + 1.0f;
+  return record(a.pos[1], sec, a.scale > 0 ? a.scale : 4, a.raw, (uint32_t)a.seed, false,
+                [&](FaceEngine& eng, uint32_t t) {
+                  if (t == 0) eng.play_scene(sc, 0, p);
+                });
+}
+
+int cmd_id(const Args& a) {
+  if (a.pos.empty()) return 2;
+  const Identity id = make_identity((uint64_t)atoll(a.pos[0].c_str()));
+  const Personality& p = id.personality;
+  const Quirks& q = id.quirks;
+  printf("%s: %s, %s\n", id.code, archetype_name(id.archetype), rarity_name(id.rarity));
+  printf("  игривость %.2f, ворчливость %.2f, сонливость %.2f, застенчивость %.2f\n", p.playful, p.grumpy, p.sleepy,
+         p.shy);
+  printf("  глаза %+.0f px и ×%.2f, зрачки ×%.2f, моргает ×%.2f, брови %+.0f px%s\n", q.spacing, q.eye_scale,
+         q.pupil_scale, q.blink_rate, q.brow_lift, q.cyber_eye ? ", золотой кибер-глаз" : "");
+  return 0;
+}
+
 void usage() {
   printf(
       "facegen list\n"
@@ -385,7 +442,10 @@ void usage() {
       "facegen clip <emotion> <clip> out.gif [--scale 4]\n"
       "facegen demo out.gif [--scale 3] [--per 2.5] [--cat N] [--ids a,b] [--module]\n"
       "facegen bench [--seconds 60]\n"
-      "facegen catalog [docs/emotions.md]\n");
+      "facegen catalog [docs/emotions.md]\n"
+      "facegen scene <scene> out.gif [--text X] [--value 1] [--scale 4]\n"
+      "facegen id <serial>\n"
+      "общие ключи: --theme cyber, --serial N\n");
 }
 
 }  // namespace
@@ -397,6 +457,7 @@ int main(int argc, char** argv) {
   }
   std::string cmd = argv[1];
   Args a = parse(argc, argv);
+  g_style = a;
   int rc = 2;
   if (cmd == "list")
     rc = cmd_list();
@@ -416,6 +477,10 @@ int main(int argc, char** argv) {
     rc = cmd_bench(a);
   else if (cmd == "catalog")
     rc = cmd_catalog(a);
+  else if (cmd == "scene")
+    rc = cmd_scene(a);
+  else if (cmd == "id")
+    rc = cmd_id(a);
   if (rc == 2) usage();
   return rc;
 }

@@ -15,6 +15,7 @@ int pins[64] = {};
 
 HostSerial Serial;
 TwoWire Wire;
+EspClass ESP;
 
 // ---------------------------------------------------------------- эмулятор контроллера
 
@@ -268,6 +269,61 @@ int main(int argc, char** argv) {
   CHECK(start_oled() && oled.address() == 0x3D, "адрес 0x3D");
   CHECK(said("Экран SSD1306 на 0x3D"), "сообщение об адресе 0x3D");
   run_ms(3000);
+
+  // Характер, рост и сцены.
+  Wire.emu.addr = 0x3C;
+  CHECK(start_oled(), "экран снова на 0x3C");
+  type("a");
+  type("me");
+  CHECK(said(me.code) && said("Рост: день 1"), "кто я: позывной и первый день");
+  CHECK(progress.days == 1 && progress.unlocked_count() < kExprCount, "новый брелок открыл только базу");
+  type("theme cyber");
+  CHECK(eng.options().theme == Theme::Cyber && Preferences::store().count("keychain/theme"), "тема сохраняется");
+  run_ms(2000);
+  type("x hack");
+  CHECK(eng.scene() == Scene::hack, "сцена по команде");
+  run_ms(6000);
+  CHECK(eng.scene() == Scene::None && said("Сцена: Взлом"), "сцена доиграла и попала в Serial");
+  const int before_xp = progress.unlocked_count();
+  type("xp 200");
+  CHECK(progress.implant >= 1 && progress.unlocked_count() > before_xp, "опыт ставит имплант: %d", progress.implant);
+  run_ms(300);
+  CHECK(eng.scene() == Scene::upgrade, "апгрейд показан сценой");
+  run_ms(9000);
+  type("meet");
+  run_ms(300);
+  CHECK(eng.scene() == Scene::greet && progress.friends == 1, "встреча с новым брелоком");
+  run_ms(8000);
+  type("duel win");
+  run_ms(9000);
+  CHECK(progress.duels_won == 1, "дуэль засчитана");
+  type("date 2026-10-31");
+  run_ms(1000);
+  CHECK(eng.scene() == Scene::halloween, "Хэллоуин по дате");
+  run_ms(8000);
+  type("bday 05-14");
+  CHECK(Preferences::store().count("keychain/bday_m"), "день рождения сохраняется");
+  type("tilt 1 0");
+  run_ms(800);
+  CHECK(eng.face().gx > 0.5f, "наклон двигает взгляд: %.2f (сцена %s, эмоция %s)", eng.face().gx, scene_id(eng.scene()),
+        expression(eng.expression()).id);
+  type("tilt 0 0");
+  type("serial 9");
+  CHECK(me.quirks.cyber_eye && said("золотой кибер-глаз"), "чужой серийник — другой персонаж");
+  type("serial");
+  CHECK(!strcmp(me.code, make_identity(ESP.getEfuseMac()).code), "свой персонаж вернулся");
+  run_ms(3000);
+
+  // Перезагрузка: прогресс, тема и день рождения из флеша.
+  const uint32_t xp = progress.xp;
+  const int unlocked = progress.unlocked_count();
+  setup();
+  CHECK(progress.xp == xp && progress.unlocked_count() == unlocked, "прогресс пережил перезагрузку: %u", progress.xp);
+  CHECK(eng.options().theme == Theme::Cyber && bday_m == 5 && bday_d == 14, "настройки пережили перезагрузку");
+  CHECK(eng.scene() == Scene::boot, "при старте — загрузка NEURAL LINK");
+  run_ms(5000);
+  type("reset yes");
+  CHECK(progress.xp == 0 && progress.implant == 0, "рост начат заново");
 
   CHECK(g_mismatch == 0, "экран расходится с кадром %u раз", g_mismatch);
   CHECK(Wire.emu.overflows == 0, "переполнение буфера Wire: %u", Wire.emu.overflows);

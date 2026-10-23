@@ -214,6 +214,7 @@
         <button role="tab" data-tab="events" aria-selected="true">Ситуации</button>
         <button role="tab" data-tab="emotions" aria-selected="false">Эмоции <span id="exprCount"></span></button>
         <button role="tab" data-tab="clips" aria-selected="false">Жесты</button>
+        <button role="tab" data-tab="persona" aria-selected="false">Характер и сцены</button>
         <button role="tab" data-tab="settings" aria-selected="false">Настройки</button>
       </div>
 
@@ -226,6 +227,18 @@
         <div id="paneEmotions"></div>
       </div>
       <div data-pane="clips" hidden><div class="chips" id="paneClips"></div></div>
+      <div data-pane="persona" hidden>
+        <div class="row" style="margin-bottom:12px">
+          <div class="seg" role="group" aria-label="Тема">
+            <button id="themeClassic" aria-pressed="true">Классика</button>
+            <button id="themeCyber" aria-pressed="false">Киберпанк</button>
+          </div>
+          <button class="chip event" id="newSerial">Другой брелок</button>
+          <span class="count" id="idText"></span>
+        </div>
+        <label class="clock" style="margin-bottom:12px">Наклон <input id="tilt" type="range" min="-100" max="100" step="5" value="0"><output id="tiltOut">0</output></label>
+        <div class="chips" id="paneScenes"></div>
+      </div>
       <div data-pane="settings" hidden>
         <div class="checks">
           <label><input type="checkbox" id="optDrift" checked><span>Дрейф против выгорания<small>Лицо сдвигается на 1 px раз в 20–40 секунд, чтобы пиксели не выгорали.</small></span></label>
@@ -420,6 +433,28 @@
     const b = document.createElement("button"); b.className = "chip event"; b.textContent = clipNames[id] || id;
     b.onclick = () => { E.fe_play_clip(i, now()); due = 0; };
     paneClips.append(b);
+  }
+
+  // ---- Характер и сцены ----
+  const btnClassic = document.getElementById("themeClassic"), btnCyber = document.getElementById("themeCyber");
+  const setTheme = c => { E.fe_set_theme(c ? 1 : 0); btnClassic.setAttribute("aria-pressed", !c); btnCyber.setAttribute("aria-pressed", c); store.set("cyber", c); due = 0; };
+  btnClassic.onclick = () => setTheme(false); btnCyber.onclick = () => setTheme(true);
+  setTheme(store.get("cyber", false));
+  const idText = document.getElementById("idText");
+  const applySerial = s => {
+    E.fe_identity(s >>> 0, 0, now());
+    idText.textContent = `${str(E.fe_id_code())} · ${str(E.fe_id_arch())} · ${str(E.fe_id_rarity())}` + (E.fe_id_cyber() ? " · золотой кибер-глаз" : "");
+    store.set("serial", s); due = 0;
+  };
+  document.getElementById("newSerial").onclick = () => applySerial(Math.floor(Math.random() * 4294967295));
+  applySerial(store.get("serial", 9));
+  const tilt = document.getElementById("tilt"), tiltOut = document.getElementById("tiltOut");
+  tilt.oninput = () => { E.fe_set_tilt(tilt.value / 100, 0); tiltOut.textContent = tilt.value; due = 0; };
+  const paneScenes = document.getElementById("paneScenes");
+  for (let i = 0; i < E.fe_scene_count(); i++) {
+    const b = document.createElement("button"); b.className = "chip event"; b.textContent = str(E.fe_scene_name(i));
+    b.onclick = () => { E.fe_play_scene(i, now()); due = 0; };
+    paneScenes.append(b);
   }
 
   // ---- Настройки ----

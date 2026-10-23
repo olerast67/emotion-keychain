@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "face/engine.h"
+#include "face/progress.h"
 
 namespace face {
 
@@ -42,7 +43,11 @@ namespace face {
   X(battery_low)           \
   X(battery_critical)      \
   X(button)                \
-  X(button_long)
+  X(button_long)           \
+  X(friend_new)            \
+  X(friend_known)          \
+  X(duel_win)              \
+  X(duel_lose)
 
 enum class Event : uint8_t {
 #define FACE_X(n) n,
@@ -85,6 +90,30 @@ class Behavior {
   // Ручной выбор эмоции из симулятора: поведение не мешает hold_ms.
   void hold_manual(uint32_t now_ms, uint32_t ms) { manual_until_ = now_ms + ms; }
 
+  // Рост: без прогресса открыто всё (симулятор, тесты). С прогрессом персонаж
+  // показывает только открытые эмоции, а касания, шаги и встречи дают опыт.
+  void attach_progress(Progress* p);
+  Progress* progress() const { return progress_; }
+  // Закрытая эмоция подменяется ближайшей открытой (furious → angry и т. п.).
+  Expr allowed(Expr e) const;
+  void new_day(uint32_t now_ms);
+  void add_xp(uint32_t xp, uint32_t now_ms);
+  void add_steps(uint32_t steps, uint32_t now_ms);
+
+  // Другой брелок рядом (BLE): приветствие и опыт. code — его позывной.
+  void meet(const char* code, bool is_new, uint32_t now_ms);
+  // Хакерская дуэль с другим брелоком: победа открывает эмоцию досрочно.
+  void duel(const char* code, bool won, uint32_t now_ms);
+
+  // Календарь для праздников: Новый год, Хэллоуин, день рождения хозяина.
+  void set_date(uint16_t year, uint8_t month, uint8_t day);
+  void set_birthday(uint8_t month, uint8_t day) { bday_m_ = month, bday_d_ = day; }
+  // Сюрпризы — взлом, прятки, перезагрузка, ERROR 404: раз в min…max мс бодрствования.
+  void set_surprise_interval(uint32_t min_ms, uint32_t max_ms, uint32_t now_ms);
+  void surprise(uint32_t now_ms);
+  // Сцена с последующей эмоцией: очередь на несколько штук (встреча → апгрейд).
+  void queue_scene(Scene s, const SceneParams& p, Expr after, uint32_t now_ms, const char* why);
+
   const Mood& mood() const { return mood_; }
   Personality& personality() { return pers_; }
   Expr base_expression() const { return base_; }
@@ -110,6 +139,14 @@ class Behavior {
   void decay(uint32_t now);
   Expr choose_base(uint32_t now);
   void idle_action(uint32_t now);
+  void grant(int installed, uint32_t now);
+  bool run_queue(uint32_t now);
+  // Первая открытая из вариантов; если закрыты все — ближайшая замена первой.
+  Expr pick_unlocked(const Expr* opts, int n);
+  template <int N>
+  Expr pick_unlocked(const Expr (&opts)[N]) {
+    return pick_unlocked(opts, N);
+  }
   bool night() const { return clock_min_ >= 23 * 60 || clock_min_ < 6 * 60; }
 
   FaceEngine* eng_ = nullptr;
@@ -140,6 +177,23 @@ class Behavior {
   uint8_t recent_idle_[4] = {255, 255, 255, 255};
   const char* reason_ = "";
   uint32_t next_ = 0;
+
+  Progress* progress_ = nullptr;
+  struct Queued {
+    Scene scene;
+    SceneParams params;
+    Expr after;
+    const char* why;
+  };
+  Queued queue_[4];
+  int queue_n_ = 0;
+  Expr after_scene_ = Expr::Count;
+  const char* after_why_ = "";
+  uint32_t surprise_min_ = 24u * 3600000u, surprise_max_ = 60u * 3600000u;
+  uint32_t next_surprise_ = 0;
+  uint16_t year_ = 0;
+  uint8_t month_ = 0, day_ = 0, bday_m_ = 0, bday_d_ = 0;
+  uint32_t holiday_done_ = 0;  // ключ даты, для которой праздник уже показан
 };
 
 }  // namespace face
