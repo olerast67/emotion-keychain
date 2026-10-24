@@ -34,6 +34,7 @@ void on_report(ble_gap_evt_adv_report_t* r) {
     if (next != q_tail) {  // полна — пакет теряется, придёт следующий
       queue[q_head].a = a;
       queue[q_head].rssi = r->rssi;
+      __DMB();  // пакет записан раньше, чем его увидит основной цикл
       q_head = next;
     }
   }
@@ -73,6 +74,9 @@ void begin() {
   Bluefruit.begin(1, 1);
   Bluefruit.setTxPower(0);
   Bluefruit.setName("Keychain");
+  // Без «быстрого» режима: иначе через 30 с задача BLE сама перезапускала бы рекламу
+  // одновременно с основным циклом.
+  Bluefruit.Advertising.setFastTimeout(0);
   Bluefruit.Scanner.setRxCallback(on_report);
   Bluefruit.Scanner.restartOnDisconnect(false);
   Bluefruit.Scanner.useActiveScan(false);
@@ -124,6 +128,7 @@ void update(uint32_t now) {
 
 bool take(face::Advert* a, int* rssi) {
   if (q_tail == q_head) return false;
+  __DMB();
   *a = queue[q_tail].a;
   *rssi = queue[q_tail].rssi;
   q_tail = (uint8_t)((q_tail + 1) % kQueue);

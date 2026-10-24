@@ -240,7 +240,7 @@ pio device monitor                # 115200, выход — Ctrl+C
 
 ## Первая прошивка: загрузчик по SWD
 
-Новый модуль пустой, поэтому один раз нужен программатор. Он записывает загрузчик Adafruit вместе с SoftDevice S140 — готовый файл [`bootloader/emotion_keychain_revb_bootloader-0.11.0_s140_6.1.1.hex`](bootloader). Дальше всё обновляется по USB.
+Новый модуль пустой, поэтому один раз нужен программатор. Он записывает загрузчик Adafruit вместе с SoftDevice S140 — готовый файл [`bootloader/emotion_keychain_revb_bootloader-0.11.0-keychain_s140_6.1.1.hex`](bootloader). Дальше всё обновляется по USB.
 
 **Что нужно:**
 - программатор SWD — любой из:
@@ -256,12 +256,12 @@ pio device monitor                # 115200, выход — Ctrl+C
 ```sh
 # J-Link: nrfjprog из nRF Command Line Tools
 nrfjprog -f nrf52 --recover
-nrfjprog -f nrf52 --program bootloader/emotion_keychain_revb_bootloader-0.11.0_s140_6.1.1.hex --verify --reset
+nrfjprog -f nrf52 --program bootloader/emotion_keychain_revb_bootloader-0.11.0-keychain_s140_6.1.1.hex --verify --reset
 
 # Pico debugprobe или другой CMSIS-DAP: pyOCD
 pip install pyocd
 pyocd erase -t nrf52840 --chip
-pyocd flash -t nrf52840 bootloader/emotion_keychain_revb_bootloader-0.11.0_s140_6.1.1.hex
+pyocd flash -t nrf52840 bootloader/emotion_keychain_revb_bootloader-0.11.0-keychain_s140_6.1.1.hex
 ```
 
 `--recover` и стирание всей памяти снимают защиту отладки: на новых ревизиях nRF52840 она включена с завода.

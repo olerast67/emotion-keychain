@@ -8,8 +8,13 @@
 #define LED_PRIMARY_PIN PINNUM(0, 31)
 #define LED_STATE_ON    1
 
-// Кнопка на правом торце (на землю): зажата при включении — загрузчик ждёт прошивку по USB.
+// Кнопка на правом торце (на землю): зажата при подключённом USB — загрузчик ждёт прошивку.
+// Та же кнопка будит брелок из сна, поэтому без USB она загрузчик не включает, а если
+// компьютер не ответил за 10 с (зарядка от розетки) — запускается прошивка. Нужен патч
+// button-dfu-needs-usb.patch (README).
 #define BUTTON_DFU     PINNUM(0, 22)
+#define BUTTON_DFU_NEEDS_USB
+#define BUTTON_DFU_TIMEOUT_MS 10000
 // Обновление по Bluetooth — свободная ножка с подтяжкой, то есть никогда.
 #define BUTTON_DFU_OTA PINNUM(0, 30)
 #define BUTTON_PULL    NRF_GPIO_PIN_PULLUP

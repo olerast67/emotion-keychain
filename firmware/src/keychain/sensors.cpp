@@ -90,10 +90,18 @@ bool Ltr303::write(uint8_t reg, uint8_t v) {
 bool Ltr303::begin(TwoWire& wire, uint8_t addr) {
   w_ = &wire;
   addr_ = addr;
-  w_->beginTransmission(addr_);
-  w_->write(kPartId);
-  if (w_->endTransmission(false) != 0 || w_->requestFrom(addr_, (uint8_t)1) != 1) return ok_ = false;
-  const uint8_t id = (uint8_t)w_->read();
+  // После подачи питания датчик отвечает через 100 мс: при холодном старте ждём и пробуем ещё.
+  while (millis() < 120) delay(5);
+  int id = -1;
+  for (int attempt = 0; attempt < 5 && id < 0; ++attempt) {
+    w_->beginTransmission(addr_);
+    w_->write(kPartId);
+    if (w_->endTransmission(false) == 0 && w_->requestFrom(addr_, (uint8_t)1) == 1)
+      id = w_->read();
+    else
+      delay(20);
+  }
+  if (id < 0) return ok_ = false;
   ok_ = (id >> 4) == 0x0A;
   // Активный режим, усиление 1×; замер 100 мс раз в 500 мс.
   if (ok_) ok_ = write(kAlsContr, 0x01) && write(kAlsMeasRate, 0x03);

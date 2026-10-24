@@ -89,6 +89,8 @@ uint16_t last_clock = 0;
 
 uint32_t next_acc = 0, next_light = 0, next_temp = 0, next_batt = 0, next_steps = 0;
 bool powering_off = false;
+bool tap_wait = false;  // одиночное касание ждёт, не окажется ли оно двойным
+uint32_t tap_wait_at = 0;
 bool off_scene_seen = false;  // сцена «спокойной ночи» уже пошла
 uint32_t off_at = 0;
 uint32_t charge_t0 = 0;
@@ -108,8 +110,15 @@ uint64_t uptime_ms(uint32_t now) {
 
 unsigned clock_minutes() { return (unsigned)((cfg.clock_min + (uptime - clock_base_up) / 60000u) % 1440u); }
 
+void screen_power(bool on, uint32_t now);
+
 void event(Event e, uint32_t now) {
   if (verbose) Serial.printf("Событие: %s\n", event_id(e));
+  // Касание или кнопка в темноте показывают лицо ещё на две минуты.
+  if (e == Event::tap || e == Event::double_tap || e == Event::button) {
+    if (dark_since) dark_since = now | 1u;
+    if (!screen_on) screen_power(true, now);
+  }
   bh.on_event(e, now);
 }
 
@@ -169,13 +178,13 @@ bool start_oled() {
     have_oled = oled.contrast(shown_contrast) && oled.send_full(eng.frame());
   }
   oled_full = false;
-  screen_on = have_oled;
-  return have_oled;
+  return have_oled;  // не ответил — повторы раз в 2 с в начале loop
 }
 
 void screen_power(bool on, uint32_t now) {
   if (on == screen_on) return;
   if (on) {
+    screen_on = true;
     if (!start_oled()) oled_retry_at = now + 2000;
   } else {
     if (have_oled) oled.power(false);
@@ -289,10 +298,20 @@ void poll_motion(uint32_t now) {
   if (motion.take_jerk(&jx, &jy)) eng.jerk(jx, jy, now);
   if (digitalRead(board::kAccInt1) == HIGH) {
     const int c = acc.take_click();
-    if (c) {
+    // Двойное касание датчик сначала отмечает как одиночное: одиночное ждёт окно 0.5 с.
+    if (c == 2) {
+      tap_wait = false;
       eng.note_activity(now);
-      event(c == 2 ? Event::double_tap : Event::tap, now);
+      event(Event::double_tap, now);
+    } else if (c == 1 && !tap_wait) {
+      tap_wait = true;
+      tap_wait_at = now;
     }
+  }
+  if (tap_wait && now - tap_wait_at >= 500) {
+    tap_wait = false;
+    eng.note_activity(now);
+    event(Event::tap, now);
   }
   if (time_reached(now, next_steps)) {
     next_steps = now + 10000;

@@ -15,7 +15,9 @@ namespace hal {
 void power_init() {
   // REG0 модуля по умолчанию даёт 1.8 В: при нём экран и датчики не работают. Значение
   // хранится в UICR и пишется один раз; новое значение действует после перезагрузки.
-  if ((NRF_UICR->REGOUT0 & UICR_REGOUT0_VOUT_Msk) != (UICR_REGOUT0_VOUT_3V3 << UICR_REGOUT0_VOUT_Pos)) {
+  // Пишется только поверх заводского значения: бит во флеше без стирания можно лишь сбросить,
+  // и записать 3.3 В поверх другого напряжения нельзя — иначе плата перезагружалась бы без конца.
+  if ((NRF_UICR->REGOUT0 & UICR_REGOUT0_VOUT_Msk) == (UICR_REGOUT0_VOUT_DEFAULT << UICR_REGOUT0_VOUT_Pos)) {
     NRF_NVMC->CONFIG = NVMC_CONFIG_WEN_Wen << NVMC_CONFIG_WEN_Pos;
     while (!NRF_NVMC->READY) {
     }
@@ -30,7 +32,11 @@ void power_init() {
   // DC/DC для ядра (REG1): катушка стоит внутри модуля. REG0 работает линейно — вывод
   // DCCH на плате свободен, его DC/DC не включаем.
   NRF_POWER->DCDCEN = 1;
-  pinMode(board::kChgIo, INPUT_PULLUP);
+  // Без подтяжки: статус приходит через 10 кОм, и встроенная подтяжка (~13 кОм) не дала бы
+  // опуститься ниже порога. Высокий уровень даёт светодиод заряда от VBUS, низкий — STAT.
+  pinMode(board::kChgIo, INPUT);
+  // У делителя VDDH/5 большое сопротивление: замеру нужно время выборки побольше.
+  analogSampleTime(40);
 }
 
 float vsys_volts() {
@@ -57,7 +63,7 @@ bool charging() { return usb_present() && digitalRead(board::kChgIo) == LOW; }
 float temperature_c() { return readCPUTemperature(); }
 
 void watchdog_start() {
-  NRF_WDT->CONFIG = 0;  // во сне и при отладке — пауза
+  NRF_WDT->CONFIG = WDT_CONFIG_SLEEP_Run << WDT_CONFIG_SLEEP_Pos;  // считает и во сне; при отладке — пауза
   NRF_WDT->CRV = 8u * 32768u;
   NRF_WDT->RREN = WDT_RREN_RR0_Msk;
   NRF_WDT->TASKS_START = 1;
@@ -66,6 +72,11 @@ void watchdog_start() {
 void watchdog_feed() { NRF_WDT->RR[0] = WDT_RR_RR_Reload; }
 
 void system_off() {
+  // Кнопку ещё держат: ждём, пока отпустят, иначе она сразу разбудит плату.
+  while (digitalRead(board::kButton) == LOW) {
+    watchdog_feed();
+    delay(10);
+  }
   buzzer(0, false);
   digitalWrite(board::kVibEn, LOW);
   Wire1.end();
@@ -73,6 +84,7 @@ void system_off() {
   pinMode(PIN_WIRE1_SCL, INPUT);
   digitalWrite(board::kDispEn, LOW);
   mic_end();
+  nrf_gpio_cfg_default(board::kChgIo);  // во сне — без подтяжки и без утечки в зарядник
   delay(20);
   // Кнопка будит из полного сна; подключение USB — тоже (событие VBUS у nRF52840).
   systemOff(board::kButton, LOW);
@@ -125,8 +137,8 @@ void buzzer(uint16_t hz, bool soft) {
     seq[0] = (uint16_t)(NRF_PWM3->COUNTERTOP / 8);  // узкий импульс на одном выводе
     seq[1] = 0;                                     // второй вывод в нуле
   } else {
-    seq[0] = half;           // A: высокий первую половину периода
-    seq[1] = half | 0x8000;  // B: в противофазе
+    seq[0] = half;           // A: бит 15 = 0 — сначала высокий, спад на половине периода
+    seq[1] = half | 0x8000;  // B: бит 15 = 1 — сначала низкий: противофаза
   }
   seq[2] = seq[3] = 0;
   NRF_PWM3->ENABLE = 1;
@@ -213,6 +225,8 @@ void mic_end() {
   mic_running = false;
   digitalWrite(PIN_PDM_PWR, LOW);  // PDM.end оставляет вывод питания висеть входом
   pinMode(PIN_PDM_PWR, OUTPUT);
+  nrf_gpio_cfg_default(PIN_PDM_CLK);  // ножки обесточенного микрофона — отключены
+  nrf_gpio_cfg_default(PIN_PDM_DIN);
 }
 
 bool mic_on() { return mic_running; }

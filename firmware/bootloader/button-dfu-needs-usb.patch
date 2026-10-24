@@ -1,0 +1,35 @@
+diff --git a/src/main.c b/src/main.c
+index c988ee4..8403366 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -271,7 +271,17 @@ static void check_dfu_mode(void) {
+   /*------------- Determine DFU mode (Serial, OTA, FRESET or normal) -------------*/
+   // DFU button pressed
+ #if defined(BUTTON_DFU)
+-  dfu_start = dfu_start || button_pressed(BUTTON_DFU);
++#if defined(BUTTON_DFU_NEEDS_USB)
++  // The DFU button doubles as the wake-up button: honour it only with USB power present,
++  // so waking from System OFF on battery always starts the app.
++  bool const button_dfu = button_pressed(BUTTON_DFU) &&
++                          (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk);
++#else
++  bool const button_dfu = button_pressed(BUTTON_DFU);
++#endif
++  dfu_start = dfu_start || button_dfu;
++#else
++  bool const button_dfu = false;
+ #endif
+ 
+   // DFU + FRESET are pressed --> OTA
+@@ -337,6 +347,11 @@ static void check_dfu_mode(void) {
+     if (APP_ASKS_FOR_SINGLE_TAP_RESET() || uf2_dfu || serial_only_dfu) {
+       // If USB is not enumerated in 3s (eg. because we're running on battery), we restart into app.
+       bootloader_dfu_start(_ota_dfu, 3000, true);
++#if defined(BUTTON_DFU_TIMEOUT_MS)
++    } else if (button_dfu && valid_app) {
++      // Button held on a charger without a host: give up and start the app.
++      bootloader_dfu_start(_ota_dfu, BUTTON_DFU_TIMEOUT_MS, true);
++#endif
+     } else {
+       // No timeout if bootloader requires user action (double-reset).
+       bootloader_dfu_start(_ota_dfu, 0, false);
