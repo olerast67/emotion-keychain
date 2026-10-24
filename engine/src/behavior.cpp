@@ -1323,8 +1323,8 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_h
     if (level >= 3) earn(Ach::best_friend, now);
   }
   // Старший брелок (имплант на два выше) раз в день дарит эмоцию из следующего импланта.
-  if (progress_ && first_today && peer_level >= progress_->implant + 2) {
-    const Expr gift = progress_->steal_one(rng_);
+  if (progress_ && first_today && peer_level < implant_count() && peer_level >= progress_->implant + 2) {
+    const Expr gift = progress_->gift(rng_);
     if (gift != Expr::Count) {
       SceneParams g;
       g.set_text("GIFT");
@@ -1335,7 +1335,7 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_h
   }
   if (other && other == temp_) earn(Ach::twin, now);
   if (peer_hash && identity_from_hash(peer_hash).rarity == Rarity::Legendary) earn(Ach::legend, now);
-  if (progress_) grant(progress_->met_friend(is_new), now);
+  if (progress_ && (is_new || first_today)) grant(progress_->met_friend(is_new), now);  // старый знакомый — раз в день
   achieve(now);
 }
 
@@ -1350,7 +1350,7 @@ void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash
   const char* why = won ? "выиграл дуэль" : "проиграл дуэль";
   bool fresh = false;
   if (won && progress_) {
-    const Expr stolen = progress_->steal_one(rng_);
+    const Expr stolen = progress_->duel_prize(rng_);
     if (stolen != Expr::Count) {
       after = stolen;
       fresh = true;
@@ -1363,6 +1363,14 @@ void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash
   // Сразу за дуэлью — разговор шифром: у соседа очередь та же, и он начнётся одновременно.
   if (peer_hash) chat(code, peer_hash, nonce, now);
   if (progress_) grant(progress_->duel(won), now);
+  // Дуэль — тоже встреча: день дружбы засчитывается, новый соперник становится знакомым
+  // (без своей сцены приветствия — её место заняли дуэль и разговор).
+  if (friends_ && peer_hash) {
+    int before = -1;
+    bool first_today = false;
+    friends_->meet(peer_hash, progress_ ? progress_->days : 0, &before, &first_today);
+    if (progress_ && before < 0) grant(progress_->met_friend(true), now);
+  }
   achieve(now);
 }
 

@@ -65,17 +65,21 @@ int Friends::meet(uint32_t hash, uint16_t day, int* before, bool* first_today) {
     return level_of(r->days);
   }
   if (first_today) *first_today = true;
-  // Новый знакомый: пустое место или тот, с кем дружба слабее всего.
-  FriendRecord* slot = &f[0];
+  // Новый знакомый: пустое место или тот, с кем дружба слабее всего. Не вытесняются те,
+  // кого видели сегодня, и крепкие друзья (два дня и больше), пока не пропали на месяц:
+  // поток выдуманных брелоков иначе стёр бы настоящих друзей.
+  FriendRecord* slot = nullptr;
   for (FriendRecord& x : f) {
     if (!x.hash) {
       slot = &x;
       break;
     }
-    if (x.days < slot->days || (x.days == slot->days && (uint16_t)(day - x.last_day) > (uint16_t)(day - slot->last_day)))
+    const uint16_t away = (uint16_t)(day - x.last_day);
+    if (x.last_day == day || (x.days >= 2 && away <= kForgetDays)) continue;
+    if (!slot || x.days < slot->days || (x.days == slot->days && away > (uint16_t)(day - slot->last_day)))
       slot = &x;
   }
-  *slot = FriendRecord{hash, 1, day};
+  if (slot) *slot = FriendRecord{hash, 1, day};
   return 0;
 }
 

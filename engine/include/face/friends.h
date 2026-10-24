@@ -25,6 +25,7 @@ struct Friends {
   static constexpr uint32_t kMagic = 0x4B434652u;  // «KCFR»
   static constexpr uint16_t kVersion = 1;
   static constexpr int kSlots = 16;
+  static constexpr uint16_t kForgetDays = 30;  // крепкого друга можно вытеснить, если не виделись месяц
 
   uint32_t magic = kMagic;
   uint16_t version = kVersion;
@@ -36,7 +37,8 @@ struct Friends {
   // Встреча с брелоком hash в день day. Возвращает уровень после встречи; в *before —
   // уровень до неё или −1, если это новый знакомый; в *first_today — первая ли это встреча
   // с ним за день. Когда места нет, новый вытесняет того, с кем виделись меньше всего
-  // дней (при равенстве — давнее всех).
+  // дней (при равенстве — давнее всех), но не сегодняшних знакомых и не крепких друзей,
+  // которых видели за последний месяц; вытеснять некого — новый не записывается.
   int meet(uint32_t hash, uint16_t day, int* before = nullptr, bool* first_today = nullptr);
   // Уровень дружбы; −1 — не знакомы.
   int level(uint32_t hash) const;

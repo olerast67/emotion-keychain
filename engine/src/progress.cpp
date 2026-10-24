@@ -360,6 +360,7 @@ int Progress::new_day(const XpRules& r) {
   }
   touched_today = fed_today = 0;
   today_touch_xp = today_step_xp = 0;
+  today_new_friends = today_gifts = today_duel_prizes = today_duels = today_known_friends = 0;
   return add_xp(r.day);
 }
 
@@ -384,11 +385,21 @@ int Progress::add_steps(uint32_t n, const XpRules& r) {
 }
 
 int Progress::met_friend(bool is_new, const XpRules& r) {
-  if (is_new) ++friends;
+  if (is_new) {
+    if (today_new_friends >= r.new_friends_day_cap) return -1;
+    ++today_new_friends;
+    ++friends;
+  } else {
+    if (today_known_friends >= r.known_friends_day_cap) return -1;
+    ++today_known_friends;
+  }
   return add_xp(is_new ? r.friend_new : r.friend_known);
 }
 
 int Progress::duel(bool won, const XpRules& r) {
+  // Сверх дневного лимита дуэль не идёт ни в опыт, ни в счётчики: на них — достижения.
+  if (today_duels >= r.duels_xp_day_cap) return -1;
+  ++today_duels;
   if (won)
     ++duels_won;
   else
@@ -452,6 +463,20 @@ Expr Progress::steal_one(Rng& rng) {
     return unlock(e) ? e : Expr::Count;  // список дополнительных полон — открывать некуда
   }
   return Expr::Count;
+}
+
+Expr Progress::duel_prize(Rng& rng, const XpRules& r) {
+  if (today_duel_prizes >= r.duel_prizes_day_cap) return Expr::Count;
+  const Expr e = steal_one(rng);
+  if (e != Expr::Count) ++today_duel_prizes;
+  return e;
+}
+
+Expr Progress::gift(Rng& rng, const XpRules& r) {
+  if (today_gifts >= r.gifts_day_cap) return Expr::Count;
+  const Expr e = steal_one(rng);
+  if (e != Expr::Count) ++today_gifts;
+  return e;
 }
 
 uint32_t Progress::xp_to_next() const {

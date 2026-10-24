@@ -33,6 +33,34 @@ target_compile_options(firmware_tests PRIVATE -Wall -Wextra)
 target_compile_definitions(firmware_tests PRIVATE PIN_BUZZER=5)
 target_link_libraries(firmware_tests PRIVATE face_engine)
 add_test(NAME firmware_tests COMMAND firmware_tests)
+add_executable(storage_tests firmware/host/storage_test.cpp firmware/src/keychain/storage.cpp)
+target_include_directories(storage_tests PRIVATE firmware/host firmware/src/keychain)
+target_compile_options(storage_tests PRIVATE -Wall -Wextra)
+target_compile_definitions(storage_tests PRIVATE STORAGE_HOST_TEST)
+add_test(NAME storage_tests COMMAND storage_tests)
+
+# Плата rev B целиком на ПК: настоящая прошивка firmware/src/keychain, модели микросхем,
+# эфир между брелоками, батарея и сценарии (firmware/host/keychain). Флеш журнала
+# отображается на тот же адрес 0xEA000, поэтому нужен Linux.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(KC_SAN -fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_library(face_engine_san STATIC ${FACE_ENGINE_SOURCES})
+  target_include_directories(face_engine_san PUBLIC engine/include)
+  target_compile_options(face_engine_san PRIVATE ${KC_SAN} -g -O1)
+  add_executable(keychain_board
+    firmware/host/keychain/board.cpp firmware/host/keychain/models.cpp
+    firmware/src/keychain/hal.cpp firmware/src/keychain/radio.cpp firmware/src/keychain/sensors.cpp
+    firmware/src/keychain/storage.cpp firmware/src/ssd1306.cpp)
+  target_include_directories(keychain_board PRIVATE firmware/host/keychain firmware/src firmware/src/keychain)
+  target_compile_options(keychain_board PRIVATE ${KC_SAN} -g -O1 -Wall)
+  # Адрес буфера PWM пишется в 32-битный регистр: на ПК указатель шире.
+  set_source_files_properties(firmware/src/keychain/hal.cpp PROPERTIES COMPILE_OPTIONS -fpermissive)
+  target_link_options(keychain_board PRIVATE ${KC_SAN})
+  target_link_libraries(keychain_board PRIVATE face_engine_san)
+  add_executable(keychain_sim firmware/host/keychain/keychain_sim.cpp)
+  target_link_libraries(keychain_sim PRIVATE face_sim_common)
+  add_test(NAME keychain_sim COMMAND keychain_sim $<TARGET_FILE:keychain_board> ${CMAKE_BINARY_DIR}/keychain_sim_out)
+endif()
 
 # Оконный симулятор, если найден SDL2.
 find_package(SDL2 QUIET)

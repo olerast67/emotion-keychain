@@ -37,6 +37,13 @@ struct XpRules {
   uint16_t duel_win = 25;
   uint16_t duel_lose = 10;
   uint16_t care = 15;  // зарядили, когда был голоден: раз в день
+  // Встречи приходят по радио, и выдумать их легче, чем касания: награды за них тоже
+  // ограничены за день.
+  uint8_t new_friends_day_cap = 5;  // новых знакомых с опытом и в счётчике друзей
+  uint8_t gifts_day_cap = 1;        // подарков эмоций от старших брелоков
+  uint8_t duel_prizes_day_cap = 2;  // эмоций, выигранных в дуэлях
+  uint8_t duels_xp_day_cap = 3;     // дуэлей с опытом и в счётчиках побед
+  uint8_t known_friends_day_cap = 10;  // старых знакомых с опытом за день
 };
 
 // Достижения. Номера битов в Progress::achievements — по порядку списка, поэтому
@@ -122,7 +129,13 @@ struct Progress {
   uint16_t falls = 0;   // пережитых падений
   uint8_t touched_today = 0;
   uint8_t fed_today = 0;
-  uint8_t reserved[10] = {};         // запас под будущие поля
+  // Сколько наград за встречи уже выдано сегодня (в старых записях здесь был запас нулями).
+  uint8_t today_new_friends = 0;
+  uint8_t today_gifts = 0;
+  uint8_t today_duel_prizes = 0;
+  uint8_t today_duels = 0;
+  uint8_t today_known_friends = 0;
+  uint8_t reserved[5] = {};          // запас под будущие поля
   uint32_t extra[kExtraSlots] = {};  // ключи дополнительно открытых эмоций, 0 — пусто
   uint32_t crc = 0;
 
@@ -159,6 +172,9 @@ struct Progress {
   // Награда за дуэль: открыть одну эмоцию из ближайшего ещё не установленного
   // импланта раньше срока. Возвращает её или Expr::Count, если открывать нечего.
   Expr steal_one(Rng& rng);
+  // Те же награды с дневным лимитом: выигрыш в дуэли и подарок старшего брелока.
+  Expr duel_prize(Rng& rng, const XpRules& r = {});
+  Expr gift(Rng& rng, const XpRules& r = {});
 
   // Сколько опыта до следующего импланта (0 — всё открыто).
   uint32_t xp_to_next() const;
