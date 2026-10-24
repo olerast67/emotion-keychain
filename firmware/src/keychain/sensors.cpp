@@ -56,13 +56,21 @@ int Lis3dh::read_fifo(float (*xyz)[3], int max) {
   int n = src & 0x1F;
   if (src & 0x40) n = 32;  // FIFO переполнен: все 32 выборки
   if (n > max) n = max;
-  for (int i = 0; i < n; ++i) {
-    uint8_t b[6];
-    if (!read(kOutX, b, 6)) return i;
-    for (int k = 0; k < 3; ++k) {
-      const int16_t raw = (int16_t)(b[2 * k] | b[2 * k + 1] << 8);
-      xyz[i][k] = (float)(raw >> 4) * 0.002f;  // 12 бит, ±4 g: 2 мг на единицу
-    }
+  // Пачками до 10 выборок за одну посылку (60 байт при буфере Wire 64): в режиме FIFO адрес
+  // после OUT_Z_H (0x2D) возвращается на OUT_X_L (AN3308), и каждые 6 байт — следующая
+  // выборка. Так вдесятеро меньше посылок и ожидания на шине.
+  constexpr int kBurst = 10;
+  int done = 0;
+  while (done < n) {
+    const int m = n - done < kBurst ? n - done : kBurst;
+    uint8_t b[6 * kBurst];
+    if (!read(kOutX, b, (size_t)(6 * m))) return done;
+    for (int j = 0; j < m; ++j)
+      for (int k = 0; k < 3; ++k) {
+        const int16_t raw = (int16_t)(b[6 * j + 2 * k] | b[6 * j + 2 * k + 1] << 8);
+        xyz[done + j][k] = (float)(raw >> 4) * 0.002f;  // 12 бит, ±4 g: 2 мг на единицу
+      }
+    done += m;
   }
   return n;
 }
@@ -103,8 +111,8 @@ bool Ltr303::begin(TwoWire& wire, uint8_t addr) {
   }
   if (id < 0) return ok_ = false;
   ok_ = (id >> 4) == 0x0A;
-  // Активный режим, усиление 1×; замер 100 мс раз в 500 мс.
-  if (ok_) ok_ = write(kAlsContr, 0x01) && write(kAlsMeasRate, 0x03);
+  // Замер 100 мс; между разовыми замерами (прошивка включает датчик на один) — сон.
+  if (ok_) ok_ = write(kAlsMeasRate, 0x03) && write(kAlsContr, 0x00);
   return ok_;
 }
 

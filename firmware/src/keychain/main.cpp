@@ -37,7 +37,7 @@ using namespace face;
 namespace {
 
 constexpr uint64_t kDayMs = 24ull * 3600000ull;
-constexpr uint32_t kDarkScreenOffMs = 120000;  // в кармане дольше двух минут — экран гаснет
+constexpr uint32_t kDarkScreenOffMs = 60000;  // в кармане дольше минуты — экран гаснет
 constexpr uint32_t kLongPressMs = 3000;
 
 // Настройки, которые переживают перезагрузку.
@@ -89,6 +89,8 @@ uint64_t day_t0 = 0;
 uint16_t last_clock = 0;
 
 uint32_t next_acc = 0, next_light = 0, next_temp = 0, next_batt = 0, next_steps = 0;
+bool als_measuring = false;  // датчик света включён ради одного замера
+uint32_t als_started = 0;
 bool powering_off = false;
 bool tap_wait = false;  // одиночное касание ждёт, не окажется ли оно двойным
 uint32_t tap_wait_at = 0;
@@ -117,7 +119,7 @@ void screen_power(bool on, uint32_t now);
 
 void event(Event e, uint32_t now) {
   if (verbose) Serial.printf("Событие: %s\n", event_id(e));
-  // Касание или кнопка в темноте показывают лицо ещё на две минуты.
+  // Касание или кнопка в темноте показывают лицо ещё на минуту.
   if (e == Event::tap || e == Event::double_tap || e == Event::button) {
     if (dark_timing) dark_since = now;
     if (!screen_on) screen_power(true, now);
@@ -229,8 +231,8 @@ void screen_power(bool on, uint32_t now) {
     if (have_oled) oled.power(false);
     // Шина экрана отпускается: иначе подтяжки ножек питали бы обесточенный модуль через SDA и SCL.
     Wire1.end();
-    pinMode(PIN_WIRE1_SDA, INPUT);
-    pinMode(PIN_WIRE1_SCL, INPUT);
+    nrf_gpio_cfg_default(PIN_WIRE1_SDA);
+    nrf_gpio_cfg_default(PIN_WIRE1_SCL);
     digitalWrite(board::kDispEn, LOW);  // модуль обесточен целиком
     screen_on = false;
   }
@@ -318,7 +320,8 @@ void tick_clock(uint32_t now) {
 
 void poll_motion(uint32_t now) {
   if (!time_reached(now, next_acc)) return;
-  next_acc = now + (bh.eco() ? 300 : 100);
+  // FIFO датчика — 32 выборки, 320 мс при 100 Гц: в экорежиме опрос с запасом.
+  next_acc = now + (bh.eco() ? 200 : 100);
   static float xyz[32][3];
   const int n = acc.read_fifo(xyz, 32);
   Event ev[kSenseEvents];
@@ -358,12 +361,27 @@ void poll_motion(uint32_t now) {
 
 void poll_environment(uint32_t now) {
   Event ev[kSenseEvents];
+  // Свет — разовыми замерами: датчик включается на ~130 мс (пробуждение и накопление
+  // 100 мс), остальное время спит. Постоянно включённый он брал бы ~0.2 мА.
   if (time_reached(now, next_light)) {
-    next_light = now + 1000;
-    const float lux = als.lux();
-    if (lux >= 0) {
-      const int n = light.feed(lux, now, ev);
-      for (int i = 0; i < n; ++i) event(ev[i], now);
+    if (!als_measuring) {
+      als.power(true);
+      als_measuring = true;
+      als_started = now;
+      next_light = now + 130;
+    } else {
+      const float lux = als.lux();
+      if (lux < 0 && now - als_started < 400) {
+        next_light = now + 30;  // замер ещё не готов
+      } else {
+        als.power(false);
+        als_measuring = false;
+        next_light = now + (screen_on ? 2000 : 5000);
+        if (lux >= 0) {
+          const int n = light.feed(lux, now, ev);
+          for (int i = 0; i < n; ++i) event(ev[i], now);
+        }
+      }
     }
   }
   if (time_reached(now, next_temp)) {
@@ -781,7 +799,13 @@ void loop() {
   save_all(now, false);
 
   if (time_reached(now, bh.next_update_ms())) bh.update(now);
-  if (time_reached(now, eng.next_update_ms()) && eng.update(now) && have_oled && screen_on) push_frame();
+  // Экран обесточен — кадры не рисуются чаще раза в секунду: сцены и сроки идут, а
+  // растеризация впустую не тратит батарею. Включится экран — уйдёт полный кадр.
+  static uint32_t dark_frame_at = 0;
+  if (time_reached(now, eng.next_update_ms()) && (screen_on || time_reached(now, dark_frame_at))) {
+    if (!screen_on) dark_frame_at = now + 1000;
+    if (eng.update(now) && have_oled && screen_on) push_frame();
+  }
   if (have_oled && screen_on && oled_full) {
     if (oled.send_full(eng.frame()))
       oled_full = false;
@@ -792,7 +816,7 @@ void loop() {
     const uint8_t c = wanted_contrast();
     if (c != shown_contrast && oled.contrast(c)) shown_contrast = c;
   }
-  // В кармане дольше двух минут — экран обесточен; свет, касание или кнопка его вернут.
+  // В кармане дольше минуты — экран обесточен; свет, касание или кнопка его вернут.
   if (bh.brightness() == Brightness::Dark && eng.scene() == Scene::None) {
     if (!dark_timing) dark_timing = true, dark_since = now;
     if (screen_on && now - dark_since > kDarkScreenOffMs) screen_power(false, now);

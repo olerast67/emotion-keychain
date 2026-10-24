@@ -57,7 +57,7 @@ uint16_t adv_interval() {
   switch (pace) {
     case Pace::Busy: return 160;     // 100 мс: отсчёт до общей сцены доходит быстро
     case Pace::Night: return 16000;  // 10 с
-    default: return 3200;            // 2 с
+    default: return 1600;            // 1 с: передавать дешевле, чем слушать
   }
 }
 
@@ -129,11 +129,13 @@ void update(uint32_t now) {
     if (Bluefruit.Scanner.isRunning()) Bluefruit.Scanner.stop();
     return;
   }
-  // Слушаем окнами: 150 мс раз в 15 с; когда рядом кто-то есть — 300 мс раз в 1.5 с.
+  // Слушаем окнами: 150 мс раз в 30 с; когда рядом кто-то есть — 300 мс раз в 1.5 с.
+  // Реклама раз в 1 с и окно раз в 30 с находят соседа так же быстро, как 2 с и 15 с,
+  // а тока берут меньше: приём дороже передачи.
   if (face::time_reached(now, next_scan) && !Bluefruit.Scanner.isRunning()) {
     const bool busy = pace == Pace::Busy;
     Bluefruit.Scanner.start(busy ? 30 : 15);  // длительность в 10 мс
-    next_scan = now + (busy ? 1500 : 15000);
+    next_scan = now + (busy ? 1500 : 30000);
   }
 }
 

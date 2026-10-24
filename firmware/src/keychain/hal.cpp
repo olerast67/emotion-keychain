@@ -41,7 +41,8 @@ void power_init() {
   NRF_POWER->DCDCEN = 1;
   // Без подтяжки: статус приходит через 10 кОм, и встроенная подтяжка (~13 кОм) не дала бы
   // опуститься ниже порога. Высокий уровень даёт светодиод заряда от VBUS, низкий — STAT.
-  pinMode(board::kChgIo, INPUT);
+  // Вход подключается только на время чтения (charging).
+  nrf_gpio_cfg_default(board::kChgIo);
   // У делителя VDDH/5 большое сопротивление: замеру нужно время выборки побольше.
   analogSampleTime(40);
 }
@@ -73,7 +74,16 @@ bool usb_present() {
   return (st & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0;
 }
 
-bool charging() { return usb_present() && digitalRead(board::kChgIo) == LOW; }
+bool charging() {
+  // Без USB статус зарядника висит в воздухе: вход подключаем только на время чтения,
+  // иначе плавающий уровень гоняет входной буфер ножки.
+  if (!usb_present()) return false;
+  pinMode(board::kChgIo, INPUT);
+  delayMicroseconds(20);
+  const bool low = digitalRead(board::kChgIo) == LOW;
+  nrf_gpio_cfg_default(board::kChgIo);
+  return low;
+}
 
 float temperature_c() { return readCPUTemperature(); }
 
@@ -95,11 +105,10 @@ void system_off() {
   buzzer(0, false);
   digitalWrite(board::kVibEn, LOW);
   Wire1.end();
-  pinMode(PIN_WIRE1_SDA, INPUT);
-  pinMode(PIN_WIRE1_SCL, INPUT);
+  nrf_gpio_cfg_default(PIN_WIRE1_SDA);  // экран обесточен: ножки отключены, не висят входами
+  nrf_gpio_cfg_default(PIN_WIRE1_SCL);
   digitalWrite(board::kDispEn, LOW);
   mic_end();
-  nrf_gpio_cfg_default(board::kChgIo);  // во сне — без подтяжки и без утечки в зарядник
   delay(20);
   // Кнопка будит из полного сна; подключение USB — тоже (событие VBUS у nRF52840).
   systemOff(board::kButton, LOW);
@@ -232,6 +241,12 @@ bool mic_begin() {
   PDM.onReceive(on_pdm);
   PDM.setBufferSize((int)sizeof(mic_buf));
   mic_running = PDM.begin(1, 16000) == 1;
+  // PDM.begin просит у SoftDevice кварц 64 МГц, а PDM.end его не отпускает: кварц (~0.25 мА)
+  // работал бы до выключения, в том числе в кармане. Для уровня в дБ хватает внутреннего
+  // генератора; радио SoftDevice включает кварц само, когда он ему нужен.
+  uint8_t sd = 0;
+  sd_softdevice_is_enabled(&sd);
+  if (sd) sd_clock_hfclk_release();
   return mic_running;
 }
 
