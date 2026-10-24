@@ -33,6 +33,7 @@ class MotionSensor {
   uint32_t take_steps();
   uint32_t steps_total() const { return steps_total_; }
   bool still() const { return still_; }
+  bool walking() const { return gait_ != 0; }  // идёт или бежит
 
  private:
   bool init_ = false;

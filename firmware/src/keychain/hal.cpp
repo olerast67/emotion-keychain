@@ -10,6 +10,10 @@
 
 namespace hal {
 
+namespace {
+void vib_on(bool on);
+}  // namespace
+
 // ---------------------------------------------------------------- питание
 
 namespace {
@@ -118,13 +122,25 @@ void i2c_recover(uint8_t sda, uint8_t scl) {
   pinMode(scl, INPUT);
 }
 
+void i2c_390k(int bus) {
+  // Errata 219 nRF52840: на 400 кГц TWIM нарушает тайминги I2C; обход — 390 кГц.
+  (bus ? NRF_TWIM1 : NRF_TWIM0)->FREQUENCY = 0x06200000UL;
+}
+
 void system_off() {
-  // Кнопку ещё держат: ждём, пока отпустят, иначе она сразу разбудит плату.
-  while (digitalRead(board::kButton) == LOW) {
+  // Кнопку ещё держат: ждём, пока отпустят, иначе она сразу разбудит плату. Не дольше 10 с:
+  // залипшая кнопка не должна держать брелок включённым (на пустой ячейке — тем более).
+  bool stuck = false;
+  for (int i = 0; digitalRead(board::kButton) == LOW; ++i) {
+    if (i >= 1000) {
+      stuck = true;
+      break;
+    }
     watchdog_feed();
     delay(10);
   }
   buzzer(0, false);
+  vib_on(false);
   digitalWrite(board::kVibEn, LOW);
   Wire1.end();
   nrf_gpio_cfg_default(PIN_WIRE1_SDA);  // экран обесточен: ножки отключены, не висят входами
@@ -133,7 +149,15 @@ void system_off() {
   mic_end();
   delay(20);
   // Кнопка будит из полного сна; подключение USB — тоже (событие VBUS у nRF52840).
-  systemOff(board::kButton, LOW);
+  if (!stuck) systemOff(board::kButton, LOW);
+  // Кнопка залипла: сон без неё, разбудит только USB.
+  nrf_gpio_cfg_default(board::kButton);
+  uint8_t sd = 0;
+  sd_softdevice_is_enabled(&sd);
+  if (sd)
+    sd_power_system_off();
+  else
+    NRF_POWER->SYSTEMOFF = 1;
   while (true) {
   }
 }
@@ -169,6 +193,8 @@ void buzzer_begin() {
 }
 
 void buzzer(uint16_t hz, bool soft) {
+  // BUZ_B — P1.02, ножка «только для низких частот» (до 10 кГц, рядом с радио).
+  if (hz > 10000) hz = 10000;
   if (hz == cur_hz && soft == cur_soft) return;
   cur_hz = hz, cur_soft = soft;
   if (!hz) {
@@ -198,11 +224,44 @@ const uint16_t* vib_p = nullptr;
 int vib_n = 0, vib_i = 0;
 uint32_t vib_until = 0;
 bool vib_started = false;
+uint16_t vib_seq[4];  // значение для PWM2: память в RAM на всё время работы
+constexpr uint16_t kVibTop = 800;  // 16 МГц / 800 = 20 кГц: выше слышимого
+
+// Мотор на 3 В стоит прямо на VSYS (до 4.2 В от ячейки и ~4.7 В от USB): ключ работает ШИМом
+// со скважностью 3 В / VSYS — ресурс и шум как у мотора на своём напряжении.
+void vib_on(bool on) {
+  if (!on) {
+    NRF_PWM2->TASKS_STOP = 1;
+    NRF_PWM2->ENABLE = 0;  // вывод возвращается к GPIO: выход в нуле
+    return;
+  }
+  const float v = vsys_volts();
+  float duty = v > 3.0f ? 3.0f / v : 1.0f;
+  if (duty < 0.5f) duty = 0.5f;
+  vib_seq[0] = (uint16_t)(kVibTop * duty);  // бит 15 = 0: сначала высокий
+  vib_seq[1] = vib_seq[2] = vib_seq[3] = 0;
+  NRF_PWM2->ENABLE = 1;
+  NRF_PWM2->TASKS_SEQSTART[0] = 1;
+}
 }  // namespace
 
 void vibro_begin() {
   digitalWrite(board::kVibEn, LOW);
   pinMode(board::kVibEn, OUTPUT);
+  NRF_PWM2->PSEL.OUT[0] = board::kVibEn;
+  NRF_PWM2->PSEL.OUT[1] = 0xFFFFFFFFu;
+  NRF_PWM2->PSEL.OUT[2] = 0xFFFFFFFFu;
+  NRF_PWM2->PSEL.OUT[3] = 0xFFFFFFFFu;
+  NRF_PWM2->MODE = PWM_MODE_UPDOWN_Up;
+  NRF_PWM2->PRESCALER = PWM_PRESCALER_PRESCALER_DIV_1;
+  NRF_PWM2->COUNTERTOP = kVibTop;
+  NRF_PWM2->DECODER = (PWM_DECODER_LOAD_Common << PWM_DECODER_LOAD_Pos) |
+                      (PWM_DECODER_MODE_RefreshCount << PWM_DECODER_MODE_Pos);
+  NRF_PWM2->LOOP = 0;
+  NRF_PWM2->SEQ[0].PTR = (uint32_t)vib_seq;
+  NRF_PWM2->SEQ[0].CNT = 1;
+  NRF_PWM2->SEQ[0].REFRESH = 0;
+  NRF_PWM2->SEQ[0].ENDDELAY = 0;
 }
 
 void vibrate(const uint16_t* pattern, int n) {
@@ -216,16 +275,16 @@ void vibro_update(uint32_t now) {
   if (!vib_started) {
     vib_started = true;
     vib_until = now + vib_p[0];
-    digitalWrite(board::kVibEn, HIGH);
+    vib_on(true);
     return;
   }
   if ((int32_t)(now - vib_until) < 0) return;
   if (++vib_i >= vib_n) {
-    digitalWrite(board::kVibEn, LOW);
+    vib_on(false);
     vib_p = nullptr;
     return;
   }
-  digitalWrite(board::kVibEn, (vib_i & 1) ? LOW : HIGH);
+  vib_on(!(vib_i & 1));
   vib_until = now + vib_p[vib_i];
 }
 

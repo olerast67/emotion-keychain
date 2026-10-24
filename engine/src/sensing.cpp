@@ -283,8 +283,10 @@ int LightSensor::feed(float lux, uint32_t now, Event out[kSenseEvents]) {
     cand_ = s;
     cand_since_ = now;
   }
-  // Новое состояние держится 3 с: тень от руки — не темнота.
-  if (state_ == 255 || now - cand_since_ >= 3000) {
+  // Новое состояние держится 3 с: тень от руки — не темнота. Из темноты — за 1 с: брелок
+  // достали из кармана, и лицо должно появиться сразу.
+  const uint32_t hold = state_ == 0 ? 1000u : 3000u;
+  if (state_ == 255 || now - cand_since_ >= hold) {
     state_ = s;
     cand_ = 255;
     push(out, n, s == 0 ? Event::dark : s == 2 ? Event::bright : Event::light);
@@ -372,11 +374,13 @@ int BatterySensor::feed(float volts, bool usb, bool charging, uint32_t now, Even
     critical_said_ = true;
     push(out, n, Event::battery_critical);
   }
-  // Пусто: ниже 3.35 В дольше минуты — пора спать, пока ячейка цела.
+  // Пусто: ниже 3.35 В дольше минуты — пора спать, пока ячейка цела. Отсчёт сбрасывается,
+  // только если напряжение поднялось выше 3.40 В: у почти пустой ячейки оно стоит у самого
+  // порога, и шум в милливольты иначе обнулял бы минуту снова и снова.
   if (v_ < 3.35f) {
     if (!empty_timing_) empty_timing_ = true, empty_since_ = now;
     if (now - empty_since_ > 60000) empty_ = true;
-  } else {
+  } else if (v_ > 3.40f) {
     empty_timing_ = false;
   }
   return n;

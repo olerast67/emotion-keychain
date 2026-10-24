@@ -14,8 +14,11 @@ bool adv_dirty = true;
 bool adv_on = false;
 bool ghost_on = false;
 Pace pace = Pace::Normal;
-uint32_t next_scan = 0;
-uint32_t next_adv_refresh = 0;
+// Сроки — как «прошло с прошлого раза»: такое сравнение верно при любом переполнении
+// времени. Срок «0 — сразу» через 24.8 суток работы стал бы сроком в будущем.
+bool scan_now = true;
+uint32_t scan_at = 0;
+uint32_t adv_at = 0;
 
 // Очередь услышанных пакетов: обработчик Bluefruit пишет, основной цикл читает.
 struct Heard {
@@ -129,7 +132,7 @@ void set_pace(Pace p) {
   if (p == pace) return;
   pace = p;
   adv_dirty = true;
-  next_scan = 0;
+  scan_now = true;
 }
 
 void set_ghost(bool on) {
@@ -140,9 +143,9 @@ void set_ghost(bool on) {
 bool ghost() { return ghost_on; }
 
 void update(uint32_t now) {
-  if (adv_dirty || face::time_reached(now, next_adv_refresh)) {
+  if (adv_dirty || now - adv_at >= 30000u) {
     adv_dirty = false;
-    next_adv_refresh = now + 30000;
+    adv_at = now;
     push_advert();
   }
   if (pace == Pace::Off || pace == Pace::Night) {
@@ -152,10 +155,11 @@ void update(uint32_t now) {
   // Слушаем окнами: 150 мс раз в 30 с; когда рядом кто-то есть — 300 мс раз в 1.5 с.
   // Реклама раз в 1 с и окно раз в 30 с находят соседа так же быстро, как 2 с и 15 с,
   // а тока берут меньше: приём дороже передачи.
-  if (face::time_reached(now, next_scan) && !Bluefruit.Scanner.isRunning()) {
-    const bool busy = pace == Pace::Busy;
+  const bool busy = pace == Pace::Busy;
+  if ((scan_now || now - scan_at >= (busy ? 1500u : 30000u)) && !Bluefruit.Scanner.isRunning()) {
+    scan_now = false;
+    scan_at = now;
     Bluefruit.Scanner.start(busy ? 30 : 15);  // длительность в 10 мс
-    next_scan = now + (busy ? 1500 : 30000);
   }
 }
 

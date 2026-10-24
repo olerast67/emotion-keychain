@@ -1952,7 +1952,8 @@ static void test_encounter_attacks() {
     fake.hash = 7;
     Advert plain = fake;
     plain.countdown = 0, plain.to = 0;
-    e.on_advert(plain, -60, 0);  // сначала обычный пакет вблизи
+    e.on_advert(plain, -60, 0);  // сначала обычные пакеты вблизи — дважды
+    e.on_advert(plain, -60, 300);
     e.on_advert(fake, -60, 500);
     Meeting m;
     bool got = false;
@@ -1967,6 +1968,7 @@ static void test_encounter_attacks() {
     Advert plain;
     plain.hash = 9;
     e.on_advert(plain, -60, 0);
+    e.on_advert(plain, -60, 50);
     Advert cd = plain;
     cd.to = (uint16_t)(me & 0xFFFF);
     cd.countdown = 255;
@@ -2076,6 +2078,65 @@ static void test_encounter_sync() {
   }
   CHECK(xp == XpRules{}.duels_xp_day_cap && p.duels_won == XpRules{}.duels_xp_day_cap,
         "дуэлей с опытом за день — по лимиту (%d, %u)", xp, (unsigned)p.duels_won);
+}
+
+static void test_encounter_ack() {
+  // Объявивший начинает сцену, только услышав «принял»: иначе она была бы у него одного.
+  Encounters a;
+  a.init(0x100u);
+  a.set_self(1, 0, 128);
+  Advert b;
+  b.hash = 0x900u;
+  a.on_advert(b, -50, 0);
+  a.on_advert(b, -50, 500);
+  CHECK(a.pending() && a.advert(600).countdown > 0, "объявил сцену соседу");
+  Meeting m;
+  bool any = false;
+  for (uint32_t t = 600; t < 6000; t += 100) any |= a.poll(t, &m);
+  CHECK(!any && !a.pending(), "сосед не ответил — сцены нет и объявление снято");
+  // Тот же сосед ответил «принял» — сцена есть.
+  a.on_advert(b, -50, 7000);
+  a.on_advert(b, -50, 7500);
+  Advert ack = b;
+  ack.flags = kAdvAck, ack.to = 0x100u, ack.countdown = 30;
+  a.on_advert(ack, -50, 8000);
+  for (uint32_t t = 7500; t < 13000; t += 100) any |= a.poll(t, &m);
+  CHECK(any && m.peer == 0x900u, "ответил — сцена начинается");
+}
+
+static void test_encounter_rate_limit() {
+  // Поток поддельных соседей: каждые 2.5 с новый позывной, дважды вблизи и с объявлением.
+  Encounters e;
+  const uint32_t me = 0x80000000u;
+  e.init(me);
+  e.set_self(1, kAdvDuelReady, 128);
+  int scenes = 0;
+  Meeting m;
+  for (uint32_t t = 0, i = 0; t < 600000; t += 2500, ++i) {
+    Advert f;
+    f.hash = 1000 + i;
+    e.on_advert(f, -50, t);
+    e.on_advert(f, -50, t + 100);
+    Advert cd = f;
+    cd.countdown = 10, cd.to = (uint16_t)(me & 0xFFFF), cd.flags = kAdvDuelReady | kAdvDuelCalled;
+    e.on_advert(cd, -50, t + 200);
+    for (uint32_t k = t; k < t + 2500; k += 100) scenes += e.poll(k, &m);
+  }
+  CHECK(scenes <= 6, "поток подделок: за 10 минут не больше 6 сцен (%d)", scenes);
+  // Знакомый брелок лимит не тратит: после потока подделок встреча с ним проходит.
+  static const uint32_t kFriend = 77;
+  e.set_known([](uint32_t h, const void*) { return h == kFriend; }, nullptr);
+  Advert fr;
+  fr.hash = kFriend;
+  const uint32_t t0 = 600000;
+  e.on_advert(fr, -50, t0);
+  e.on_advert(fr, -50, t0 + 100);
+  Advert cd = fr;
+  cd.countdown = 10, cd.to = (uint16_t)(me & 0xFFFF);
+  e.on_advert(cd, -50, t0 + 200);
+  bool met = false;
+  for (uint32_t k = t0; k < t0 + 3000; k += 100) met |= e.poll(k, &m) && m.peer == kFriend;
+  CHECK(met, "знакомый встречается и сразу после потока подделок");
 }
 
 static void test_encounter_rewards_capped() {
@@ -2414,6 +2475,8 @@ int main() {
   test_encounter_rules();
   test_encounter_attacks();
   test_encounter_rewards_capped();
+  test_encounter_rate_limit();
+  test_encounter_ack();
   test_encounter_sync();
   test_motion_sensing();
   test_hearing();

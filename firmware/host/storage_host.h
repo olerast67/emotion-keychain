@@ -1,5 +1,6 @@
 // Окружение для проверки журнала storage.cpp на ПК: три страницы флеша в памяти, операции
-// SoftDevice мгновенные, а обрыв питания можно устроить посреди любой операции.
+// SoftDevice асинхронные, как на плате (идут миллисекунды, пока идут — «занят»), а обрыв
+// питания можно устроить посреди любой операции.
 #pragma once
 
 #include <stdint.h>
@@ -22,6 +23,7 @@ uint32_t millis();
 void delay(uint32_t ms);
 
 constexpr uint32_t NRF_SUCCESS = 0;
+constexpr uint32_t NRF_ERROR_BUSY = 17;
 struct HostNvmc {
   uint32_t CONFIG, READY = 1, ERASEPAGE;
 };

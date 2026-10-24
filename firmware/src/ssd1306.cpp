@@ -26,7 +26,6 @@ constexpr uint8_t kInitSsd1306[] = {
     0xA4,        // показывать содержимое памяти
     0xA6,        // без инверсии
     0x2E,        // без аппаратной прокрутки
-    0xAF,        // экран включён
 };
 
 // У SH1106 нет окон 0x21/0x22 и горизонтальной адресации: страницы пишутся по одной.
@@ -45,7 +44,6 @@ constexpr uint8_t kInitSh1106[] = {
     0xDB, 0x35,  // VCOMH
     0xA4,        // показывать содержимое памяти
     0xA6,        // без инверсии
-    0xAF,        // экран включён
 };
 
 bool probe(TwoWire& w, uint8_t a) {
@@ -70,9 +68,11 @@ bool Ssd1306::begin(TwoWire& wire, uint8_t addr, bool sh1106) {
   }
   addr_ = addr;
   const bool ok = sh1106_ ? cmds(kInitSh1106, sizeof(kInitSh1106)) : cmds(kInitSsd1306, sizeof(kInitSsd1306));
+  // Экран включается после очистки памяти: после подачи питания в ней мусор, и он
+  // мелькнул бы на десятки миллисекунд.
   face::Framebuffer blank;
   blank.clear();
-  return ok && send_full(blank);
+  return ok && send_full(blank) && cmd(0xAF);
 }
 
 bool Ssd1306::cmd(uint8_t c) { return cmds(&c, 1); }

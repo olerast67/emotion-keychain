@@ -73,11 +73,21 @@ bool sd_on() {
 // Операции флеша при работающем SoftDevice идут в его окнах между радиособытиями, и о
 // конце он сообщает событием. Его ловит обработчик LittleFS, поэтому здесь конец
 // узнаётся по самой памяти: записанное читается, стёртое — одни единицы. Не дождались —
-// операция сорвалась, запись считается несостоявшейся.
+// операция сорвалась, запись считается несостоявшейся. Так узнать конец можно, только
+// если память после операции другая, чем до неё: чистую страницу поэтому не стираем, а
+// записи всегда начинаются с метки. И на всякий случай «занят» ждём долго — пока
+// SoftDevice не закончит прошлую операцию.
+void feed_watchdog() {
+#ifndef STORAGE_HOST_TEST
+  NRF_WDT->RR[0] = WDT_RR_RR_Reload;  // запись может идти секунды: сторожевой таймер — 8 с
+#endif
+}
+
 bool wait_for(bool (*done)(uintptr_t, const void*, uint32_t), uintptr_t addr, const void* src, uint32_t n,
               uint32_t timeout_ms) {
   const uint32_t t0 = millis();
   while (!done(addr, src, n)) {
+    feed_watchdog();
     if (millis() - t0 > timeout_ms) return false;
     delay(1);  // уступить задачам SoftDevice
   }
@@ -92,8 +102,22 @@ void nvmc_wait() {
   }
 }
 
+// Подать операцию: SoftDevice отвечает «занят», пока не закончил прошлую.
+template <typename F>
+bool submit(F op) {
+  for (int i = 0; i < 100; ++i) {
+    const uint32_t err = op();
+    if (err == NRF_SUCCESS) return true;
+    if (err != NRF_ERROR_BUSY) return false;
+    feed_watchdog();
+    delay(5);
+  }
+  return false;
+}
+
 bool erase_page(int p) {
   const uintptr_t a = page_addr(p);
+  if (erased(a, kPageSize)) return true;  // уже чистая: стирать нечего (и конец не узнать)
   ++erase_count;
   if (!sd_on()) {
     NRF_NVMC->CONFIG = NVMC_CONFIG_WEN_Een;
@@ -105,9 +129,9 @@ bool erase_page(int p) {
     return erased(a, kPageSize);
   }
   for (int attempt = 0; attempt < 3; ++attempt) {
-    const uint32_t err = sd_flash_page_erase((uint32_t)(a / kPageSize));
-    if (err == NRF_SUCCESS && wait_for(blank, a, nullptr, kPageSize, 800)) return true;
-    delay(5);
+    if (submit([&] { return sd_flash_page_erase((uint32_t)(a / kPageSize)); }) &&
+        wait_for(blank, a, nullptr, kPageSize, 800))
+      return true;
   }
   return false;
 }
@@ -126,10 +150,11 @@ bool program(uintptr_t dst, const void* src, uint32_t n) {
     nvmc_wait();
     return same(dst, src, n);
   }
-  for (int attempt = 0; attempt < 3; ++attempt) {
-    const uint32_t err = sd_flash_write((uint32_t*)dst, (const uint32_t*)src, n / 4);
-    if (err == NRF_SUCCESS) return wait_for(same, dst, src, n, 400);
-    delay(5);  // занят прошлой операцией
+  // Повтор только в чистое место: сорвавшаяся запись могла записать часть слов.
+  for (int attempt = 0; attempt < 3 && erased(dst, n); ++attempt) {
+    if (submit([&] { return sd_flash_write((uint32_t*)dst, (const uint32_t*)src, n / 4); }) &&
+        wait_for(same, dst, src, n, 400))
+      return true;
   }
   return false;
 }

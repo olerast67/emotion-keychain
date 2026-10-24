@@ -22,6 +22,7 @@ constexpr uint8_t kAdvDuelReady = 1u << 0;   // хозяин разрешил д
 constexpr uint8_t kAdvCyber = 1u << 1;       // киберпанк-тема
 constexpr uint8_t kAdvLegendary = 1u << 2;   // легендарный брелок
 constexpr uint8_t kAdvDuelCalled = 1u << 3;  // объявленная сцена — дуэль, а не встреча
+constexpr uint8_t kAdvAck = 1u << 4;         // «принял объявление»: ответ того, с кем сцена
 
 struct Advert {
   uint32_t hash = 0;       // позывной: Identity::hash
@@ -63,13 +64,24 @@ class Encounters {
   struct Config {
     int rssi_min = -70;              // дБм: примерно 1–3 метра
     uint32_t confirm_ms = 60000;     // второй пакет того же соседа — в пределах минуты
-    uint32_t countdown_ms = 1500;    // отсчёт до общей сцены
+    // Отсчёт до общей сцены. За него второй брелок должен услышать объявление и ответить
+    // «принял», а объявивший — услышать ответ: без ответа сцена отменяется у обоих, а не
+    // играет только у одного.
+    uint32_t countdown_ms = 4000;
     uint32_t cooldown_ms = 600000;   // с тем же соседом — не чаще раза в 10 минут
     uint32_t forget_ms = 180000;     // сосед пропал из эфира — забываем
+    // Встреч всего — не чаще раза в 20 с и не больше 6 за 15 минут: поддельные позывные
+    // иначе устроили бы сцену с вибрацией каждые пару секунд.
+    uint32_t min_gap_ms = 20000;
+    uint32_t burst_window_ms = 900000;
   };
 
   void init(uint32_t my_hash, const Config& cfg);
   void init(uint32_t my_hash) { init(my_hash, Config{}); }
+  // Знакомые брелоки (из таблицы друзей) не тратят общий лимит встреч: иначе поток
+  // поддельных «новых» соседей выбирал бы его, и друг ждал бы до 15 минут.
+  using KnownFn = bool (*)(uint32_t hash, const void* ctx);
+  void set_known(KnownFn fn, const void* ctx) { known_ = fn, known_ctx_ = ctx; }
   // Что рассылать о себе: уровень, флаги (кроме kAdvDuelCalled) и настроение.
   void set_self(uint8_t level, uint8_t flags, uint8_t mood);
   // Новые сутки: дуэль с каждым соседом снова возможна (не больше kDueled дуэлей в сутки).
@@ -108,6 +120,12 @@ class Encounters {
   };
   static constexpr int kCools = 16;
   bool cooling(uint32_t hash, uint32_t now_ms) const;
+  bool rate_ok(uint32_t hash, uint32_t now_ms) const;
+  KnownFn known_ = nullptr;
+  const void* known_ctx_ = nullptr;
+  static constexpr int kBurst = 6;
+  uint32_t met_at_[kBurst] = {};
+  int met_n_ = 0;
   void cool(uint32_t hash, uint32_t now_ms);
 
   Peer* find(uint32_t hash);
@@ -124,6 +142,7 @@ class Encounters {
   Meeting pending_;
   uint32_t start_ms_ = 0;
   bool announcer_ = false;
+  bool acked_ = false;  // объявивший услышал «принял»
   uint8_t announced_mood_ = 128;
 };
 

@@ -1363,6 +1363,14 @@ void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash
   // Сразу за дуэлью — разговор шифром: у соседа очередь та же, и он начнётся одновременно.
   if (peer_hash) chat(code, peer_hash, nonce, now);
   if (progress_) grant(progress_->duel(won), now);
+  // Дуэль — тоже встреча: день дружбы засчитывается, новый соперник становится знакомым
+  // (без своей сцены приветствия — её место заняли дуэль и разговор).
+  if (friends_ && peer_hash) {
+    int before = -1;
+    bool first_today = false;
+    friends_->meet(peer_hash, progress_ ? progress_->days : 0, &before, &first_today);
+    if (progress_ && before < 0) grant(progress_->met_friend(true), now);
+  }
   achieve(now);
 }
 

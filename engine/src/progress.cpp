@@ -360,7 +360,7 @@ int Progress::new_day(const XpRules& r) {
   }
   touched_today = fed_today = 0;
   today_touch_xp = today_step_xp = 0;
-  today_new_friends = today_gifts = today_duel_prizes = today_duels = 0;
+  today_new_friends = today_gifts = today_duel_prizes = today_duels = today_known_friends = 0;
   return add_xp(r.day);
 }
 
@@ -389,6 +389,9 @@ int Progress::met_friend(bool is_new, const XpRules& r) {
     if (today_new_friends >= r.new_friends_day_cap) return -1;
     ++today_new_friends;
     ++friends;
+  } else {
+    if (today_known_friends >= r.known_friends_day_cap) return -1;
+    ++today_known_friends;
   }
   return add_xp(is_new ? r.friend_new : r.friend_known);
 }

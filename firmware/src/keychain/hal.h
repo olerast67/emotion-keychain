@@ -24,6 +24,8 @@ void watchdog_start();
 void watchdog_feed();
 // Освободить шину I2C, если ведомый держит SDA (до Wire.begin).
 void i2c_recover(uint8_t sda, uint8_t scl);
+// Шина на 390 кГц вместо 400 (errata 219), после setClock: 0 — Wire, 1 — Wire1.
+void i2c_390k(int bus);
 
 // Выключение: всё гаснет, плата просыпается от кнопки или USB (с перезагрузкой).
 // При подключённом USB не вызывать: кнопка при USB включает загрузчик (см. main.cpp).

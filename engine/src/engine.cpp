@@ -439,6 +439,42 @@ void FaceEngine::play_scene(Scene s, uint32_t now_ms, const SceneParams& p) {
   next_update_ = now_ms;
 }
 
+namespace {
+
+// Лицо со значками не подходит к краю ближе kSafeMargin − 1. Поле рассчитывает
+// compute_fit, но наклон брелока, переходы между эмоциями и жесты иногда выносят его
+// дальше: тогда весь слой лица сдвигается внутрь, вместе с привязками для рамки темы.
+void keep_inside(Framebuffer& fb, Anchors& a) {
+  int x0 = kWidth, x1 = -1, y0 = kHeight, y1 = -1;
+  for (int p = 0; p < kPages; ++p)
+    for (int x = 0; x < kWidth; ++x) {
+      const uint8_t b = fb.data[p * kWidth + x];
+      if (!b) continue;
+      x0 = imin(x0, x), x1 = imax(x1, x);
+      y0 = imin(y0, p * 8 + __builtin_ctz(b)), y1 = imax(y1, p * 8 + 31 - __builtin_clz((uint32_t)b));
+    }
+  if (x1 < 0) return;
+  const int m = kSafeMargin - 1;
+  auto push = [m](int lo, int hi, int size) {
+    if (hi - lo + 1 > size - 2 * m) return 0;  // шире поля — не трогаем
+    if (lo < m) return m - lo;
+    if (hi > size - 1 - m) return size - 1 - m - hi;
+    return 0;
+  };
+  const int dx = push(x0, x1, kWidth), dy = push(y0, y1, kHeight);
+  if (!dx && !dy) return;
+  static Framebuffer tmp;
+  tmp.clear();
+  for (int y = y0; y <= y1; ++y)
+    for (int x = x0; x <= x1; ++x)
+      if (fb.get(x, y)) tmp.set(x + dx, y + dy);
+  fb.copy_from(tmp);
+  for (int i = 0; i < 2; ++i) a.ex[i] += (float)dx, a.ey[i] += (float)dy;
+  a.mx += (float)dx, a.my += (float)dy, a.ox += (float)dx, a.oy += (float)dy;
+}
+
+}  // namespace
+
 void FaceEngine::compute_fit() {
   // Рисуем целевое лицо со значками в черновой буфер и смотрим, где оказались
   // крайние пиксели. Значки, привязанные к экрану, а не к лицу, сами держат поле.
@@ -1363,7 +1399,13 @@ bool FaceEngine::update(uint32_t now) {
       Anchors anchors;
       render_face(back_, composed_, &anchors);
       for (int i = 0; i < (int)Overlay::Count; ++i) {
-        if (ov_alpha_[i] > 0.0f) render_overlay(back_, (Overlay)i, anchors, ov_alpha_[i], (float)ov_local[i] * 0.001f);
+        if (ov_alpha_[i] > 0.0f && !overlay_screen_space((Overlay)i))
+          render_overlay(back_, (Overlay)i, anchors, ov_alpha_[i], (float)ov_local[i] * 0.001f);
+      }
+      keep_inside(back_, anchors);
+      for (int i = 0; i < (int)Overlay::Count; ++i) {
+        if (ov_alpha_[i] > 0.0f && overlay_screen_space((Overlay)i))
+          render_overlay(back_, (Overlay)i, anchors, ov_alpha_[i], (float)ov_local[i] * 0.001f);
       }
       render_theme(back_, anchors, reticle, quirks_.cyber_eye, glint);
       if (opt_.theme == Theme::Retro) pixelate(back_);

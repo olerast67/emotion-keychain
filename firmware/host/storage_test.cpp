@@ -41,28 +41,58 @@ long host_cut_on_erase = -1;
 HostNvmc host_nvmc;
 uintptr_t host_flash_base() { return (uintptr_t)flash; }
 uint32_t millis() { return fake_ms; }
-void delay(uint32_t ms) { fake_ms += ms; }
+
+namespace {
+// Операция SoftDevice: подана — и идёт, конец — через время.
+struct Op {
+  int kind = 0;  // 1 — запись, 2 — стирание
+  uint32_t* dst = nullptr;
+  const uint32_t* src = nullptr;
+  uint32_t words = 0;
+  uint8_t* page = nullptr;
+  uint32_t done_ms = 0;
+} op;
+uint32_t busy_answers = 0;
+
+void finish() {
+  const Op o = op;
+  op = Op{};
+  if (o.kind == 1) {
+    for (uint32_t i = 0; i < o.words; ++i) {
+      if (host_cut_after_words == 0) throw HostPowerCut{};
+      if (host_cut_after_words > 0) --host_cut_after_words;
+      o.dst[i] &= o.src[i];  // флеш умеет только сбрасывать биты
+    }
+  } else if (o.kind == 2) {
+    if (host_cut_on_erase == 0) {
+      memset(o.page, 0xFF, 1000);  // стирание оборвалось на середине: часть страницы — мусор
+      o.page[2000] = 0x12;
+      throw HostPowerCut{};
+    }
+    if (host_cut_on_erase > 0) --host_cut_on_erase;
+    memset(o.page, 0xFF, 4096);
+  }
+}
+}  // namespace
+
+void delay(uint32_t ms) {
+  for (uint32_t i = 0; i < ms; ++i) {
+    ++fake_ms;
+    if (op.kind && fake_ms >= op.done_ms) finish();
+  }
+}
 
 uint32_t sd_flash_write(uint32_t* dst, const uint32_t* src, uint32_t words) {
-  for (uint32_t i = 0; i < words; ++i) {
-    if (host_cut_after_words == 0) throw HostPowerCut{};
-    if (host_cut_after_words > 0) --host_cut_after_words;
-    dst[i] &= src[i];  // флеш умеет только сбрасывать биты
-  }
+  if (op.kind) return ++busy_answers, NRF_ERROR_BUSY;
+  op = Op{1, dst, src, words, nullptr, fake_ms + 1 + words / 25};
   return 0;
 }
 
 uint32_t sd_flash_page_erase(uint32_t page) {
+  if (op.kind) return ++busy_answers, NRF_ERROR_BUSY;
   // Номер страницы 32-битный, как у SoftDevice: старшие биты адреса на ПК — от нашего массива.
   const uint64_t full = (((uint64_t)host_flash_base() / 4096u) & ~(uint64_t)0xFFFFFFFFu) | page;
-  uint8_t* p = (uint8_t*)(uintptr_t)(full * 4096u);
-  if (host_cut_on_erase == 0) {
-    memset(p, 0xFF, 1000);  // стирание оборвалось на середине: часть страницы — мусор
-    p[2000] = 0x12;
-    throw HostPowerCut{};
-  }
-  if (host_cut_on_erase > 0) --host_cut_on_erase;
-  memset(p, 0xFF, 4096);
+  op = Op{2, nullptr, nullptr, 0, (uint8_t*)(uintptr_t)(full * 4096u), fake_ms + 85};
   return 0;
 }
 
@@ -88,6 +118,7 @@ int main() {
   for (int round = 0; round < 3000; ++round) {
     const uint32_t n = last_ok + 1;
     const Rec w = make(n);
+    // Заполнить страницу, чтобы следующая запись стирала (иначе стирания редки).
     const bool cut_erase = rng() % 8 == 0;
     host_cut_after_words = cut_erase ? -1 : (long)(rng() % 80);
     host_cut_on_erase = cut_erase ? 0 : -1;
@@ -96,6 +127,7 @@ int main() {
       saved = storage::save(&w, sizeof w);
     } catch (HostPowerCut&) {
     }
+    op = Op{};  // питание пропало: операция SoftDevice — тоже
     host_cut_after_words = host_cut_on_erase = -1;
     storage::begin();
     Rec got;

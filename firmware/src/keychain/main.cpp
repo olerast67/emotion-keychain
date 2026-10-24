@@ -55,8 +55,9 @@ struct Settings {
   uint8_t month = 0, day = 0;
   uint16_t clock_min = 12 * 60;
   uint8_t clock_known = 0;
-  uint8_t reserved[3] = {};
+  uint8_t reserved[5] = {};  // до 24 байт без выравнивания: memcmp не видит мусора
 };
+static_assert(sizeof(Settings) == 24, "настройки без скрытых байтов выравнивания");
 
 FaceEngine eng;
 Behavior bh;
@@ -81,7 +82,8 @@ bool save_failed = false;
 
 bool have_oled = false, oled_full = false, screen_on = true;
 uint8_t shown_contrast = 0;
-uint32_t oled_retry_at = 0, oled_retry_ms = 2000;
+uint32_t oled_fail_at = 0, oled_retry_ms = 2000;
+bool oled_waiting = false;  // экран не ответил: ждём повтора с oled_fail_at
 bool dark_timing = false;  // экран в темноте: с dark_since
 uint32_t dark_since = 0;
 
@@ -123,16 +125,21 @@ uint64_t uptime_now() {
 
 // Консоль не должна останавливать брелок: запись в USB ждёт, пока хост читает, и с открытым,
 // но не читаемым портом цикл встал бы до сброса сторожевым таймером. Ждём места не дольше
-// 50 мс, остаток строки теряется.
+// 50 мс, остаток строки теряется. После такого ожидания следующие строки не ждут вовсе,
+// пока хост снова не начнёт читать, — иначе каждая строка стоила бы циклу 50 мс.
+bool out_stalled = false;
+
 void out_raw(const char* s, size_t n) {
   const uint32_t t0 = millis();
   while (n) {
     const int room = Serial.availableForWrite();
     if (room > 0) {
+      out_stalled = false;
       const size_t k = (size_t)room < n ? (size_t)room : n;
       Serial.write((const uint8_t*)s, k);
       s += k, n -= k;
-    } else if (!Serial || millis() - t0 > 50) {
+    } else if (!Serial || out_stalled || millis() - t0 > 50) {
+      out_stalled = Serial ? true : false;
       return;
     } else {
       delay(1);
@@ -161,11 +168,15 @@ void screen_power(bool on, uint32_t now);
 
 void event(Event e, uint32_t now) {
   if (verbose) out("Событие: %s\n", event_id(e));
-  // Касание или кнопка в темноте показывают лицо ещё на минуту.
-  if (e == Event::tap || e == Event::double_tap || e == Event::button) {
+  // Касание или кнопка в темноте показывают лицо ещё на минуту. Одиночное касание на ходу
+  // не в счёт: шаги в кармане детектор тоже принимает за касания.
+  const bool walking_tap = e == Event::tap && motion.walking();
+  if ((e == Event::tap || e == Event::double_tap || e == Event::button) && !walking_tap) {
     if (dark_timing) dark_since = now;
     if (!screen_on) screen_power(true, now);
   }
+  // Взяли в руки в темноте — свет меряем сразу: может, достали из кармана.
+  if (e == Event::pick_up && !screen_on && !als_measuring) next_light = now;
   bh.on_event(e, now);
 }
 
@@ -281,6 +292,7 @@ bool start_oled() {
   delay(40);  // ключ включается плавно (C11), модулю нужно время на старт
   Wire1.begin();
   Wire1.setClock(400000);
+  hal::i2c_390k(1);
   have_oled = oled.begin(Wire1, 0, false);
   if (have_oled) {
     shown_contrast = wanted_contrast();
@@ -294,7 +306,7 @@ void screen_power(bool on, uint32_t now) {
   if (on == screen_on) return;
   if (on) {
     screen_on = true;
-    if (!start_oled()) oled_retry_at = now + 2000;
+    start_oled();  // не ответил — повторы в loop
   } else {
     if (have_oled) oled.power(false);
     // Шина экрана отпускается: иначе подтяжки ножек питали бы обесточенный модуль через SDA и SCL.
@@ -325,6 +337,7 @@ void apply_identity(uint32_t now) {
   voice.set_enabled(cfg.sound != 0);
   eng.set_quirks(me.quirks, now);
   enc.init(me.hash);
+  enc.set_known([](uint32_t h, const void* f) { return ((const Friends*)f)->level(h) >= 0; }, &friends);
 }
 
 void print_me() {
@@ -429,8 +442,8 @@ void poll_motion(uint32_t now) {
 
 void poll_environment(uint32_t now) {
   Event ev[kSenseEvents];
-  // Свет — разовыми замерами: датчик включается на ~130 мс (пробуждение и накопление
-  // 100 мс), остальное время спит. Постоянно включённый он брал бы ~0.2 мА.
+  // Свет — разовыми замерами раз в 2 с: датчик включается на ~130 мс (пробуждение и
+  // накопление 100 мс), остальное время спит. Постоянно включённый он брал бы ~0.2 мА.
   if (time_reached(now, next_light)) {
     if (!als_measuring) {
       als.power(true);
@@ -444,7 +457,7 @@ void poll_environment(uint32_t now) {
       } else {
         als.power(false);
         als_measuring = false;
-        next_light = now + (screen_on ? 2000 : 5000);
+        next_light = now + 2000;
         if (lux >= 0) {
           const int n = light.feed(lux, now, ev);
           for (int i = 0; i < n; ++i) event(ev[i], now);
@@ -518,7 +531,9 @@ void poll_radio(uint32_t now) {
 
   Advert a;
   int rssi = 0;
-  while (radio::take(&a, &rssi)) enc.on_advert(a, rssi, now);
+  // Невидимка не встречается: его не слышат, и сцена была бы только у него.
+  while (radio::take(&a, &rssi))
+    if (!cfg.ghost) enc.on_advert(a, rssi, now);
 
   radio::Pace pace = radio::Pace::Normal;
   if (powering_off)
@@ -537,15 +552,19 @@ void poll_radio(uint32_t now) {
   eng.note_activity(now);
   if (m.kind == Rendezvous::Duel) {
     out("Дуэль с %s: %s\n", peer.code, m.won ? "победа" : "поражение");
+    // Вибро — только пока встречи идут в счёт (дневные лимиты): поток подделок не жужжит.
+    const bool buzz = progress.today_duels < XpRules{}.duels_xp_day_cap;
     bh.duel(peer.code, m.won, now, m.peer, m.nonce);
     static const uint16_t kBuzz[] = {60, 80, 60, 80, 200};
-    hal::vibrate(kBuzz, 5);
+    if (buzz) hal::vibrate(kBuzz, 5);
   } else {
     const bool is_new = friends.level(m.peer) < 0;
     out("Встреча с %s (%s), %s\n", peer.code, archetype_name(peer.archetype), is_new ? "новый" : "знакомый");
+    const bool buzz = is_new ? progress.today_new_friends < XpRules{}.new_friends_day_cap
+                             : progress.today_known_friends < XpRules{}.known_friends_day_cap;
     bh.meet(peer.code, is_new, now, m.peer, m.peer_level, m.nonce);
     static const uint16_t kHello[] = {80, 120, 80};
-    hal::vibrate(kHello, 3);
+    if (buzz) hal::vibrate(kHello, 3);
   }
   // Без force: встречу может подстроить кто угодно, запись — по общему правилу save_all.
   save_all(now, false);
@@ -795,6 +814,11 @@ void poll_serial(uint32_t now) {
 // зарядка идёт. Кнопка — включиться (перезагрузкой, часы сохраняются), USB отключили —
 // полный сон.
 void off_on_usb() {
+  // Кнопку, которой выключали, ещё держат: иначе она тут же включила бы брелок обратно.
+  while (digitalRead(board::kButton) == LOW) {
+    hal::watchdog_feed();
+    delay(10);
+  }
   screen_power(false, millis());
   hal::mic_end();
   hal::buzzer(0, false);
@@ -844,6 +868,7 @@ void setup() {
   hal::i2c_recover(PIN_WIRE_SDA, PIN_WIRE_SCL);
   Wire.begin();
   Wire.setClock(400000);
+  hal::i2c_390k(0);
   load_all();
   // Часов реального времени у платы нет: после выключения неизвестно, сколько прошло.
   const bool clock_lost = !hal::warm_reset() && (cfg.clock_known || cfg.year);
@@ -872,7 +897,8 @@ void setup() {
   radio::begin();
   radio::set_ghost(cfg.ghost != 0);
 
-  if (!start_oled()) oled_retry_at = now + 2000;
+  start_oled();
+  next_acc = next_light = next_temp = next_batt = next_steps = now;
   eng.play_scene(Scene::boot, now);
   voice.scene(Scene::boot, SceneParams{}, now);
   hal::watchdog_feed();
@@ -888,14 +914,25 @@ void loop() {
   const uint32_t now = (uint32_t)uptime;
   hal::watchdog_feed();
 
-  if (screen_on && !have_oled && time_reached(now, oled_retry_at)) {
+  if (screen_on && !have_oled) {
     // Экран не отвечает: повторы всё реже (до минуты) — каждый стоит 40 мс и тайм-ауты шины.
-    if (start_oled()) {
-      oled_retry_ms = 2000;
-    } else {
-      oled_retry_ms = oled_retry_ms < 30000 ? oled_retry_ms * 2 : 60000;
-      oled_retry_at = now + oled_retry_ms;
+    // Перед повтором модуль обесточивается: зависший контроллер так сбрасывается.
+    if (!oled_waiting) oled_waiting = true, oled_fail_at = now;
+    if (now - oled_fail_at >= oled_retry_ms) {
+      Wire1.end();
+      nrf_gpio_cfg_default(PIN_WIRE1_SDA);
+      nrf_gpio_cfg_default(PIN_WIRE1_SCL);
+      digitalWrite(board::kDispEn, LOW);
+      delay(30);
+      if (start_oled()) {
+        oled_retry_ms = 2000;
+      } else {
+        oled_retry_ms = oled_retry_ms < 30000 ? oled_retry_ms * 2 : 60000;
+        oled_fail_at = now;
+      }
     }
+  } else {
+    oled_waiting = false;
   }
   poll_serial(now);
   poll_button(now);
@@ -911,9 +948,9 @@ void loop() {
   if (time_reached(now, bh.next_update_ms())) bh.update(now);
   // Экран обесточен — кадры не рисуются чаще раза в секунду: сцены и сроки идут, а
   // растеризация впустую не тратит батарею. Включится экран — уйдёт полный кадр.
-  static uint32_t dark_frame_at = 0;
-  if (time_reached(now, eng.next_update_ms()) && (screen_on || time_reached(now, dark_frame_at))) {
-    if (!screen_on) dark_frame_at = now + 1000;
+  static uint32_t dark_frame_last = 0;
+  if (time_reached(now, eng.next_update_ms()) && (screen_on || now - dark_frame_last >= 1000u)) {
+    dark_frame_last = now;
     if (eng.update(now) && have_oled && screen_on) push_frame();
   }
   if (have_oled && screen_on && oled_full) {
@@ -940,7 +977,8 @@ void loop() {
 
   // Выключение: дождаться конца сцены «спокойной ночи», сохранить всё и уснуть.
   if (powering_off && !off_timing) off_timing = true, off_at = now;
-  if (powering_off && eng.scene() != Scene::None) off_scene_seen = true;
+  // Ждём именно сцену выключения: если выключили посреди другой сцены, сначала доиграет она.
+  if (powering_off && eng.scene() == Scene::shutdown) off_scene_seen = true;
   if (powering_off && ((off_scene_seen && eng.scene() == Scene::None && !voice.busy(now)) || now - off_at > 15000)) {
     save_all(now, true);
     acc.power(false);
