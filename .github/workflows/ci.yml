@@ -75,3 +75,37 @@ jobs:
         with:
           name: stand-firmware
           path: out/stand-*.bin
+
+  keychain:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-nrf-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: PlatformIO
+        run: pip install platformio
+
+      - name: Прошивка платы rev B (nRF52840)
+        run: pio run -d firmware -e keychain
+
+      - name: Файлы прошивки и загрузчик
+        run: |
+          mkdir -p out
+          cp firmware/.pio/build/keychain/firmware.hex out/keychain-revb.hex
+          cp firmware/.pio/build/keychain/firmware.uf2 out/keychain-revb.uf2
+          cp firmware/.pio/build/keychain/firmware.zip out/keychain-revb-dfu.zip
+          cp firmware/bootloader/*.hex out/
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keychain-firmware
+          path: out/*

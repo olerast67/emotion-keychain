@@ -114,8 +114,10 @@ class TempSensor {
 // Батарея: напряжение ячейки → проценты, события заряда и разряда.
 class BatterySensor {
  public:
-  // volts — напряжение ячейки; usb — есть питание USB; charging — зарядник заряжает.
+  // volts — напряжение питания системы: без USB это ячейка, от USB — само USB, и тогда
+  // оно не учитывается. usb — есть питание USB; charging — зарядник заряжает.
   int feed(float volts, bool usb, bool charging, uint32_t now_ms, Event out[kSenseEvents]);
+  // Заряд по последнему измерению без USB; −1 — ещё не измерен.
   int percent() const { return pct_; }
   float volts() const { return v_; }
   // Пора выключаться: ячейка почти пуста, USB нет.
@@ -123,7 +125,7 @@ class BatterySensor {
   static int percent_of(float volts);
 
  private:
-  bool init_ = false;
+  bool init_ = false, have_v_ = false;
   float v_ = 0;
   int pct_ = -1;
   bool usb_ = false, charging_ = false, was_charging_ = false;

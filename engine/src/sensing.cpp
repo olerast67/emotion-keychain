@@ -299,16 +299,21 @@ int BatterySensor::percent_of(float v) {
 int BatterySensor::feed(float volts, bool usb, bool charging, uint32_t now, Event out[kSenseEvents]) {
   int n = 0;
   if (!finitef(volts)) return 0;
-  // Медленный фильтр: моторчик и радио дают провалы напряжения.
-  v_ = init_ ? v_ + (volts - v_) * 0.2f : volts;
-  // Во время заряда ячейка показывает выше настоящего: поправка на ток заряда.
-  const int pct = percent_of(charging ? v_ - 0.12f : v_);
-  pct_ = init_ && !usb ? (pct < pct_ ? pct : pct_) : pct;  // без USB заряд не растёт от шумов
+  // От USB процессор видит напряжение USB, а не ячейки: заряд меряется только без USB.
+  if (!usb) {
+    if (usb_ || !have_v_) {
+      v_ = volts;  // отключили USB или первое измерение: начинаем заново
+      pct_ = -1;
+      have_v_ = true;
+    }
+    v_ += (volts - v_) * 0.2f;  // моторчик и радио дают провалы напряжения
+    const int pct = percent_of(v_);
+    pct_ = pct_ < 0 || pct < pct_ ? pct : pct_;  // без USB заряд не растёт от шумов
+  }
   if (!init_) {
     init_ = true;
-    usb_ = usb, charging_ = charging;
+    usb_ = usb, charging_ = charging, was_charging_ = charging;
     if (usb && charging) push(out, n, Event::charge_start);
-    was_charging_ = charging;
     return n;
   }
   if (usb && charging && !(usb_ && charging_)) push(out, n, Event::charge_start);
@@ -324,11 +329,11 @@ int BatterySensor::feed(float volts, bool usb, bool charging, uint32_t now, Even
     empty_since_ = 0;
     return n;
   }
-  if (pct_ <= 15 && !low_said_) {
+  if (pct_ >= 0 && pct_ <= 15 && !low_said_) {
     low_said_ = true;
     push(out, n, Event::battery_low);
   }
-  if (pct_ <= 5 && !critical_said_) {
+  if (pct_ >= 0 && pct_ <= 5 && !critical_said_) {
     critical_said_ = true;
     push(out, n, Event::battery_critical);
   }

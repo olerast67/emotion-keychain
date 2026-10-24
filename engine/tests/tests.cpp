@@ -2078,8 +2078,10 @@ static void test_battery_sensing() {
   }
   CHECK(low == 1 && crit == 1, "разряд: «мало» и «почти пусто» по разу (%d, %d)", low, crit);
   CHECK(b.empty(), "ниже 3.35 В дольше минуты — пора выключаться");
-  b.feed(3.3f, true, true, 200000, ev);
+  const int before = b.percent();
+  b.feed(4.9f, true, true, 200000, ev);
   CHECK(!b.empty(), "подключили USB — не выключаемся");
+  CHECK(b.percent() == before, "от USB напряжение USB не принимается за заряд ячейки");
 }
 
 int main() {
