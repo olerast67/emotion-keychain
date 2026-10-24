@@ -75,11 +75,12 @@ uint64_t chip_serial = 0;
 Progress progress, progress_saved;
 Friends friends, friends_saved;
 Settings cfg, cfg_saved;
-uint32_t last_save = 0;
+uint32_t last_save = 0, last_cfg_try = 0;
 
 bool have_oled = false, oled_full = false, screen_on = true;
 uint8_t shown_contrast = 0;
-uint32_t oled_retry_at = 0;
+uint32_t oled_retry_at = 0, oled_retry_ms = 2000;
+bool dark_timing = false;  // экран в темноте: с dark_since
 uint32_t dark_since = 0;
 
 uint64_t uptime = 0;
@@ -92,9 +93,11 @@ bool powering_off = false;
 bool tap_wait = false;  // одиночное касание ждёт, не окажется ли оно двойным
 uint32_t tap_wait_at = 0;
 bool off_scene_seen = false;  // сцена «спокойной ночи» уже пошла
+bool off_timing = false;
 uint32_t off_at = 0;
 uint32_t charge_t0 = 0;
 int charge_pct0 = -1;
+bool charged_full = false;  // с этого подключения USB ячейка уже заряжалась до конца
 
 bool verbose = false;
 char line[64];
@@ -116,7 +119,7 @@ void event(Event e, uint32_t now) {
   if (verbose) Serial.printf("Событие: %s\n", event_id(e));
   // Касание или кнопка в темноте показывают лицо ещё на две минуты.
   if (e == Event::tap || e == Event::double_tap || e == Event::button) {
-    if (dark_since) dark_since = now | 1u;
+    if (dark_timing) dark_since = now;
     if (!screen_on) screen_power(true, now);
   }
   bh.on_event(e, now);
@@ -125,22 +128,55 @@ void event(Event e, uint32_t now) {
 // ---------------------------------------------------------------- флеш
 
 void save_all(uint32_t now, bool force) {
-  if (force || memcmp(&progress, &progress_saved, offsetof(Progress, crc)) != 0) {
+  // Флеш выдерживает ограниченное число стираний, а встречи может подстроить кто угодно
+  // по радио: рост и знакомые пишутся не чаще раза в минуту. Сразу — только новые
+  // эмоции (их немного: награды за встречи ограничены за день) и по force.
+  const bool due = force || now - last_save >= 60000u;
+  bool wrote = false;
+  if (memcmp(&progress, &progress_saved, offsetof(Progress, crc)) != 0) {
     const bool unlocks = progress.implant != progress_saved.implant || progress.flags != progress_saved.flags ||
                          memcmp(progress.extra, progress_saved.extra, sizeof progress.extra) != 0;
-    if (force || unlocks || now - last_save >= 60000u) {
+    if (due || unlocks) {
       progress.seal();
       if (storage::save("progress", &progress, sizeof progress)) progress_saved = progress;
-      last_save = now;
+      wrote = true;
     }
   }
-  if (memcmp(&friends, &friends_saved, offsetof(Friends, crc)) != 0) {
+  if (due && memcmp(&friends, &friends_saved, offsetof(Friends, crc)) != 0) {
     friends.seal();
     if (storage::save("friends", &friends, sizeof friends)) friends_saved = friends;
+    wrote = true;
   }
-  if (memcmp(&cfg, &cfg_saved, sizeof cfg) != 0) {
+  if (wrote) last_save = now;  // и при ошибке записи: повтор через минуту, а не каждый проход
+  if (memcmp(&cfg, &cfg_saved, sizeof cfg) != 0 && (force || now - last_cfg_try >= 5000u)) {
+    last_cfg_try = now;
     if (storage::save("settings", &cfg, sizeof cfg)) cfg_saved = cfg;
   }
+}
+
+int days_in_month(int y, int m) {
+  static const uint8_t kDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if (m < 1 || m > 12) return 31;
+  const bool leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+  return m == 2 && leap ? 29 : kDays[m - 1];
+}
+
+// Настройки из флеша: чужая версия или значения вне диапазона — заводские для этого поля.
+bool settings_ok(const Settings& s) { return s.magic == Settings{}.magic && s.version == Settings{}.version; }
+
+void sanitize(Settings& s) {
+  const Settings d;
+  if (s.theme >= (uint8_t)Theme::Count) s.theme = d.theme;
+  s.sound = s.sound ? 1 : 0;
+  s.duel_ready = s.duel_ready ? 1 : 0;
+  s.ghost = s.ghost ? 1 : 0;
+  if (s.bday_m < 1 || s.bday_m > 12 || s.bday_d < 1 || s.bday_d > days_in_month(2000, s.bday_m))
+    s.bday_m = s.bday_d = 0;
+  if (s.year && (s.year < 2000 || s.year > 2099 || s.month < 1 || s.month > 12 || s.day < 1 ||
+                 s.day > days_in_month(s.year, s.month)))
+    s.year = 0, s.month = 0, s.day = 0;
+  if (s.clock_min >= 1440) s.clock_min = d.clock_min, s.clock_known = 0;
+  s.clock_known = s.clock_known ? 1 : 0;
 }
 
 void load_all() {
@@ -153,7 +189,10 @@ void load_all() {
   if (!(fn == (int)sizeof(Friends) && friends.load(fblob, (uint32_t)fn))) friends.reset();
   friends_saved = friends;
   Settings s;
-  if (storage::load("settings", &s, sizeof s) == (int)sizeof s && s.magic == Settings{}.magic) cfg = s;
+  if (storage::load("settings", &s, sizeof s) == (int)sizeof s && settings_ok(s)) {
+    sanitize(s);
+    cfg = s;
+  }
   cfg_saved = cfg;
 }
 
@@ -243,11 +282,8 @@ void set_duel_ready(bool on, uint32_t now) {
 // ---------------------------------------------------------------- часы и сутки
 
 void advance_date() {
-  static const uint8_t kDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
   if (!cfg.year) return;
-  const bool leap = (cfg.year % 4 == 0 && cfg.year % 100 != 0) || cfg.year % 400 == 0;
-  const uint8_t dim = cfg.month == 2 && leap ? 29 : kDays[(cfg.month + 11) % 12];
-  if (++cfg.day > dim) {
+  if (++cfg.day > days_in_month(cfg.year, cfg.month)) {
     cfg.day = 1;
     if (++cfg.month > 12) cfg.month = 1, ++cfg.year;
   }
@@ -357,18 +393,24 @@ void poll_battery(uint32_t now) {
   const bool chg = hal::charging();
   Event ev[kSenseEvents];
   const int n = battery.feed(hal::vsys_volts(), usb, chg, now, ev);
+  if (!usb) charged_full = false, charge_pct0 = -1;
   for (int i = 0; i < n; ++i) {
-    if (ev[i] == Event::charge_start) charge_t0 = now, charge_pct0 = battery.percent() < 0 ? 20 : battery.percent();
+    if (ev[i] == Event::charge_full) charged_full = true;
+    // Подзарядка после полного заряда начинается почти со 100 %, а не с заряда до USB.
+    // Включились уже на USB — заряд до него неизвестен.
+    if (ev[i] == Event::charge_start && !charged_full) charge_t0 = now, charge_pct0 = battery.percent();
     event(ev[i], now);
   }
   // От USB заряд ячейки не измерить: оценка по времени заряда током 100 мА.
   int pct = battery.percent();
   if (usb) {
-    if (!chg)
+    if (charged_full)
       pct = 100;
-    else if (charge_pct0 >= 0) {
+    else if (chg && charge_pct0 >= 0) {
       const int est = charge_pct0 + (int)((now - charge_t0) / 60000u * 2u / 3u);  // ~0.7 % в минуту
       pct = est > 99 ? 99 : est;
+    } else {
+      pct = -1;  // заряд неизвестен (или статус зарядника ещё не установился)
     }
   }
   bh.set_battery_percent(pct);
@@ -395,7 +437,7 @@ void poll_radio(uint32_t now) {
   radio::Pace pace = radio::Pace::Normal;
   if (powering_off)
     pace = radio::Pace::Off;
-  else if (enc.pending() || enc.nearby(now))
+  else if (enc.wants_busy(now))
     pace = radio::Pace::Busy;
   else if (bh.brightness() != Brightness::Normal)
     pace = radio::Pace::Night;
@@ -419,7 +461,8 @@ void poll_radio(uint32_t now) {
     static const uint16_t kHello[] = {80, 120, 80};
     hal::vibrate(kHello, 3);
   }
-  save_all(now, true);
+  // Без force: встречу может подстроить кто угодно, запись — по общему правилу save_all.
+  save_all(now, false);
 }
 
 // ---------------------------------------------------------------- кнопка
@@ -555,7 +598,7 @@ void command(char* s, uint32_t now) {
     int y = 0, mo = 0, d = 0;
     char tail = 0;
     if (!arg || sscanf(arg, "%d-%d-%d%c", &y, &mo, &d, &tail) != 3 || y < 2000 || y > 2099 || mo < 1 || mo > 12 ||
-        d < 1 || d > 31)
+        d < 1 || d > days_in_month(y, mo))
       return (void)Serial.println("Формат: date 2026-12-31");
     cfg.year = (uint16_t)y, cfg.month = (uint8_t)mo, cfg.day = (uint8_t)d;
     bh.set_date(cfg.year, cfg.month, cfg.day);
@@ -565,7 +608,8 @@ void command(char* s, uint32_t now) {
   if (!strcmp(s, "bday")) {
     int mo = 0, d = 0;
     char tail = 0;
-    if (!arg || sscanf(arg, "%d-%d%c", &mo, &d, &tail) != 2 || mo < 1 || mo > 12 || d < 1 || d > 31)
+    if (!arg || sscanf(arg, "%d-%d%c", &mo, &d, &tail) != 2 || mo < 1 || mo > 12 || d < 1 ||
+        d > days_in_month(2000, mo))
       return (void)Serial.println("Формат: bday 05-14");
     cfg.bday_m = (uint8_t)mo, cfg.bday_d = (uint8_t)d;
     bh.set_birthday(cfg.bday_m, cfg.bday_d);
@@ -673,6 +717,9 @@ void setup() {
   Wire.setClock(400000);
   storage::begin();
   load_all();
+  // Часов реального времени у платы нет: после выключения неизвестно, сколько прошло.
+  const bool clock_lost = !hal::warm_reset() && (cfg.clock_known || cfg.year);
+  if (!hal::warm_reset()) cfg.clock_known = 0, cfg.year = 0, cfg.month = 0, cfg.day = 0;
 
   const uint32_t now = millis();
   uptime = uptime_ms(now);
@@ -705,6 +752,7 @@ void setup() {
   Serial.printf("\nБрелок с эмоциями, плата rev B. Экран %s, акселерометр %s, свет %s\n", have_oled ? "есть" : "нет",
                 acc.ok() ? "есть" : "нет", als.ok() ? "есть" : "нет");
   print_me();
+  if (clock_lost) Serial.println("После выключения время и дата сброшены: задайте их командами t и date");
 }
 
 void loop() {
@@ -713,8 +761,13 @@ void loop() {
   hal::watchdog_feed();
 
   if (screen_on && !have_oled && time_reached(now, oled_retry_at)) {
-    oled_retry_at = now + 2000;
-    start_oled();
+    // Экран не отвечает: повторы всё реже (до минуты) — каждый стоит 40 мс и тайм-ауты шины.
+    if (start_oled()) {
+      oled_retry_ms = 2000;
+    } else {
+      oled_retry_ms = oled_retry_ms < 30000 ? oled_retry_ms * 2 : 60000;
+      oled_retry_at = now + oled_retry_ms;
+    }
   }
   poll_serial(now);
   poll_button(now);
@@ -741,10 +794,10 @@ void loop() {
   }
   // В кармане дольше двух минут — экран обесточен; свет, касание или кнопка его вернут.
   if (bh.brightness() == Brightness::Dark && eng.scene() == Scene::None) {
-    if (!dark_since) dark_since = now | 1u;
+    if (!dark_timing) dark_timing = true, dark_since = now;
     if (screen_on && now - dark_since > kDarkScreenOffMs) screen_power(false, now);
   } else {
-    dark_since = 0;
+    dark_timing = false;
     if (!screen_on) screen_power(true, now);
   }
 
@@ -752,7 +805,7 @@ void loop() {
   hal::vibro_update(now);
 
   // Выключение: дождаться конца сцены «спокойной ночи», сохранить всё и уснуть.
-  if (powering_off && !off_at) off_at = now | 1u;
+  if (powering_off && !off_timing) off_timing = true, off_at = now;
   if (powering_off && eng.scene() != Scene::None) off_scene_seen = true;
   if (powering_off && ((off_scene_seen && eng.scene() == Scene::None && !voice.busy(now)) || now - off_at > 15000)) {
     save_all(now, true);

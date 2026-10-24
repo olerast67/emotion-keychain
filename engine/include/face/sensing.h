@@ -41,6 +41,7 @@ class MotionSensor {
   uint32_t last_ms_ = 0;
   // падение и удар
   uint32_t fall_since_ = 0;
+  bool fall_timing_ = false;
   bool falling_ = false;
   uint32_t fall_at_ = 0;
   uint32_t impact_quiet_until_ = 0;
@@ -55,6 +56,7 @@ class MotionSensor {
   uint32_t step_last_ = 0;
   uint32_t step_times_[8] = {};
   int step_n_ = 0;
+  uint8_t steps_held_ = 0;  // шаги, ещё не засчитанные: ходьба пока не подтвердилась
   uint32_t steps_new_ = 0, steps_total_ = 0;
   uint8_t gait_ = 0;  // 0 — стоит, 1 — идёт, 2 — бежит
   uint32_t gait_said_ = 0;
@@ -62,6 +64,7 @@ class MotionSensor {
   uint32_t calm_since_ = 0;
   bool still_ = false;
   uint32_t flip_since_ = 0;
+  bool flip_timing_ = false;
   bool upside_ = false;
   // рывок
   bool jerk_ = false;
@@ -79,7 +82,8 @@ class SoundSensor {
  private:
   bool init_ = false;
   float floor_ = -60.0f;  // фон: медленно поднимается, быстро опускается
-  float prev_ = -90.0f;
+  float prev_ = -90.0f, prev2_ = -90.0f;
+  uint32_t last_ = 0;
   uint32_t loud_quiet_until_ = 0;
   // окно 4 с: доля блоков со звуком и число «слогов» — всплесков громкости
   uint32_t win_t0_ = 0;
@@ -131,6 +135,7 @@ class BatterySensor {
   bool usb_ = false, charging_ = false, was_charging_ = false;
   bool low_said_ = false, critical_said_ = false, empty_ = false;
   uint32_t empty_since_ = 0;
+  bool empty_timing_ = false;
 };
 
 }  // namespace face

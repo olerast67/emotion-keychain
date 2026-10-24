@@ -12,7 +12,14 @@ namespace hal {
 
 // ---------------------------------------------------------------- питание
 
+namespace {
+uint32_t reset_cause = 0;
+}
+
 void power_init() {
+  // Причина сброса копится в регистре, пока её не сотрут; загрузчик её не трогает.
+  reset_cause = NRF_POWER->RESETREAS;
+  NRF_POWER->RESETREAS = 0xFFFFFFFFu;
   // REG0 модуля по умолчанию даёт 1.8 В: при нём экран и датчики не работают. Значение
   // хранится в UICR и пишется один раз; новое значение действует после перезагрузки.
   // Пишется только поверх заводского значения: бит во флеше без стирания можно лишь сбросить,
@@ -37,6 +44,14 @@ void power_init() {
   pinMode(board::kChgIo, INPUT);
   // У делителя VDDH/5 большое сопротивление: замеру нужно время выборки побольше.
   analogSampleTime(40);
+}
+
+bool warm_reset() {
+  const uint32_t warm = POWER_RESETREAS_DOG_Msk | POWER_RESETREAS_SREQ_Msk | POWER_RESETREAS_LOCKUP_Msk |
+                        POWER_RESETREAS_RESETPIN_Msk;
+  const uint32_t woke = POWER_RESETREAS_OFF_Msk | POWER_RESETREAS_LPCOMP_Msk | POWER_RESETREAS_DIF_Msk |
+                        POWER_RESETREAS_VBUS_Msk;
+  return (reset_cause & warm) && !(reset_cause & woke);
 }
 
 float vsys_volts() {
@@ -131,7 +146,7 @@ void buzzer(uint16_t hz, bool soft) {
     return;
   }
   const uint32_t top = 4000000u / hz;
-  NRF_PWM3->COUNTERTOP = top > 32767u ? 32767u : top;
+  NRF_PWM3->COUNTERTOP = top > 32767u ? 32767u : top < 3u ? 3u : top;  // допустимо 3…32767
   const uint16_t half = (uint16_t)(NRF_PWM3->COUNTERTOP / 2);
   if (soft) {
     seq[0] = (uint16_t)(NRF_PWM3->COUNTERTOP / 8);  // узкий импульс на одном выводе
@@ -160,6 +175,7 @@ void vibro_begin() {
 }
 
 void vibrate(const uint16_t* pattern, int n) {
+  if (!pattern || n <= 0) return;
   vib_p = pattern, vib_n = n, vib_i = 0;
   vib_started = false;
 }

@@ -35,6 +35,8 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
     last_ms_ = now;
     calm_since_ = now;
   }
+  // Время не идёт назад: метки пачки FIFO могут чуть заходить за прошлую.
+  if ((int32_t)(now - last_ms_) < 0) now = last_ms_;
   const uint32_t dt = now - last_ms_ > 1000u ? 1000u : now - last_ms_;
   last_ms_ = now;
   // Гравитация — медленный фильтр с постоянной ~0.4 с.
@@ -52,20 +54,23 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
 
   // Падение: невесомость дольше kFallMs, потом, скорее всего, удар.
   if (mag < kFallG) {
-    if (!fall_since_) fall_since_ = now | 1u;
+    if (!fall_timing_) fall_timing_ = true, fall_since_ = now;
     if (!falling_ && now - fall_since_ >= kFallMs) {
       falling_ = true;
       fall_at_ = now;
       push(out, n, Event::free_fall);
     }
   } else {
-    fall_since_ = 0;
+    fall_timing_ = false;
   }
-  if (mag > kImpactG && time_reached(now, impact_quiet_until_)) {
+  // Удар — после падения или вне тряски: сильная тряска тоже даёт пики больше 2.8 g.
+  if (mag > kImpactG && (falling_ || shake_n_ < 2) && time_reached(now, impact_quiet_until_)) {
     impact_quiet_until_ = now + 1000;
     falling_ = false;
     push(out, n, Event::impact);
     shake_n_ = 0;  // удар — не тряска
+    shake_peak_ = 0;
+    shake_quiet_until_ = now + 1500;  // отскоки после удара — тоже не тряска
   } else if (falling_ && now - fall_at_ > 1500) {
     falling_ = false;  // поймали, удара не было
   }
@@ -77,8 +82,8 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
     if (sign != last_peak_sign_) {
       last_peak_sign_ = sign;
       if (shake_n_ < 8) shake_t_[shake_n_++] = now;
-      if (dyn > shake_peak_) shake_peak_ = dyn;
     }
+    if (dyn > shake_peak_) shake_peak_ = dyn;  // сила — по всему размаху, не по моменту смены знака
   }
   while (shake_n_ && now - shake_t_[0] > kShakeWindow) {
     for (int i = 1; i < shake_n_; ++i) shake_t_[i - 1] = shake_t_[i];
@@ -102,7 +107,8 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
 
   // Шаги: всплески |a| − 1 g с гистерезисом и минимальным шагом по времени.
   const float vert = mag - 1.0f;
-  if (!step_high_ && vert > kStepHi && dyn < 1.5f && now - step_last_ >= kStepMin) {
+  const bool shaking = shake_n_ >= 2 || !time_reached(now, shake_quiet_until_);
+  if (!step_high_ && vert > kStepHi && dyn < 1.5f && !shaking && now - step_last_ >= kStepMin) {
     step_high_ = true;
     step_last_ = now;
     if (step_n_ == 8) {
@@ -110,6 +116,11 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
       --step_n_;
     }
     step_times_[step_n_++] = now;
+    // Каждый шаг засчитывается один раз: сразу, если ходьба уже идёт, иначе — когда подтвердится.
+    if (gait_)
+      ++steps_new_, ++steps_total_;
+    else if (steps_held_ < 8)
+      ++steps_held_;
   } else if (step_high_ && vert < kStepLo) {
     step_high_ = false;
   }
@@ -117,18 +128,24 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
     for (int i = 1; i < step_n_; ++i) step_times_[i - 1] = step_times_[i];
     --step_n_;
   }
-  // Шаг засчитывается, когда за 4 с их хотя бы пять: так не считаются случайные толчки.
-  uint8_t gait = 0;
+  if (steps_held_ > step_n_) steps_held_ = (uint8_t)step_n_;  // старые толчки ушли из окна
+  // Ходьба — когда за 4 с хотя бы пять шагов: так не считаются случайные толчки. Кончается,
+  // когда шагов нет 2.5 с: медленная походка не «мигает».
+  uint8_t gait = gait_;
   if (step_n_ >= 5) {
     const float span = (float)(step_times_[step_n_ - 1] - step_times_[0]) / 1000.0f;
     const float hz = span > 0.0f ? (float)(step_n_ - 1) / span : 0.0f;
     gait = hz > 2.6f ? 2 : 1;
-    if (step_last_ == now) ++steps_new_, ++steps_total_;
+  } else if (gait_ && now - step_last_ > 2500) {
+    gait = 0;
+  } else if (!gait_) {
+    gait = 0;
   }
   if (gait != gait_) {
     if (gait && !gait_) {  // пошёл: засчитываем и первые шаги, по которым это стало ясно
-      steps_new_ += (uint32_t)(step_n_ - 1);
-      steps_total_ += (uint32_t)(step_n_ - 1);
+      steps_new_ += steps_held_;
+      steps_total_ += steps_held_;
+      steps_held_ = 0;
     }
     if (gait && (gait > gait_ || now - gait_said_ > 30000)) push(out, n, gait == 2 ? Event::run : Event::walk);
     if (gait) gait_said_ = now;
@@ -150,14 +167,14 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
   // Вверх ногами: гравитация смотрит в верх экрана дольше секунды.
   const bool flipped = gy_ < -0.6f, normal = gy_ > 0.6f;
   if (flipped != upside_ && (flipped || normal)) {
-    if (!flip_since_) flip_since_ = now | 1u;
+    if (!flip_timing_) flip_timing_ = true, flip_since_ = now;
     if (now - flip_since_ >= 1000) {
       upside_ = flipped;
-      flip_since_ = 0;
+      flip_timing_ = false;
       push(out, n, flipped ? Event::upside_down : Event::upright);
     }
   } else {
-    flip_since_ = 0;
+    flip_timing_ = false;
   }
   return n;
 }
@@ -184,16 +201,33 @@ int SoundSensor::feed(float db, uint32_t now, Event out[kSenseEvents]) {
   if (!init_) {
     init_ = true;
     floor_ = db;
-    prev_ = db;
+    prev_ = prev2_ = db;
     win_t0_ = now;
     silent_since_ = now;
+    last_ = now;
   }
-  // Фон: быстро вниз, медленно вверх — так речь и музыка не поднимают его.
-  floor_ = db < floor_ ? floor_ + (db - floor_) * 0.3f : floor_ + (db - floor_) * 0.002f;
+  // Микрофон был выключен (темнота, экорежим): старое окно и «тишина с тех пор» не в счёт.
+  if (now - last_ > 1000) {
+    win_t0_ = now;
+    win_blocks_ = win_active_ = win_onsets_ = 0;
+    silent_since_ = now;
+    active_ = false;
+    prev_ = prev2_ = db;
+  }
+  last_ = now;
+  // Фон: быстро вниз, медленно вверх. Пока звук заметно громче фона, он растёт вдесятеро
+  // медленнее (минуты): иначе ровная музыка через полминуты стала бы для брелока тишиной,
+  // а постоянный шум всё же со временем становится фоном.
+  const bool loud_now = db - floor_ > 10.0f;
+  if (db < floor_)
+    floor_ += (db - floor_) * 0.3f;
+  else
+    floor_ += (db - floor_) * (loud_now ? 0.0002f : 0.002f);
   const float above = db - floor_;
 
-  // Хлопок или грохот: резкий скачок громкости над фоном.
-  if (db > -25.0f && db - prev_ > 18.0f && above > 25.0f && time_reached(now, loud_quiet_until_)) {
+  // Хлопок или грохот: резкий скачок громкости над фоном (бывает, что он делится на два блока).
+  const float before = prev_ < prev2_ ? prev_ : prev2_;
+  if (db > -25.0f && db - before > 18.0f && above > 25.0f && time_reached(now, loud_quiet_until_)) {
     loud_quiet_until_ = now + 3000;
     push(out, n, Event::loud);
   }
@@ -204,6 +238,7 @@ int SoundSensor::feed(float db, uint32_t now, Event out[kSenseEvents]) {
   win_active_ += active;
   if (active && !active_) ++win_onsets_;
   active_ = active;
+  prev2_ = prev_;
   prev_ = db;
   if (active) silent_since_ = now;
 
@@ -326,7 +361,7 @@ int BatterySensor::feed(float volts, bool usb, bool charging, uint32_t now, Even
   if (usb) {
     low_said_ = critical_said_ = false;
     empty_ = false;
-    empty_since_ = 0;
+    empty_timing_ = false;
     return n;
   }
   if (pct_ >= 0 && pct_ <= 15 && !low_said_) {
@@ -339,10 +374,10 @@ int BatterySensor::feed(float volts, bool usb, bool charging, uint32_t now, Even
   }
   // Пусто: ниже 3.35 В дольше минуты — пора спать, пока ячейка цела.
   if (v_ < 3.35f) {
-    if (!empty_since_) empty_since_ = now | 1u;
+    if (!empty_timing_) empty_timing_ = true, empty_since_ = now;
     if (now - empty_since_ > 60000) empty_ = true;
   } else {
-    empty_since_ = 0;
+    empty_timing_ = false;
   }
   return n;
 }

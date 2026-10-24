@@ -1925,6 +1925,127 @@ static void test_encounter_rules() {
   CHECK(c.nearby(75100) == 1, "сосед в памяти");
 }
 
+
+// Чужой передатчик шлёт какие угодно пакеты: сцены, награды и режим эфира от этого
+// не должны зависеть сильнее, чем от настоящего соседа.
+static void test_encounter_attacks() {
+  const uint32_t me = 0x80000000u;
+  Advert fake;
+  fake.hash = 1;  // всегда меньше: «объявляет» он
+  fake.countdown = 1;
+  fake.to = (uint16_t)(me & 0xFFFF);
+  fake.flags = kAdvDuelReady | kAdvDuelCalled;
+  {
+    Encounters e;
+    e.init(me);
+    e.set_self(0, 0, 128);  // дуэли выключены
+    for (uint32_t t = 0; t < 20000; t += 200) {
+      fake.hash = 1 + t / 200;  // каждый раз новый позывной
+      e.on_advert(fake, -40, t);
+    }
+    CHECK(!e.pending(), "объявление сцены от неслыханного соседа не принимается");
+  }
+  {
+    Encounters e;
+    e.init(me);
+    e.set_self(0, 0, 128);
+    fake.hash = 7;
+    Advert plain = fake;
+    plain.countdown = 0, plain.to = 0;
+    e.on_advert(plain, -60, 0);  // сначала обычный пакет вблизи
+    e.on_advert(fake, -60, 500);
+    Meeting m;
+    bool got = false;
+    for (uint32_t t = 500; t < 3000; t += 50) got |= e.poll(t, &m);
+    CHECK(got && m.kind == Rendezvous::Greet, "дуэль без моего согласия не начинается — только приветствие (%d)",
+          (int)m.kind);
+  }
+  {
+    Encounters e;
+    e.init(me);
+    e.set_self(0, kAdvDuelReady, 128);
+    Advert plain;
+    plain.hash = 9;
+    e.on_advert(plain, -60, 0);
+    Advert cd = plain;
+    cd.to = (uint16_t)(me & 0xFFFF);
+    cd.countdown = 255;
+    e.on_advert(cd, -60, 100);
+    CHECK(!e.pending(), "отсчёт на 25 с — подделка, не принимается");
+    cd.countdown = 15;
+    e.on_advert(cd, -60, 100);
+    CHECK(e.pending(), "обычный отсчёт принимается");
+    Meeting m;
+    bool got = false;
+    uint32_t at = 0;
+    for (uint32_t t = 100; t < 4000; t += 50) {
+      cd.countdown = 15;  // пытается откладывать начало
+      e.on_advert(cd, -60, t);
+      if (!got && e.poll(t, &m)) got = true, at = t;
+    }
+    CHECK(got && at <= 1650, "начало нельзя отложить повторными пакетами: %u мс", (unsigned)at);
+    CHECK(!e.wants_busy(at + 100), "после встречи сосед в перерыве — эфир не слушаем чаще");
+    // 20 выдуманных соседей не сбрасывают перерыв настоящему.
+    for (uint32_t i = 0; i < 20; ++i) {
+      Advert f;
+      f.hash = 1000 + i;
+      e.on_advert(f, -50, at + 200 + i * 10);
+    }
+    bool again = false;
+    for (uint32_t t = at + 1000; t < at + 30000; t += 1000) {
+      e.on_advert(plain, -60, t);
+      again |= e.poll(t, &m) && m.peer == 9;
+    }
+    CHECK(!again, "поток выдуманных позывных не сбрасывает перерыв соседу");
+  }
+  {
+    Encounters e;
+    e.init(me);
+    Advert big;
+    big.hash = 5;
+    big.level = 255;
+    e.on_advert(big, -50, 0);
+    e.on_advert(big, -50, 1000);
+    CHECK(e.nearby(1000) == 0, "уровень больше числа имплантов — пакет отбрасывается");
+  }
+}
+
+static void test_encounter_rewards_capped() {
+  Progress p;
+  p.reset();
+  int counted = 0;
+  for (int i = 0; i < 20; ++i) counted += p.met_friend(true) >= -1 && p.friends > (uint16_t)counted;
+  CHECK(p.friends == XpRules{}.new_friends_day_cap, "новых друзей в счётчике за день не больше лимита: %u",
+        (unsigned)p.friends);
+  Rng rng(7);
+  int prizes = 0, gifts = 0;
+  for (int i = 0; i < 10; ++i) {
+    prizes += p.duel_prize(rng) != Expr::Count;
+    gifts += p.gift(rng) != Expr::Count;
+  }
+  CHECK(prizes == XpRules{}.duel_prizes_day_cap && gifts == XpRules{}.gifts_day_cap,
+        "эмоций из дуэлей и подарков за день — по лимиту (%d, %d)", prizes, gifts);
+  p.new_day();
+  CHECK(p.duel_prize(rng) != Expr::Count, "на следующий день награды снова есть");
+  p.seal();
+  Progress q;
+  CHECK(q.load(&p, sizeof p) && q.today_duel_prizes == 1, "счётчики наград переживают перезагрузку");
+
+  Friends f;
+  f.reset();
+  for (uint32_t i = 0; i < Friends::kSlots; ++i) {
+    f.meet(100 + i, 1);
+    f.meet(100 + i, 2);  // крепкие друзья: два дня
+  }
+  for (uint32_t i = 0; i < 50; ++i) f.meet(5000 + i, 3);
+  int kept = 0;
+  for (uint32_t i = 0; i < Friends::kSlots; ++i) kept += f.level(100 + i) >= 0;
+  CHECK(kept == Friends::kSlots, "поток новых брелоков не вытесняет крепких друзей: осталось %d", kept);
+  f.meet(9999, 40);  // через месяц старых друзей можно вытеснить
+  CHECK(f.level(9999) >= 0, "через месяц без встреч место освобождается");
+}
+
+
 // ---------------------------------------------------------------- датчики
 
 static int sense_count(const Event* ev, int n, Event e) {
@@ -2070,18 +2191,112 @@ static void test_battery_sensing() {
   stop += sense_count(ev, b.feed(4.15f, false, false, 3000, ev), Event::charge_stop);
   CHECK(start == 1 && full == 1 && stop == 1, "зарядка: начало, полная, отключили (%d %d %d)", start, full, stop);
   int low = 0, crit = 0;
-  for (uint32_t t = 4000; t < 200000; t += 1000) {
-    const float v = 3.75f - (float)(t - 4000) / 196000.0f * 0.5f;
+  bool early = false;
+  uint32_t below_at = 0;
+  for (uint32_t t = 4000; t < 300000; t += 1000) {
+    const float v = t < 200000 ? 3.75f - (float)(t - 4000) / 196000.0f * 0.5f : 3.25f;
     const int n = b.feed(v, false, false, t, ev);
     low += sense_count(ev, n, Event::battery_low);
     crit += sense_count(ev, n, Event::battery_critical);
+    if (!below_at && b.volts() < 3.35f) below_at = t;
+    if (b.empty() && t - below_at < 60000) early = true;
   }
   CHECK(low == 1 && crit == 1, "разряд: «мало» и «почти пусто» по разу (%d, %d)", low, crit);
   CHECK(b.empty(), "ниже 3.35 В дольше минуты — пора выключаться");
+  CHECK(!early, "пустая ячейка — только через минуту ниже порога, не сразу");
+  {
+    // Чётные метки времени: ожидание не должно проскакивать (метка «now | 1» была в будущем).
+    BatterySensor q;
+    q.feed(3.30f, false, false, 1000, ev);
+    q.feed(3.30f, false, false, 2000, ev);
+    CHECK(!q.empty(), "провал напряжения на секунду — не выключение");
+  }
   const int before = b.percent();
-  b.feed(4.9f, true, true, 200000, ev);
+  b.feed(4.9f, true, true, 300000, ev);
   CHECK(!b.empty(), "подключили USB — не выключаемся");
   CHECK(b.percent() == before, "от USB напряжение USB не принимается за заряд ячейки");
+}
+static void test_sensing_timing() {
+  Event ev[kSenseEvents];
+  {
+    MotionSensor m;
+    for (uint32_t t = 0; t < 1000; t += 10) m.feed(0.0f, 1.0f, 0.0f, t, ev);
+    int fall = sense_count(ev, m.feed(0.0f, 0.2f, 0.0f, 2000, ev), Event::free_fall);
+    fall += sense_count(ev, m.feed(0.0f, 1.0f, 0.0f, 2010, ev), Event::free_fall);
+    CHECK(fall == 0, "один отсчёт невесомости при чётном времени — не падение");
+    int up = 0;
+    up += sense_count(ev, m.feed(0.0f, -1.0f, 0.0f, 3000, ev), Event::upside_down);
+    for (uint32_t t = 3010; t < 3200; t += 10) up += sense_count(ev, m.feed(0.0f, -1.0f, 0.0f, t, ev), Event::upside_down);
+    CHECK(up == 0, "перевернули на 0.2 с — ещё не вверх ногами");
+  }
+  {
+    // Медленная ходьба: шаг раз в 0.9 с. Каждый шаг считается один раз, ходьба не «мигает».
+    MotionSensor m;
+    int walk = 0;
+    uint32_t t = 0;
+    for (; t < 1000; t += 10) m.feed(0.0f, 1.0f, 0.0f, t, ev);
+    for (int step = 0; step < 60; ++step)
+      for (uint32_t end = t + 900; t < end; t += 10) {
+        const float bump = (end - t) > 800 ? 0.4f : 0.0f;
+        walk += sense_count(ev, m.feed(0.0f, 1.0f + bump, 0.0f, t, ev), Event::walk);
+      }
+    for (uint32_t end = t + 5000; t < end; t += 10) m.feed(0.0f, 1.0f, 0.0f, t, ev);
+    const uint32_t steps = m.take_steps();
+    CHECK(steps >= 58 && steps <= 60 && walk == 1, "60 медленных шагов — 60 шагов и одна ходьба (%u, %d)",
+          (unsigned)steps, walk);
+  }
+  {
+    // Тряска 3 Гц — не шаги; сильная тряска — сильная.
+    MotionSensor m;
+    for (uint32_t t = 0; t < 1000; t += 10) m.feed(0.0f, 1.0f, 0.0f, t, ev);
+    int hard = 0, impact = 0;
+    for (uint32_t t = 1000; t < 5000; t += 10) {
+      const float x = ((t / 167) & 1) ? 2.0f : -2.0f;
+      const int n = m.feed(x, 1.0f, 0.0f, t, ev);
+      hard += sense_count(ev, n, Event::shake_hard);
+      impact += sense_count(ev, n, Event::impact);
+    }
+    CHECK(m.take_steps() == 0, "тряска не считается шагами");
+    CHECK(hard >= 1, "тряска ±2 g — сильная");
+    CHECK(impact <= 1, "сильная тряска — не серия ударов: %d", impact);
+  }
+  {
+    MotionSensor m;
+    for (uint32_t t = 0; t < 2000; t += 10) m.feed(0.0f, 1.0f, 0.0f, t, ev);
+    int odd = 0;
+    for (uint32_t t = 2000; t < 2200; t += 10) odd += m.feed(0.3f, 1.2f, 0.0f, t, ev);
+    odd += sense_count(ev, m.feed(0.0f, 1.0f, 0.0f, 2170, ev), Event::still);  // метка из прошлой пачки
+    CHECK(sense_count(ev, m.feed(0.0f, 1.0f, 0.0f, 2180, ev), Event::still) == 0, "время назад — не «покой»");
+  }
+  {
+    // Ровная музыка две минуты остаётся музыкой.
+    SoundSensor h;
+    uint32_t t = 0;
+    for (; t < 5000; t += 32) h.feed(-62.0f, t, ev);
+    int music = 0, speech = 0, quiet = 0;
+    for (uint32_t end = t + 120000; t < end; t += 32) {
+      const float db = -30.0f + (float)((t / 32) % 9) - 4.0f;
+      const int n = h.feed(db, t, ev);
+      music += sense_count(ev, n, Event::music);
+      speech += sense_count(ev, n, Event::speech);
+      quiet += sense_count(ev, n, Event::quiet);
+    }
+    CHECK(music == 1 && speech == 0 && quiet == 0, "две минуты музыки — музыка (%d, %d, %d)", music, speech, quiet);
+    // Микрофон выключили на час: после включения не «тишина» и не «музыка» сразу.
+    t += 3600000;
+    int n = h.feed(-60.0f, t, ev);
+    CHECK(sense_count(ev, n, Event::music) == 0 && sense_count(ev, n, Event::speech) == 0,
+          "после перерыва старое окно не в счёт");
+  }
+  {
+    SoundSensor h;
+    uint32_t t = 0;
+    for (; t < 5000; t += 32) h.feed(-60.0f, t, ev);
+    int loud = 0;
+    loud += sense_count(ev, h.feed(-30.0f, t, ev), Event::loud);
+    loud += sense_count(ev, h.feed(-12.0f, t + 32, ev), Event::loud);
+    CHECK(loud == 1, "хлопок на стыке двух блоков — громко");
+  }
 }
 
 int main() {
@@ -2129,10 +2344,13 @@ int main() {
   test_encounter_duel_fair();
   test_encounter_two_keychains();
   test_encounter_rules();
+  test_encounter_attacks();
+  test_encounter_rewards_capped();
   test_motion_sensing();
   test_hearing();
   test_light_and_heat();
   test_battery_sensing();
+  test_sensing_timing();
   test_behavior_voice();
   test_duel_then_chat();
   test_streak_and_achievements();

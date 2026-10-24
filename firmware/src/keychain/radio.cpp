@@ -25,11 +25,22 @@ constexpr int kQueue = 8;
 Heard queue[kQueue];
 volatile uint8_t q_head = 0, q_tail = 0;
 
+constexpr int8_t kRssiFloor = -90;
+
+// Пакет этого брелока уже ждёт в очереди: поток повторов одного передатчика не вытеснит
+// пакеты остальных. Читается из обработчика, единственного писателя очереди.
+bool queued(uint32_t hash) {
+  for (uint8_t i = q_tail; i != q_head; i = (uint8_t)((i + 1) % kQueue))
+    if (queue[i].a.hash == hash) return true;
+  return false;
+}
+
 void on_report(ble_gap_evt_adv_report_t* r) {
   uint8_t buf[32];
   const uint8_t n = Bluefruit.Scanner.parseReportByType(r, BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA, buf, sizeof buf);
   face::Advert a;
-  if (n && face::adv_decode(buf, n, &a)) {
+  // Совсем дальние пакеты не нужны ни для встречи, ни для отсчёта: не тратим на них очередь.
+  if (r->rssi >= kRssiFloor && n && face::adv_decode(buf, n, &a) && !queued(a.hash)) {
     const uint8_t next = (uint8_t)((q_head + 1) % kQueue);
     if (next != q_tail) {  // полна — пакет теряется, придёт следующий
       queue[q_head].a = a;

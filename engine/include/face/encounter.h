@@ -72,7 +72,7 @@ class Encounters {
   void init(uint32_t my_hash) { init(my_hash, Config{}); }
   // Что рассылать о себе: уровень, флаги (кроме kAdvDuelCalled) и настроение.
   void set_self(uint8_t level, uint8_t flags, uint8_t mood);
-  // Новые сутки: дуэль с каждым соседом снова возможна.
+  // Новые сутки: дуэль с каждым соседом снова возможна (не больше kDueled дуэлей в сутки).
   void new_day();
 
   // Пакет из эфира с уровнем сигнала.
@@ -85,6 +85,9 @@ class Encounters {
   bool pending() const { return pending_.kind != Rendezvous::None; }
   // Сколько соседей сейчас в памяти.
   int nearby(uint32_t now_ms) const;
+  // Стоит ли слушать эфир чаще: ждём сцену или рядом сосед, с которым встреча ещё
+  // возможна (не в перерыве после прошлой).
+  bool wants_busy(uint32_t now_ms) const;
 
  private:
   struct Peer {
@@ -101,6 +104,8 @@ class Encounters {
 
   bool dueled_today(uint32_t hash) const;
   void mark_dueled(uint32_t hash);
+  bool may_duel(uint32_t hash) const;
+  bool cooling(const Peer& p, uint32_t now_ms) const;
 
   Peer* find(uint32_t hash);
   Peer* slot(uint32_t hash, uint32_t now_ms);
