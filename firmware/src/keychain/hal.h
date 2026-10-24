@@ -22,8 +22,11 @@ float temperature_c();
 // Сторожевой таймер: 8 с; считает и во сне процессора. Загрузчик тоже его кормит.
 void watchdog_start();
 void watchdog_feed();
+// Освободить шину I2C, если ведомый держит SDA (до Wire.begin).
+void i2c_recover(uint8_t sda, uint8_t scl);
 
 // Выключение: всё гаснет, плата просыпается от кнопки или USB (с перезагрузкой).
+// При подключённом USB не вызывать: кнопка при USB включает загрузчик (см. main.cpp).
 [[noreturn]] void system_off();
 // Перезагрузка в загрузчик для обновления прошивки по USB (диск KEYCHAIN и последовательный DFU).
 [[noreturn]] void enter_bootloader();

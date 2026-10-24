@@ -93,10 +93,8 @@ class Encounters {
   struct Peer {
     uint32_t hash = 0;
     uint32_t first_ms = 0, last_ms = 0;
-    uint32_t cooldown_until = 0;
     uint8_t hits = 0;
     uint8_t level = 0, flags = 0, mood = 128;
-    bool cooled = false;  // cooldown_until действует
     int rssi = -127;
   };
   static constexpr int kPeers = 8;
@@ -105,7 +103,12 @@ class Encounters {
   bool dueled_today(uint32_t hash) const;
   void mark_dueled(uint32_t hash);
   bool may_duel(uint32_t hash) const;
-  bool cooling(const Peer& p, uint32_t now_ms) const;
+  struct Cool {
+    uint32_t hash = 0, until = 0;  // с этим соседом до until — перерыв после встречи
+  };
+  static constexpr int kCools = 16;
+  bool cooling(uint32_t hash, uint32_t now_ms) const;
+  void cool(uint32_t hash, uint32_t now_ms);
 
   Peer* find(uint32_t hash);
   Peer* slot(uint32_t hash, uint32_t now_ms);
@@ -116,6 +119,7 @@ class Encounters {
   uint8_t level_ = 0, flags_ = 0, mood_ = 128;
   Peer peers_[kPeers];
   uint32_t dueled_[kDueled] = {};
+  Cool cools_[kCools];
   int dueled_n_ = 0;
   Meeting pending_;
   uint32_t start_ms_ = 0;

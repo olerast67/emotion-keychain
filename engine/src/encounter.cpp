@@ -105,8 +105,27 @@ void Encounters::mark_dueled(uint32_t hash) {
 
 bool Encounters::may_duel(uint32_t hash) const { return dueled_n_ < kDueled && !dueled_today(hash); }
 
-bool Encounters::cooling(const Peer& p, uint32_t now) const {
-  return p.cooled && !time_reached(now, p.cooldown_until);
+bool Encounters::cooling(uint32_t hash, uint32_t now) const {
+  for (const Cool& c : cools_)
+    if (c.hash == hash) return !time_reached(now, c.until);
+  return false;
+}
+
+void Encounters::cool(uint32_t hash, uint32_t now) {
+  // Своя таблица перерывов, отдельно от соседей: поток выдуманных позывных вытесняет из
+  // памяти соседей, но не перерыв настоящего. Место — его прежнее, истёкшее или того,
+  // чей перерыв кончится раньше всех.
+  Cool* best = &cools_[0];
+  for (Cool& c : cools_) {
+    if (c.hash == hash || !c.hash || time_reached(now, c.until)) {
+      best = &c;
+      if (c.hash == hash) break;
+      continue;
+    }
+    if (best->hash && !time_reached(now, best->until) && (int32_t)(c.until - best->until) < 0) best = &c;
+  }
+  best->hash = hash;
+  best->until = now + cfg_.cooldown_ms;
 }
 
 Encounters::Peer* Encounters::find(uint32_t hash) {
@@ -117,15 +136,14 @@ Encounters::Peer* Encounters::find(uint32_t hash) {
 
 Encounters::Peer* Encounters::slot(uint32_t hash, uint32_t now) {
   if (Peer* p = find(hash)) return p;
-  // Пустое место или давнее всех слышанный. Соседей в перерыве и того, с кем ждём сцену,
-  // не вытесняем: иначе поток выдуманных позывных сбрасывал бы перерыв настоящему соседу.
+  // Пустое место или давнее всех слышанный; того, с кем ждём сцену, не вытесняем.
   Peer* best = nullptr;
   for (Peer& p : peers_) {
     if (!p.hash) {
       best = &p;
       break;
     }
-    if (cooling(p, now) || (pending() && pending_.peer == p.hash)) continue;
+    if (pending() && pending_.peer == p.hash) continue;
     if (!best || now - p.last_ms > now - best->last_ms) best = &p;
   }
   if (!best) return nullptr;
@@ -146,7 +164,7 @@ bool Encounters::wants_busy(uint32_t now) const {
   // Сосед, с которым встреча ещё может случиться: слышен недавно и не в перерыве.
   // Два брелока, которые уже поздоровались и лежат рядом, эфир чаще не слушают.
   for (const Peer& p : peers_)
-    if (p.hash && p.hits && now - p.last_ms < cfg_.confirm_ms && !cooling(p, now)) return true;
+    if (p.hash && p.hits && now - p.last_ms < cfg_.confirm_ms && !cooling(p.hash, now)) return true;
   return false;
 }
 
@@ -189,9 +207,11 @@ void Encounters::on_advert(const Advert& a, int rssi, uint32_t now) {
       return;
     }
     if (pending()) return;  // уже ждём другую сцену
-    if (cooling(*p, now)) return;
-    // Дуэль — только если я сам их разрешил и сегодня с этим соседом ещё не дрался.
-    const bool duel = (a.flags & kAdvDuelCalled) && (flags_ & kAdvDuelReady) && may_duel(a.hash);
+    if (cooling(a.hash, now)) return;
+    // Дуэль — только если хозяин сам их разрешил. Сколько дуэлей сегодня, решает объявивший:
+    // мой список мог пропасть с перезагрузкой, а сцена у обоих должна быть одна. Свой полный
+    // список я показываю в пакете — без флага готовности (advert).
+    const bool duel = (a.flags & kAdvDuelCalled) && (flags_ & kAdvDuelReady) && dueled_n_ < kDueled;
     pending_ = Meeting{};
     pending_.kind = duel ? Rendezvous::Duel : Rendezvous::Greet;
     pending_.peer = a.hash;
@@ -215,7 +235,7 @@ void Encounters::on_advert(const Advert& a, int rssi, uint32_t now) {
   p->level = a.level, p->flags = a.flags, p->mood = a.mood, p->rssi = rssi;
   if (p->hits < 255) ++p->hits;
   if (p->hits < 2 || pending()) return;
-  if (cooling(*p, now)) return;
+  if (cooling(a.hash, now)) return;
   // Сцену объявляет брелок с меньшим позывным, второй подстраивается по его пакету.
   if (me_ < a.hash) announce(*p, now);
 }
@@ -225,6 +245,7 @@ Advert Encounters::advert(uint32_t now) const {
   a.hash = me_;
   a.level = level_;
   a.flags = flags_;
+  if (dueled_n_ >= kDueled) a.flags &= (uint8_t)~kAdvDuelReady;  // на сегодня дуэлей хватит
   a.mood = mood_;
   if (pending() && announcer_ && !time_reached(now, start_ms_)) {
     const uint32_t left = time_left(now, start_ms_);
@@ -239,20 +260,11 @@ Advert Encounters::advert(uint32_t now) const {
 bool Encounters::poll(uint32_t now, Meeting* out) {
   // Забываем пропавших соседей.
   for (Peer& p : peers_)
-    if (p.hash && now - p.last_ms > cfg_.forget_ms && !cooling(p, now) &&
-        !(pending() && pending_.peer == p.hash))
-      p = Peer{};
+    if (p.hash && now - p.last_ms > cfg_.forget_ms && !(pending() && pending_.peer == p.hash)) p = Peer{};
   if (!pending() || !time_reached(now, start_ms_)) return false;
   *out = pending_;
-  if (Peer* p = find(pending_.peer)) {
-    p->cooled = true;
-    p->cooldown_until = now + cfg_.cooldown_ms;
-    p->hits = 0;
-  } else if (Peer* q = slot(pending_.peer, now)) {
-    q->last_ms = now;
-    q->cooled = true;
-    q->cooldown_until = now + cfg_.cooldown_ms;
-  }
+  cool(pending_.peer, now);
+  if (Peer* p = find(pending_.peer)) p->hits = 0;
   if (pending_.kind == Rendezvous::Duel) mark_dueled(pending_.peer);
   pending_ = Meeting{};
   announcer_ = false;

@@ -2010,6 +2010,74 @@ static void test_encounter_attacks() {
   }
 }
 
+
+// У обоих брелоков сцена должна быть одна и та же, даже если один перезагрузился или
+// его память соседей забита выдуманными позывными.
+static void test_encounter_sync() {
+  const uint32_t ha = 0x10002000u, hb = 0x90003000u;
+  {
+    Encounters a, b;
+    a.init(ha), b.init(hb);
+    a.set_self(1, kAdvDuelReady, 100), b.set_self(1, kAdvDuelReady, 100);
+    uint32_t t = 0, ta = 0, tb = 0;
+    Meeting ma, mb;
+    encounter_run(a, b, t, 20000, -60, &ma, &mb, &ta, &tb);
+    b.init(hb);  // B перезагрузился: не помнит, что сегодня уже дрались
+    b.set_self(1, kAdvDuelReady, 100);
+    t += 600000;
+    Meeting ga, gb;
+    encounter_run(a, b, t, 20000, -60, &ga, &gb, &ta, &tb);
+    CHECK(ga.kind == gb.kind && ga.kind == Rendezvous::Greet, "после перезагрузки соседа сцена одна и та же (%d, %d)",
+          (int)ga.kind, (int)gb.kind);
+  }
+  {
+    Encounters a, b;
+    a.init(ha), b.init(hb);
+    a.set_self(1, kAdvDuelReady, 100), b.set_self(1, kAdvDuelReady, 100);
+    uint32_t t = 0, ta = 0, tb = 0;
+    // Память B забита соседями, которых слышно вблизи.
+    for (uint32_t i = 0; i < 8; ++i) {
+      Advert f;
+      f.hash = 0xA0000000u + i;
+      b.on_advert(f, -50, t);
+    }
+    Meeting ma, mb;
+    encounter_run(a, b, t, 20000, -60, &ma, &mb, &ta, &tb);
+    CHECK(ma.kind == Rendezvous::Duel && mb.kind == Rendezvous::Duel, "забитая память соседей не мешает встрече (%d, %d)",
+          (int)ma.kind, (int)mb.kind);
+  }
+  {
+    // 16 дуэлей за сутки у B: он перестаёт показывать готовность, и обе сцены — приветствие.
+    Encounters a, b;
+    a.init(ha), b.init(hb);
+    a.set_self(1, kAdvDuelReady, 100), b.set_self(1, kAdvDuelReady, 100);
+    for (uint32_t i = 0; i < 16; ++i) {
+      Encounters x;
+      x.init(0x00000100u + i);  // меньше B: объявляет
+      x.set_self(1, kAdvDuelReady, 100);
+      uint32_t t = 0, tx = 0, tb = 0;
+      Meeting mx, mbb;
+      encounter_run(x, b, t, 20000, -60, &mx, &mbb, &tx, &tb);
+    }
+    CHECK(!(b.advert(0).flags & kAdvDuelReady), "дуэлей на сегодня хватит — без флага готовности");
+    uint32_t t = 0, ta = 0, tb = 0;
+    Meeting ma, mb;
+    encounter_run(a, b, t, 20000, -60, &ma, &mb, &ta, &tb);
+    CHECK(ma.kind == Rendezvous::Greet && mb.kind == Rendezvous::Greet, "лимит дуэлей у одного — приветствие у обоих (%d, %d)",
+          (int)ma.kind, (int)mb.kind);
+  }
+  Progress p;
+  p.reset();
+  int xp = 0;
+  for (int i = 0; i < 10; ++i) {
+    const uint32_t before = p.xp;
+    p.duel(true);
+    xp += p.xp > before;
+  }
+  CHECK(xp == XpRules{}.duels_xp_day_cap && p.duels_won == XpRules{}.duels_xp_day_cap,
+        "дуэлей с опытом за день — по лимиту (%d, %u)", xp, (unsigned)p.duels_won);
+}
+
 static void test_encounter_rewards_capped() {
   Progress p;
   p.reset();
@@ -2346,6 +2414,7 @@ int main() {
   test_encounter_rules();
   test_encounter_attacks();
   test_encounter_rewards_capped();
+  test_encounter_sync();
   test_motion_sensing();
   test_hearing();
   test_light_and_heat();

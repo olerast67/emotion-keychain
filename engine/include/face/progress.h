@@ -42,6 +42,7 @@ struct XpRules {
   uint8_t new_friends_day_cap = 5;  // новых знакомых с опытом и в счётчике друзей
   uint8_t gifts_day_cap = 1;        // подарков эмоций от старших брелоков
   uint8_t duel_prizes_day_cap = 2;  // эмоций, выигранных в дуэлях
+  uint8_t duels_xp_day_cap = 3;     // дуэлей с опытом и в счётчиках побед
 };
 
 // Достижения. Номера битов в Progress::achievements — по порядку списка, поэтому
@@ -131,7 +132,8 @@ struct Progress {
   uint8_t today_new_friends = 0;
   uint8_t today_gifts = 0;
   uint8_t today_duel_prizes = 0;
-  uint8_t reserved[7] = {};          // запас под будущие поля
+  uint8_t today_duels = 0;
+  uint8_t reserved[6] = {};          // запас под будущие поля
   uint32_t extra[kExtraSlots] = {};  // ключи дополнительно открытых эмоций, 0 — пусто
   uint32_t crc = 0;
 

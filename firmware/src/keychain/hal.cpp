@@ -17,9 +17,8 @@ uint32_t reset_cause = 0;
 }
 
 void power_init() {
-  // Причина сброса копится в регистре, пока её не сотрут; загрузчик её не трогает.
-  reset_cause = NRF_POWER->RESETREAS;
-  NRF_POWER->RESETREAS = 0xFFFFFFFFu;
+  // Ядро читает и стирает причину сброса ещё до setup: берём сохранённую им копию.
+  reset_cause = readResetReason();
   // REG0 модуля по умолчанию даёт 1.8 В: при нём экран и датчики не работают. Значение
   // хранится в UICR и пишется один раз; новое значение действует после перезагрузки.
   // Пишется только поверх заводского значения: бит во флеше без стирания можно лишь сбросить,
@@ -95,6 +94,29 @@ void watchdog_start() {
 }
 
 void watchdog_feed() { NRF_WDT->RR[0] = WDT_RR_RR_Reload; }
+
+void i2c_recover(uint8_t sda, uint8_t scl) {
+  // Датчик, сброшенный посреди чтения, может держать SDA в нуле: шина зависла бы навсегда.
+  // До девяти тактов SCL выпускают его, потом — стоп.
+  pinMode(sda, INPUT_PULLUP);
+  pinMode(scl, INPUT_PULLUP);
+  delayMicroseconds(10);
+  if (digitalRead(sda) == HIGH) return;
+  pinMode(scl, OUTPUT);
+  for (int i = 0; i < 9 && digitalRead(sda) == LOW; ++i) {
+    digitalWrite(scl, LOW);
+    delayMicroseconds(5);
+    digitalWrite(scl, HIGH);
+    delayMicroseconds(5);
+  }
+  pinMode(sda, OUTPUT);
+  digitalWrite(sda, LOW);
+  delayMicroseconds(5);
+  digitalWrite(sda, HIGH);  // стоп: SDA вверх при высоком SCL
+  delayMicroseconds(5);
+  pinMode(sda, INPUT);
+  pinMode(scl, INPUT);
+}
 
 void system_off() {
   // Кнопку ещё держат: ждём, пока отпустят, иначе она сразу разбудит плату.

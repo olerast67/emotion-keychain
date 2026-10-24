@@ -360,7 +360,7 @@ int Progress::new_day(const XpRules& r) {
   }
   touched_today = fed_today = 0;
   today_touch_xp = today_step_xp = 0;
-  today_new_friends = today_gifts = today_duel_prizes = 0;
+  today_new_friends = today_gifts = today_duel_prizes = today_duels = 0;
   return add_xp(r.day);
 }
 
@@ -394,6 +394,9 @@ int Progress::met_friend(bool is_new, const XpRules& r) {
 }
 
 int Progress::duel(bool won, const XpRules& r) {
+  // Сверх дневного лимита дуэль не идёт ни в опыт, ни в счётчики: на них — достижения.
+  if (today_duels >= r.duels_xp_day_cap) return -1;
+  ++today_duels;
   if (won)
     ++duels_won;
   else

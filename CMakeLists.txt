@@ -33,6 +33,11 @@ target_compile_options(firmware_tests PRIVATE -Wall -Wextra)
 target_compile_definitions(firmware_tests PRIVATE PIN_BUZZER=5)
 target_link_libraries(firmware_tests PRIVATE face_engine)
 add_test(NAME firmware_tests COMMAND firmware_tests)
+add_executable(storage_tests firmware/host/storage_test.cpp firmware/src/keychain/storage.cpp)
+target_include_directories(storage_tests PRIVATE firmware/host firmware/src/keychain)
+target_compile_options(storage_tests PRIVATE -Wall -Wextra)
+target_compile_definitions(storage_tests PRIVATE STORAGE_HOST_TEST)
+add_test(NAME storage_tests COMMAND storage_tests)
 
 # Оконный симулятор, если найден SDL2.
 find_package(SDL2 QUIET)

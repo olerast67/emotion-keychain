@@ -12,6 +12,7 @@
 // Консоль USB на 115200 — `?` выводит список команд.
 #include <Arduino.h>
 #include <Wire.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -75,7 +76,8 @@ uint64_t chip_serial = 0;
 Progress progress, progress_saved;
 Friends friends, friends_saved;
 Settings cfg, cfg_saved;
-uint32_t last_save = 0, last_cfg_try = 0;
+uint32_t last_save = 0, last_save_try = 0;
+bool save_failed = false;
 
 bool have_oled = false, oled_full = false, screen_on = true;
 uint8_t shown_contrast = 0;
@@ -106,11 +108,51 @@ char line[64];
 size_t line_n = 0;
 bool line_overflow = false;
 
-uint64_t uptime_ms(uint32_t now) {
-  static uint32_t last = 0, wraps = 0;
-  if (now < last) ++wraps;
-  last = now;
-  return (uint64_t)wraps << 32 | now;
+// Время работы в мс без скачков. millis() ядра — тики FreeRTOS (1024 Гц) × 1000 / 1024 в
+// 32 битах: через 48.5 суток он прыгает на ноль не на границе 2^32, и все сроки сбились
+// бы разом. Здесь тики копятся в 64 битах; движку уходят младшие 32 бита — они
+// переполняются ровно на 2^32, как ему и нужно.
+uint64_t uptime_now() {
+  static uint32_t last = 0;
+  static uint64_t ticks = 0;
+  const uint32_t t = xTaskGetTickCount();
+  ticks += (uint32_t)(t - last);
+  last = t;
+  return ticks * 1000u / configTICK_RATE_HZ;
+}
+
+// Консоль не должна останавливать брелок: запись в USB ждёт, пока хост читает, и с открытым,
+// но не читаемым портом цикл встал бы до сброса сторожевым таймером. Ждём места не дольше
+// 50 мс, остаток строки теряется.
+void out_raw(const char* s, size_t n) {
+  const uint32_t t0 = millis();
+  while (n) {
+    const int room = Serial.availableForWrite();
+    if (room > 0) {
+      const size_t k = (size_t)room < n ? (size_t)room : n;
+      Serial.write((const uint8_t*)s, k);
+      s += k, n -= k;
+    } else if (!Serial || millis() - t0 > 50) {
+      return;
+    } else {
+      delay(1);
+    }
+  }
+}
+
+void out(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+void out(const char* fmt, ...) {
+  char buf[256];
+  va_list ap;
+  va_start(ap, fmt);
+  const int n = vsnprintf(buf, sizeof buf, fmt, ap);
+  va_end(ap);
+  if (n > 0) out_raw(buf, (size_t)n < sizeof buf ? (size_t)n : sizeof buf - 1);
+}
+
+void out_line(const char* s) {
+  out_raw(s, strlen(s));
+  out_raw("\n", 1);
 }
 
 unsigned clock_minutes() { return (unsigned)((cfg.clock_min + (uptime - clock_base_up) / 60000u) % 1440u); }
@@ -118,7 +160,7 @@ unsigned clock_minutes() { return (unsigned)((cfg.clock_min + (uptime - clock_ba
 void screen_power(bool on, uint32_t now);
 
 void event(Event e, uint32_t now) {
-  if (verbose) Serial.printf("Событие: %s\n", event_id(e));
+  if (verbose) out("Событие: %s\n", event_id(e));
   // Касание или кнопка в темноте показывают лицо ещё на минуту.
   if (e == Event::tap || e == Event::double_tap || e == Event::button) {
     if (dark_timing) dark_since = now;
@@ -129,30 +171,44 @@ void event(Event e, uint32_t now) {
 
 // ---------------------------------------------------------------- флеш
 
+// Всё, что переживает выключение, — одной записью журнала (storage.h).
+struct Snapshot {
+  Progress progress;
+  Friends friends;
+  Settings settings;
+};
+static_assert(sizeof(Snapshot) <= storage::kMaxRecord, "запись журнала");
+
 void save_all(uint32_t now, bool force) {
   // Флеш выдерживает ограниченное число стираний, а встречи может подстроить кто угодно
-  // по радио: рост и знакомые пишутся не чаще раза в минуту. Сразу — только новые
-  // эмоции (их немного: награды за встречи ограничены за день) и по force.
-  const bool due = force || now - last_save >= 60000u;
-  bool wrote = false;
-  if (memcmp(&progress, &progress_saved, offsetof(Progress, crc)) != 0) {
-    const bool unlocks = progress.implant != progress_saved.implant || progress.flags != progress_saved.flags ||
-                         memcmp(progress.extra, progress_saved.extra, sizeof progress.extra) != 0;
-    if (due || unlocks) {
-      progress.seal();
-      if (storage::save("progress", &progress, sizeof progress)) progress_saved = progress;
-      wrote = true;
-    }
-  }
-  if (due && memcmp(&friends, &friends_saved, offsetof(Friends, crc)) != 0) {
-    friends.seal();
-    if (storage::save("friends", &friends, sizeof friends)) friends_saved = friends;
-    wrote = true;
-  }
-  if (wrote) last_save = now;  // и при ошибке записи: повтор через минуту, а не каждый проход
-  if (memcmp(&cfg, &cfg_saved, sizeof cfg) != 0 && (force || now - last_cfg_try >= 5000u)) {
-    last_cfg_try = now;
-    if (storage::save("settings", &cfg, sizeof cfg)) cfg_saved = cfg;
+  // по радио: обычная запись — не чаще раза в 10 минут. Сразу — новые эмоции (их немного:
+  // награды за встречи ограничены за день), настройки с консоли и по force.
+  const bool p_changed = memcmp(&progress, &progress_saved, offsetof(Progress, crc)) != 0;
+  const bool f_changed = memcmp(&friends, &friends_saved, offsetof(Friends, crc)) != 0;
+  const bool s_changed = memcmp(&cfg, &cfg_saved, sizeof cfg) != 0;
+  if (!p_changed && !f_changed && !s_changed) return;
+  const bool unlocks = progress.implant != progress_saved.implant || progress.flags != progress_saved.flags ||
+                       memcmp(progress.extra, progress_saved.extra, sizeof progress.extra) != 0;
+  // Часы меняют настройки каждые 10 минут — это обычная запись, остальное в настройках — сразу.
+  Settings a = cfg, b = cfg_saved;
+  a.clock_min = b.clock_min = 0;
+  const bool user_settings = memcmp(&a, &b, sizeof a) != 0;
+  const bool urgent = force || unlocks || user_settings;
+  if (!urgent && now - last_save < 600000u) return;
+  if (!force && save_failed && now - last_save_try < 60000u) return;  // сорвалась: повтор через минуту
+  last_save_try = now;
+  static Snapshot snap;
+  progress.seal();
+  friends.seal();
+  snap.progress = progress;
+  snap.friends = friends;
+  snap.settings = cfg;
+  save_failed = !storage::save(&snap, sizeof snap);
+  if (!save_failed) {
+    progress_saved = progress;
+    friends_saved = friends;
+    cfg_saved = cfg;
+    last_save = now;
   }
 }
 
@@ -182,19 +238,31 @@ void sanitize(Settings& s) {
 }
 
 void load_all() {
-  uint8_t blob[sizeof(Progress)];
-  const int n = storage::load("progress", blob, sizeof blob);
-  if (!(n > 0 && progress.load(blob, (uint32_t)n))) progress.reset();
-  progress_saved = progress;
-  uint8_t fblob[sizeof(Friends)];
-  const int fn = storage::load("friends", fblob, sizeof fblob);
-  if (!(fn == (int)sizeof(Friends) && friends.load(fblob, (uint32_t)fn))) friends.reset();
-  friends_saved = friends;
-  Settings s;
-  if (storage::load("settings", &s, sizeof s) == (int)sizeof s && settings_ok(s)) {
-    sanitize(s);
-    cfg = s;
+  storage::begin();
+  static Snapshot snap;
+  bool p_ok = false, f_ok = false, s_ok = false;
+  if (storage::load(&snap, sizeof snap)) {
+    p_ok = progress.load(&snap.progress, sizeof snap.progress);
+    f_ok = friends.load(&snap.friends, sizeof snap.friends);
+    s_ok = settings_ok(snap.settings);
+    if (s_ok) cfg = snap.settings;
+  } else {
+    // Журнала ещё нет: записи прошлой прошивки в файлах LittleFS.
+    uint8_t blob[sizeof(Progress)];
+    const int n = storage::legacy_load("progress", blob, sizeof blob);
+    p_ok = n > 0 && progress.load(blob, (uint32_t)n);
+    uint8_t fblob[sizeof(Friends)];
+    const int fn = storage::legacy_load("friends", fblob, sizeof fblob);
+    f_ok = fn == (int)sizeof(Friends) && friends.load(fblob, (uint32_t)fn);
+    Settings st;
+    s_ok = storage::legacy_load("settings", &st, sizeof st) == (int)sizeof st && settings_ok(st);
+    if (s_ok) cfg = st;
   }
+  if (!p_ok) progress.reset();
+  if (!f_ok) friends.reset();
+  sanitize(cfg);
+  progress_saved = progress;
+  friends_saved = friends;
   cfg_saved = cfg;
 }
 
@@ -261,12 +329,12 @@ void apply_identity(uint32_t now) {
 
 void print_me() {
   const Temperament& t = temperament(me.archetype);
-  Serial.printf("Я %s: %s (%s), %s%s\n", me.code, t.name, t.tag, rarity_name(me.rarity),
+  out("Я %s: %s (%s), %s%s\n", me.code, t.name, t.tag, rarity_name(me.rarity),
                 me.quirks.cyber_eye ? ", золотой кибер-глаз" : "");
-  Serial.printf("Рост: день %u, опыт %u, имплант %d/%d, открыто %d/%d эмоций, достижений %d/%d\n", progress.days,
+  out("Рост: день %u, опыт %u, имплант %d/%d, открыто %d/%d эмоций, достижений %d/%d\n", progress.days,
                 (unsigned)progress.xp, progress.implant, implant_count() - 1, progress.unlocked_count(), kExprCount,
                 progress.achievement_count(), kAchCount);
-  Serial.printf("Шагов %u, касаний %u, друзей %u, дуэлей %u/%u; дуэли %s, невидимка %s\n", (unsigned)progress.steps,
+  out("Шагов %u, касаний %u, друзей %u, дуэлей %u/%u; дуэли %s, невидимка %s\n", (unsigned)progress.steps,
                 (unsigned)progress.touches, progress.friends, progress.duels_won,
                 progress.duels_won + progress.duels_lost, cfg.duel_ready ? "вкл" : "выкл", cfg.ghost ? "вкл" : "выкл");
 }
@@ -278,7 +346,7 @@ void set_duel_ready(bool on, uint32_t now) {
   p.set_sub(on ? "READY TO HACK" : "PEACE MODE");
   p.value = (int)(on ? BannerIcon::Skull : BannerIcon::Heart);
   bh.queue_scene(Scene::banner, p, eng.expression(), now, on ? "дуэли включены" : "дуэли выключены", true);
-  Serial.println(on ? "Дуэли включены" : "Дуэли выключены");
+  out_line(on ? "Дуэли включены" : "Дуэли выключены");
 }
 
 // ---------------------------------------------------------------- часы и сутки
@@ -433,7 +501,7 @@ void poll_battery(uint32_t now) {
   }
   bh.set_battery_percent(pct);
   if (battery.empty() && !powering_off) {
-    Serial.println("Ячейка почти пуста — выключаюсь");
+    out_line("Ячейка почти пуста — выключаюсь");
     powering_off = true;
     bh.power_off(now);
   }
@@ -468,13 +536,13 @@ void poll_radio(uint32_t now) {
   const Identity peer = identity_from_hash(m.peer);
   eng.note_activity(now);
   if (m.kind == Rendezvous::Duel) {
-    Serial.printf("Дуэль с %s: %s\n", peer.code, m.won ? "победа" : "поражение");
+    out("Дуэль с %s: %s\n", peer.code, m.won ? "победа" : "поражение");
     bh.duel(peer.code, m.won, now, m.peer, m.nonce);
     static const uint16_t kBuzz[] = {60, 80, 60, 80, 200};
     hal::vibrate(kBuzz, 5);
   } else {
     const bool is_new = friends.level(m.peer) < 0;
-    Serial.printf("Встреча с %s (%s), %s\n", peer.code, archetype_name(peer.archetype), is_new ? "новый" : "знакомый");
+    out("Встреча с %s (%s), %s\n", peer.code, archetype_name(peer.archetype), is_new ? "новый" : "знакомый");
     bh.meet(peer.code, is_new, now, m.peer, m.peer_level, m.nonce);
     static const uint16_t kHello[] = {80, 120, 80};
     hal::vibrate(kHello, 3);
@@ -533,7 +601,7 @@ bool parse_int(const char* s, long lo, long hi, long* out) {
 }
 
 void help() {
-  Serial.println(
+  out_line(
       "Команды:\n"
       "  me           кто я: характер, рост, шаги, дуэли\n"
       "  sensors      показания: ускорение, свет, звук, температура, батарея\n"
@@ -564,7 +632,7 @@ void command(char* s, uint32_t now) {
   if (!strcmp(s, "me")) return print_me();
   if (!strcmp(s, "v")) {
     verbose = !verbose;
-    Serial.println(verbose ? "События датчиков печатаются" : "События датчиков не печатаются");
+    out_line(verbose ? "События датчиков печатаются" : "События датчиков не печатаются");
     return;
   }
   if (!strcmp(s, "sensors")) {
@@ -573,21 +641,23 @@ void command(char* s, uint32_t now) {
     if (n) {
       float d[3];
       for (int k = 0; k < 3; ++k) d[k] = xyz[n - 1][board::kAccMap[k][0]] * board::kAccMap[k][1];
-      Serial.printf("Ускорение: x %.2f, y %.2f, z %.2f g (висит ровно — около 0, +1, 0)\n", d[0], d[1], d[2]);
+      out("Ускорение: x %.2f, y %.2f, z %.2f g (висит ровно — около 0, +1, 0)\n", d[0], d[1], d[2]);
     } else {
-      Serial.println(acc.ok() ? "Ускорение: нет новых выборок" : "Акселерометр не отвечает");
+      out_line(acc.ok() ? "Ускорение: нет новых выборок" : "Акселерометр не отвечает");
     }
-    Serial.printf("Свет: %s; звук: фон %.0f дБ; температура %.1f °C\n", als.ok() ? "есть" : "нет ответа",
+    out("Свет: %s; звук: фон %.0f дБ; температура %.1f °C\n", als.ok() ? "есть" : "нет ответа",
                   hearing.floor_db(), hal::temperature_c());
-    Serial.printf("Питание %.2f В, USB %s, заряжается %s, заряд %d%%; шагов всего %u\n", hal::vsys_volts(),
+    out("Питание %.2f В, USB %s, заряжается %s, заряд %d%%; шагов всего %u\n", hal::vsys_volts(),
                   hal::usb_present() ? "да" : "нет", hal::charging() ? "да" : "нет", battery.percent(),
                   (unsigned)motion.steps_total());
+    out("Флеш: стираний страниц с включения %u%s\n", (unsigned)storage::erases(),
+                  save_failed ? ", последняя запись не удалась" : "");
     return;
   }
   if (!strcmp(s, "ach")) {
     for (int i = 0; i < kAchCount; ++i) {
       const Achievement& a = achievement((Ach)i);
-      Serial.printf("  [%c] %-14s %s — %s\n", progress.earned((Ach)i) ? 'x' : ' ', a.tag, a.name, a.how);
+      out("  [%c] %-14s %s — %s\n", progress.earned((Ach)i) ? 'x' : ' ', a.tag, a.name, a.how);
     }
     return;
   }
@@ -596,7 +666,7 @@ void command(char* s, uint32_t now) {
       if (!r.hash) continue;
       const Identity id = identity_from_hash(r.hash);
       const int lvl = friends.level(r.hash);
-      Serial.printf("  %s %-10s дней %u, %s\n", id.code, archetype_name(id.archetype), r.days, friend_level_tag(lvl));
+      out("  %s %-10s дней %u, %s\n", id.code, archetype_name(id.archetype), r.days, friend_level_tag(lvl));
     }
     return;
   }
@@ -604,12 +674,12 @@ void command(char* s, uint32_t now) {
     int hh = -1, mm = -1;
     char tail = 0;
     if (!arg || sscanf(arg, "%d:%d%c", &hh, &mm, &tail) != 2 || hh < 0 || hh > 23 || mm < 0 || mm > 59)
-      return (void)Serial.println("Формат: t 23:30");
+      return (void)out_line("Формат: t 23:30");
     cfg.clock_min = (uint16_t)(hh * 60 + mm);
     cfg.clock_known = 1;
     clock_base_up = uptime;
     last_clock = cfg.clock_min;
-    Serial.printf("Время %02d:%02d\n", hh, mm);
+    out("Время %02d:%02d\n", hh, mm);
     return;
   }
   if (!strcmp(s, "date")) {
@@ -617,10 +687,10 @@ void command(char* s, uint32_t now) {
     char tail = 0;
     if (!arg || sscanf(arg, "%d-%d-%d%c", &y, &mo, &d, &tail) != 3 || y < 2000 || y > 2099 || mo < 1 || mo > 12 ||
         d < 1 || d > days_in_month(y, mo))
-      return (void)Serial.println("Формат: date 2026-12-31");
+      return (void)out_line("Формат: date 2026-12-31");
     cfg.year = (uint16_t)y, cfg.month = (uint8_t)mo, cfg.day = (uint8_t)d;
     bh.set_date(cfg.year, cfg.month, cfg.day);
-    Serial.printf("Дата %04d-%02d-%02d\n", y, mo, d);
+    out("Дата %04d-%02d-%02d\n", y, mo, d);
     return;
   }
   if (!strcmp(s, "bday")) {
@@ -628,15 +698,15 @@ void command(char* s, uint32_t now) {
     char tail = 0;
     if (!arg || sscanf(arg, "%d-%d%c", &mo, &d, &tail) != 2 || mo < 1 || mo > 12 || d < 1 ||
         d > days_in_month(2000, mo))
-      return (void)Serial.println("Формат: bday 05-14");
+      return (void)out_line("Формат: bday 05-14");
     cfg.bday_m = (uint8_t)mo, cfg.bday_d = (uint8_t)d;
     bh.set_birthday(cfg.bday_m, cfg.bday_d);
-    Serial.printf("День рождения: %02d-%02d\n", mo, d);
+    out("День рождения: %02d-%02d\n", mo, d);
     return;
   }
   if (!strcmp(s, "theme")) {
     Theme th;
-    if (!arg || !theme_from_id(arg, &th)) return (void)Serial.println("Формат: theme classic | cyber | retro");
+    if (!arg || !theme_from_id(arg, &th)) return (void)out_line("Формат: theme classic | cyber | retro");
     eng.options().theme = th;
     cfg.theme = (uint8_t)th;
     eng.set_expression(eng.expression(), now);
@@ -645,36 +715,36 @@ void command(char* s, uint32_t now) {
   if (!strcmp(s, "snd")) {
     cfg.sound = cfg.sound ? 0 : 1;
     voice.set_enabled(cfg.sound != 0);
-    Serial.println(cfg.sound ? "Звук включён" : "Звук выключен");
+    out_line(cfg.sound ? "Звук включён" : "Звук выключен");
     return;
   }
   if (!strcmp(s, "say")) {
     Cue c;
-    if (!arg || !cue_from_id(arg, &c)) return (void)Serial.println("Нет такой реплики");
-    if (!voice.say(c, now)) Serial.println("Пищалка занята, тихие часы или звук выключен");
+    if (!arg || !cue_from_id(arg, &c)) return (void)out_line("Нет такой реплики");
+    if (!voice.say(c, now)) out_line("Пищалка занята, тихие часы или звук выключен");
     return;
   }
   if (!strcmp(s, "duel")) return set_duel_ready(!cfg.duel_ready, now);
   if (!strcmp(s, "ghost")) {
     cfg.ghost = cfg.ghost ? 0 : 1;
     radio::set_ghost(cfg.ghost != 0);
-    Serial.println(cfg.ghost ? "Невидимка: только слушаю эфир" : "Снова виден другим брелокам");
+    out_line(cfg.ghost ? "Невидимка: только слушаю эфир" : "Снова виден другим брелокам");
     return;
   }
   if (!strcmp(s, "b")) {
     long v = 0;
-    if (!parse_int(arg, 0, 255, &v)) return (void)Serial.println("Формат: b 0…255");
+    if (!parse_int(arg, 0, 255, &v)) return (void)out_line("Формат: b 0…255");
     cfg.contrast = (uint8_t)v;
     return;
   }
   if (!strcmp(s, "e")) {
     for (int i = 0; arg && i < kEventCount; ++i)
       if (!strcmp(arg, event_id((Event)i))) return event((Event)i, now);
-    return (void)Serial.println("Нет такого события");
+    return (void)out_line("Нет такого события");
   }
   if (!strcmp(s, "x")) {
     Scene sc;
-    if (!arg || !scene_from_id(arg, &sc)) return (void)Serial.println("Нет такой сцены");
+    if (!arg || !scene_from_id(arg, &sc)) return (void)out_line("Нет такой сцены");
     SceneParams p;
     eng.play_scene(sc, now, p);
     voice.scene(sc, p, now);
@@ -687,7 +757,7 @@ void command(char* s, uint32_t now) {
   }
   if (!strcmp(s, "dfu")) {
     save_all(now, true);
-    Serial.println("Перезагрузка в загрузчик");
+    out_line("Перезагрузка в загрузчик");
     Serial.flush();
     delay(100);
     hal::enter_bootloader();
@@ -698,7 +768,7 @@ void command(char* s, uint32_t now) {
     save_all(now, true);
     return print_me();
   }
-  Serial.println("Не знаю такую команду, помощь — ?");
+  out_line("Не знаю такую команду, помощь — ?");
 }
 
 void poll_serial(uint32_t now) {
@@ -717,6 +787,43 @@ void poll_serial(uint32_t now) {
   }
 }
 
+
+// ---------------------------------------------------------------- выключение на USB
+
+// Выключились на зарядке. Полный сон тут не годится: проснуться можно только кнопкой, а
+// кнопка при USB включает загрузчик. Поэтому экран, датчики и эфир выключены, часы идут,
+// зарядка идёт. Кнопка — включиться (перезагрузкой, часы сохраняются), USB отключили —
+// полный сон.
+void off_on_usb() {
+  screen_power(false, millis());
+  hal::mic_end();
+  hal::buzzer(0, false);
+  radio::set_pace(radio::Pace::Off);
+  radio::update(millis());
+  for (;;) {
+    hal::watchdog_feed();
+    uptime = uptime_now();
+    const uint32_t now = (uint32_t)uptime;
+    tick_clock(now);
+    save_all(now, false);
+    if (!hal::usb_present()) return;
+    if (digitalRead(board::kButton) == LOW) {
+      delay(30);
+      if (digitalRead(board::kButton) == LOW) {
+        while (digitalRead(board::kButton) == LOW) {
+          hal::watchdog_feed();
+          delay(10);
+        }
+        // Часы — с точностью до минуты: после программного сброса они продолжатся.
+        cfg.clock_min = (uint16_t)clock_minutes();
+        save_all(now, true);
+        NVIC_SystemReset();
+      }
+    }
+    delay(50);
+  }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- setup / loop
@@ -729,18 +836,21 @@ void setup() {
   pinMode(board::kDispEn, OUTPUT);
   hal::vibro_begin();
   hal::buzzer_begin();
+  // Сторожевой таймер — сразу: вывода сброса на плате нет, и зависание дальше (шина I2C,
+  // флеш, экран) иначе оставило бы плату мёртвой до разряда ячейки.
+  hal::watchdog_start();
   Serial.begin(115200);
 
+  hal::i2c_recover(PIN_WIRE_SDA, PIN_WIRE_SCL);
   Wire.begin();
   Wire.setClock(400000);
-  storage::begin();
   load_all();
   // Часов реального времени у платы нет: после выключения неизвестно, сколько прошло.
   const bool clock_lost = !hal::warm_reset() && (cfg.clock_known || cfg.year);
   if (!hal::warm_reset()) cfg.clock_known = 0, cfg.year = 0, cfg.month = 0, cfg.day = 0;
 
-  const uint32_t now = millis();
-  uptime = uptime_ms(now);
+  uptime = uptime_now();
+  const uint32_t now = (uint32_t)uptime;
   chip_serial = (uint64_t)NRF_FICR->DEVICEID[1] << 32 | NRF_FICR->DEVICEID[0];
   const uint32_t seed = (uint32_t)chip_serial ^ (uint32_t)(chip_serial >> 32) ^ micros();
   eng.init(seed, now);
@@ -765,17 +875,17 @@ void setup() {
   if (!start_oled()) oled_retry_at = now + 2000;
   eng.play_scene(Scene::boot, now);
   voice.scene(Scene::boot, SceneParams{}, now);
-  hal::watchdog_start();
+  hal::watchdog_feed();
 
-  Serial.printf("\nБрелок с эмоциями, плата rev B. Экран %s, акселерометр %s, свет %s\n", have_oled ? "есть" : "нет",
+  out("\nБрелок с эмоциями, плата rev B. Экран %s, акселерометр %s, свет %s\n", have_oled ? "есть" : "нет",
                 acc.ok() ? "есть" : "нет", als.ok() ? "есть" : "нет");
   print_me();
-  if (clock_lost) Serial.println("После выключения время и дата сброшены: задайте их командами t и date");
+  if (clock_lost) out_line("После выключения время и дата сброшены: задайте их командами t и date");
 }
 
 void loop() {
-  const uint32_t now = millis();
-  uptime = uptime_ms(now);
+  uptime = uptime_now();
+  const uint32_t now = (uint32_t)uptime;
   hal::watchdog_feed();
 
   if (screen_on && !have_oled && time_reached(now, oled_retry_at)) {
@@ -835,6 +945,7 @@ void loop() {
     save_all(now, true);
     acc.power(false);
     als.power(false);
+    if (hal::usb_present()) off_on_usb();  // вернётся, только когда USB отключат
     hal::system_off();
   }
   delay(10);  // процессор спит до следующего прохода
