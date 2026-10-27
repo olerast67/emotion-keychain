@@ -1098,6 +1098,11 @@ void sc_millis_wrap() {
   run(60000, 20);
   CHECK(count_said(w, "Событие: tap", t) == 6, "после скачка millis() касания доходят (%d из 6)",
         count_said(w, "Событие: tap", t));
+  // Сроки после 24.8 суток: «давний» срок не должен стать сроком в будущем.
+  const uint64_t tr = g_ms;
+  w.cmd("SET lisreset 1");
+  const long fix = wait_for([&] { return said(w, "Акселерометр перезапущен", tr); }, 25000, 200);
+  CHECK(fix >= 0, "после 48.5 суток сброс настроек акселерометра исправлен за %.1f с", fix / 1000.0);
   CHECK(!any_event(w, 0) || w.events.size() == 1, "без зависаний и сбросов");
   health(w, "после 48.5 суток");
   drop_board(&w);

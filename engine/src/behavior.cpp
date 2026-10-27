@@ -175,8 +175,8 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   next_eval_ = now;
   shake_level_ = 0;
   for (uint32_t& t : tap_times_) t = 0;
-  fed_ = false;
-  fed_at_ = 0;
+  fed_ = vented_ = false;
+  fed_at_ = vented_at_ = 0;
   moved_at_ = now - kDay;
   run_since_ = now;
   for (uint32_t& t : falls_) t = 0;
@@ -349,6 +349,7 @@ void Behavior::age_marks(uint32_t now) {
   cap(moved_at_);
   cap(run_since_);
   if (fed_ && now - fed_at_ > kDay) fed_ = false;
+  if (vented_ && now - vented_at_ > kDay) vented_ = false;
   // Отметки, где 0 значит «не было», просто забываются.
   for (uint32_t& t : tap_times_)
     if (t && now - t > kDay) t = 0;
@@ -433,10 +434,12 @@ void Behavior::on_event(Event e, uint32_t now) {
       if (since_touch > 2u * 60u * kMin && n <= 2) {
         react(Expr::touched, now, 3000, "тронули после долгой разлуки");
       } else if (n >= 9) {
+        vented_ = true, vented_at_ = now;
         mood_.annoyance = clamp01(mood_.annoyance + 0.3f);
         const Option o[] = {{Expr::furious, 3}, {Expr::rage, 2}, {Expr::table_flip, 1}};
         react(pick(o), now, 4000, "тыкают без остановки");
       } else if (n >= 6) {
+        vented_ = true, vented_at_ = now;
         mood_.annoyance = clamp01(mood_.annoyance + 0.2f);
         const Option o[] = {{Expr::angry, 3}, {Expr::twitchy, 1.5f}, {Expr::disapproval, 1}};
         react(pick(o), now, 3500, "слишком много тапов");
@@ -473,8 +476,9 @@ void Behavior::on_event(Event e, uint32_t now) {
       } else if (mood_.annoyance > 0.5f) {
         const Option o[] = {{Expr::annoyed, 2}, {Expr::disapproval, 1}, {Expr::unamused, 1}};
         react(pick(o), now, 2000, "тап, но он не в духе");
-      } else if (mood_.annoyance > 0.15f && rng_.chance(0.6f)) {
-        // Злость почти прошла, а его гладят: неловко за вспышку.
+      } else if (vented_ && now - vented_at_ < 3u * kMin && rng_.chance(0.7f)) {
+        // Вспылил на тапы, злость почти прошла, а его гладят: неловко за вспышку.
+        vented_ = false;
         const Option o[] = {{Expr::apologetic, 2}, {Expr::guilty, 1.5f}, {Expr::embarrassed, 1}};
         react(pick(o), now, 2500, "отошёл после вспышки, неловко");
       } else if (since_touch > 10u * kMin) {
@@ -536,14 +540,14 @@ void Behavior::on_event(Event e, uint32_t now) {
         falls_[1] = falls_[0];
         falls_[0] = now;
         if (progress_) progress_->fell();
-        if (falls_[2] && now - falls_[2] < 10u * kMin)
+        if (falls_[2] && now - falls_[2] < 10u * kMin) {
           react(Expr::game_over, now, 3500, "третье падение за 10 минут");
-        else if (falls_[1] && now - falls_[1] < 10u * kMin) {
+        } else if (falls_[1] && now - falls_[1] < 10u * kMin) {
           const Option o[] = {{Expr::crying, 3}, {Expr::sobbing, 1}};
           react(pick(o), now, 4000, "опять уронили");
-        }
-        else
+        } else {
           react(Expr::knocked_out, now, 3500, "упал и ударился");
+        }
       } else {
         const Option o[] = {{Expr::hurt, 3}, {Expr::cringe, 1}};
         react(pick(o), now, 1800, "стукнули");
@@ -598,6 +602,7 @@ void Behavior::on_event(Event e, uint32_t now) {
       break;
     }
     case Event::still:
+      if (moving) moved_at_ = now;  // перерыв в прогулке считается с остановки
       moving = running = false;
       next_eval_ = now;
       break;
@@ -865,8 +870,10 @@ void Behavior::idle_action(uint32_t now) {
   w[kDoomer] = (m.valence < 0.0f || m.boredom > 0.5f) ? meme * 0.8f : 0.0f;  // хандра от скуки
   w[kImDead] = happy ? meme * 0.4f : 0.0f;
   w[kNervousLaugh] = 0.08f * pers_.shy;
-  w[kGuilty] = m.annoyance > 0.2f ? 0.15f : 0.0f;  // злость проходит — неловко за неё
-  w[kApologetic] = m.annoyance > 0.2f ? 0.1f + 0.1f * pers_.shy : 0.0f;
+  // Недавно вспылил на тапы — неловко за это.
+  const bool sorry = vented_ && now - vented_at_ < 3u * kMin;
+  w[kGuilty] = sorry ? 0.4f : 0.0f;
+  w[kApologetic] = sorry ? 0.2f + 0.3f * pers_.shy : 0.0f;
   w[kKiss] = m.affection > 0.4f ? 0.15f : 0.0f;
   float total = 0;
   for (int i = 0; i < kIdleCount; ++i) {
@@ -887,6 +894,7 @@ void Behavior::idle_action(uint32_t now) {
   for (int i = 3; i > 0; --i) recent_idle_[i] = recent_idle_[i - 1];
   recent_idle_[0] = (uint8_t)chosen;
   if (chosen == kCyclops) last_cyclops_ = now;
+  if (chosen == kGuilty || chosen == kApologetic) vented_ = false;
   const IdleAct& a = kIdle[chosen];
   if (a.expr != Expr::Count) {
     react(a.expr, now, a.ms, "сам по себе");

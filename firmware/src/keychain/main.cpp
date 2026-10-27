@@ -722,7 +722,9 @@ void check_sensors(uint32_t now) {
   const bool acc_bad = !acc.healthy();
   const bool als_bad = !als.ok() || als_fail >= 3;
   if (!acc_bad && !als_bad) {
+    // Срок держится свежим: «давний» срок через 24.8 суток работы стал бы сроком в будущем.
     fix_retry_ms = 10000;
+    next_fix = now;
     return;
   }
   if (!time_reached(now, next_fix)) return;
@@ -784,7 +786,8 @@ void poll_radio(uint32_t now) {
     out("Дуэль с %s: %s\n", peer.code, m.won ? "победа" : "поражение");
     // Вибро — только если дуэль пошла в счёт (дневные лимиты): поток подделок не жужжит.
     const uint8_t duels = progress.today_duels;
-    bh.duel(peer.code, m.won, now, m.peer, m.nonce);
+    // Дуэль — тоже встреча: уровень соседа нужен для подарка старшего, как в meet.
+    bh.duel(peer.code, m.won, now, m.peer, m.nonce, m.peer_level);
     static const uint16_t kBuzz[] = {60, 80, 60, 80, 200};
     if (progress.today_duels != duels) hal::vibrate(kBuzz, 5);
   } else {
@@ -1162,6 +1165,7 @@ void setup() {
   start_oled();
   next_acc = next_light = next_temp = next_batt = next_steps = now;
   next_health = now + 10000;
+  next_fix = now;
   usb_seen = hal::usb_present();
   eng.play_scene(Scene::boot, now);
   voice.scene(Scene::boot, SceneParams{}, now);

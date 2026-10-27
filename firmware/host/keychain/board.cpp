@@ -153,7 +153,7 @@ void report() {
   std::string hex;
   char b[4];
   for (uint8_t c : adv.data) snprintf(b, sizeof b, "%02x", c), hex += b;
-  // chgen — нижний конец R3 (P0.23) в нуле: зарядник включён. sxp — опыт в последней записи
+  // chgen — нижний конец R3 (CHG_EN) в нуле: зарядник включён. sxp — опыт в последней записи
   // журнала, fop — операция флеша идёт, oled/accok/alsok/sbus — прошивка считает экран,
   // акселерометр, датчик света и шину датчиков рабочими; ls — время последней удачной записи,
   // dm — минуты текущих суток в настройках; ovcc — минимум питания экрана перед
@@ -166,7 +166,7 @@ void report() {
          sim::oled_powered() ? 1 : 0, sim::oled_dev.visible() ? 1 : 0, sim::oled_dev.contrast, sim::oled_dev.lit(),
          sim::status.tone_hz, NRF_PWM2->ENABLE.v ? 1 : 0, sim::status.pdm_running ? 1 : 0, sim::ltr_active() ? 1 : 0,
          sim::lis_active() ? 1 : 0, sim::status.hfclk_requested ? 1 : 0, sim::status.vib_peak_v,
-         sim::pin_mode[23] == sim::kOutput && !sim::pin_out[23] ? 1 : 0, charge_uams, sim::status.loops, mismatches,
+         sim::pin_mode[board::kChgEn] == sim::kOutput && !sim::pin_out[board::kChgEn] ? 1 : 0, charge_uams, sim::status.loops, mismatches,
          dark_errors, sim::status.i2c_errors, sim::flash_failure_count(), sim::lis_overruns(), frame_changes,
          (unsigned)progress.xp, (unsigned)progress_saved.xp, (unsigned)friends.count(), (unsigned)progress.steps,
          (unsigned)progress.days, (unsigned)cfg.day_min, (unsigned)last_save, sim::flash_busy() ? 1 : 0, have_oled ? 1 : 0, acc.ok() ? 1 : 0,

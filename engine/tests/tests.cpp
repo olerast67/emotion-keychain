@@ -2808,6 +2808,28 @@ static void test_gait_events() {
   run_for(30000);
   CHECK(bh.base_expression() == Expr::low_battery || bh.base_expression() == Expr::hungry,
         "на бегу мало заряда — голодное лицо: %s", expression(bh.base_expression()).id);
+
+  // «Пошли гулять» — после перерыва больше 2 минут, а не на каждом светофоре долгой прогулки.
+  int again = 0, fresh = 0;
+  for (uint32_t seed = 1; seed <= 12; ++seed) {
+    FaceEngine e2;
+    Behavior b2;
+    e2.init(seed, 0);
+    b2.init(&e2, seed, 0);
+    b2.set_clock(12 * 60);
+    uint32_t v = 1000;
+    b2.on_event(Event::walk, v);
+    for (const uint32_t end = v + 30u * 60000u; v < end; v += 1000) b2.update(v), e2.update(v);
+    b2.on_event(Event::still, v);
+    v += 10000;
+    b2.on_event(Event::walk, v);
+    again += !strcmp(b2.last_reason(), "пошли гулять");
+    b2.on_event(Event::still, v += 1000);
+    v += 3u * 60000u;
+    b2.on_event(Event::walk, v);
+    fresh += !strcmp(b2.last_reason(), "пошли гулять");
+  }
+  CHECK(again == 0 && fresh > 0, "постоял 10 с — не «пошли гулять» (%d); после 3 минут — бывает (%d)", again, fresh);
 }
 
 // Кормить можно раз в 3 часа: дёргать кабель ради опыта и CARING HUMAN бесполезно.
