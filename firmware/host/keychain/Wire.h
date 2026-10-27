@@ -36,6 +36,7 @@ class TwoWire {
 
  private:
   void spend(size_t n);
+  bool bus_fault();
   int bus_;
   bool on_ = false, tx_ = false;
   uint32_t hz_ = 100000;

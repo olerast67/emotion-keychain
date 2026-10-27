@@ -1,7 +1,11 @@
 // Одна плата rev B с настоящей прошивкой: процесс, которым управляет координатор
 // (keychain_sim.cpp) по строкам на stdin/stdout.
 //
-//   SET <поле> <значения>   мир вокруг платы (ускорение, свет, звук, USB, кнопка…)
+//   SET <поле> <значения>   мир вокруг платы (ускорение, свет, звук, USB, кнопка…) и
+//                           неисправности: lis|ltr|oled 0|1 — микросхема не отвечает и снова
+//                           отвечает (после сброса по питанию), lisreset — сброс LIS3DH,
+//                           wedge — контроллер экрана завис, sda <такты> и scl 0|1 — шина
+//                           датчиков зажата
 //   TAP 1|2                 касание или двойное касание (детектор LIS3DH)
 //   RX <rssi> <hex>         пакет из эфира — Bluefruit отдаст его прошивке, если слушает
 //   IN <текст>              строка в консоль USB
@@ -149,15 +153,24 @@ void report() {
   std::string hex;
   char b[4];
   for (uint8_t c : adv.data) snprintf(b, sizeof b, "%02x", c), hex += b;
+  // chgen — нижний конец R3 (P0.23) в нуле: зарядник включён. sxp — опыт в последней записи
+  // журнала, fop — операция флеша идёт, oled/accok/alsok/sbus — прошивка считает экран,
+  // акселерометр, датчик света и шину датчиков рабочими; ls — время последней удачной записи,
+  // dm — минуты текущих суток в настройках; ovcc — минимум питания экрана перед
+  // последним включением, por — сколько раз контроллер экрана сбрасывался по питанию.
   printf("ST t=%u adv=%d iv=%u scan=%d disp=%d vis=%d con=%u lit=%d tone=%u vib=%d mic=%d als=%d acc=%d hf=%d "
-         "vibv=%.2f chgen=%d q=%.0f loops=%u mism=%u dark=%u i2c=%u ffail=%u ovr=%u frames=%u xp=%u fr=%u steps=%u scanms=%.0f adv_ev=%.1f "
+         "vibv=%.2f chgen=%d q=%.0f loops=%u mism=%u dark=%u i2c=%u ffail=%u ovr=%u frames=%u xp=%u sxp=%u fr=%u "
+         "steps=%u days=%u dm=%u ls=%u fop=%d oled=%d accok=%d alsok=%d sbus=%d ovcc=%.2f por=%u scanms=%.0f adv_ev=%.1f "
          "uicr=%x data=%s\n",
          sim::now_ms(), adv.running ? 1 : 0, adv.interval, Bluefruit.Scanner.isRunning() ? 1 : 0,
          sim::oled_powered() ? 1 : 0, sim::oled_dev.visible() ? 1 : 0, sim::oled_dev.contrast, sim::oled_dev.lit(),
          sim::status.tone_hz, NRF_PWM2->ENABLE.v ? 1 : 0, sim::status.pdm_running ? 1 : 0, sim::ltr_active() ? 1 : 0,
-         sim::lis_active() ? 1 : 0, sim::status.hfclk_requested ? 1 : 0, sim::status.vib_peak_v, sim::pin_mode[23] == sim::kOutput && !sim::pin_out[23] ? 1 : 0, charge_uams, sim::status.loops, mismatches,
+         sim::lis_active() ? 1 : 0, sim::status.hfclk_requested ? 1 : 0, sim::status.vib_peak_v,
+         sim::pin_mode[23] == sim::kOutput && !sim::pin_out[23] ? 1 : 0, charge_uams, sim::status.loops, mismatches,
          dark_errors, sim::status.i2c_errors, sim::flash_failure_count(), sim::lis_overruns(), frame_changes,
-         (unsigned)progress.xp, (unsigned)friends.count(), (unsigned)progress.steps, scan_ms, adv_events,
+         (unsigned)progress.xp, (unsigned)progress_saved.xp, (unsigned)friends.count(), (unsigned)progress.steps,
+         (unsigned)progress.days, (unsigned)cfg.day_min, (unsigned)last_save, sim::flash_busy() ? 1 : 0, have_oled ? 1 : 0, acc.ok() ? 1 : 0,
+         als.ok() ? 1 : 0, sensor_bus ? 1 : 0, sim::oled_dev.last_off_min, sim::oled_dev.resets, scan_ms, adv_events,
          sim::status.uicr_regout0, hex.empty() ? "-" : hex.c_str());
   charge_uams = 0;
   sim::status.vib_peak_v = sim::status.vib_duty * (sim::world.vbus ? 4.7f : sim::world.cell_v);
@@ -222,6 +235,20 @@ void serve() {
       if (!strcmp(key, "button")) w.button = a != 0;
       if (!strcmp(key, "usbhost")) Serial.connected = a != 0;
       if (!strcmp(key, "hang")) hang = a != 0;
+      // Микросхема пропала и вернулась: вернулась она после сброса по питанию.
+      if (!strcmp(key, "lis")) {
+        if (!w.lis_ok && a != 0) sim::lis_glitch();
+        w.lis_ok = a != 0;
+      }
+      if (!strcmp(key, "ltr")) {
+        if (!w.ltr_ok && a != 0) sim::ltr_glitch();
+        w.ltr_ok = a != 0;
+      }
+      if (!strcmp(key, "oled")) w.oled_ok = a != 0;
+      if (!strcmp(key, "lisreset")) sim::lis_glitch();
+      if (!strcmp(key, "wedge")) sim::oled_wedge();
+      if (!strcmp(key, "sda")) w.sda_stuck = (int)a;
+      if (!strcmp(key, "scl")) w.scl_stuck = a != 0;
     } else if (!strcmp(line, "TAP") && arg) {
       sim::world.tap = atoi(arg);
     } else if (!strcmp(line, "HOSTREAD") && arg) {

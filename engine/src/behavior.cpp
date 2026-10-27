@@ -178,6 +178,7 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   fed_ = false;
   fed_at_ = 0;
   moved_at_ = now - kDay;
+  run_since_ = now;
   for (uint32_t& t : falls_) t = 0;
   for (uint8_t& r : recent_idle_) r = 255;
   for (Expr& r : recent_react_) r = Expr::Count;
@@ -346,6 +347,7 @@ void Behavior::age_marks(uint32_t now) {
   cap(last_cyclops_);
   cap(chose_ms_);
   cap(moved_at_);
+  cap(run_since_);
   if (fed_ && now - fed_at_ > kDay) fed_ = false;
   // Отметки, где 0 значит «не было», просто забываются.
   for (uint32_t& t : tap_times_)
@@ -448,6 +450,7 @@ void Behavior::on_event(Event e, uint32_t now) {
         const Option o[] = {{Expr::playful, 2 * pers_.playful},
                             {Expr::giggle, 2},
                             {Expr::tears_of_joy, good ? 1.0f : 0.2f},
+                            {Expr::im_dead, good ? 0.5f : 0.1f},  // «умер со смеху»
                             {Expr::troll_grin, 0.3f}};
         react(pick(o), now, 2600, "тройной тап");
       } else if (n == 2) {
@@ -458,13 +461,22 @@ void Behavior::on_event(Event e, uint32_t now) {
           const Option o[] = {{temp_->dtap[0], 3}, {temp_->dtap[1], 2}, {temp_->dtap[2], 1}};
           react(pick(o), now, 3000, "двойной тап");
         } else {
-          const Option o[] = {{Expr::laugh, 3},  {Expr::happy, 2},   {Expr::playful, 1},
-                              {Expr::giggle, 1}, {Expr::wink, 0.7f}, {Expr::tears_of_joy, good ? 0.6f : 0.0f}};
+          const Option o[] = {{Expr::laugh, 3},
+                              {Expr::happy, 2},
+                              {Expr::playful, 1},
+                              {Expr::giggle, 1},
+                              {Expr::wink, 0.7f},
+                              {Expr::tears_of_joy, good ? 0.6f : 0.0f},
+                              {Expr::kiss, good ? 0.5f : 0.0f}};
           react(pick(o), now, 3000, "двойной тап");
         }
       } else if (mood_.annoyance > 0.5f) {
         const Option o[] = {{Expr::annoyed, 2}, {Expr::disapproval, 1}, {Expr::unamused, 1}};
         react(pick(o), now, 2000, "тап, но он не в духе");
+      } else if (mood_.annoyance > 0.15f && rng_.chance(0.6f)) {
+        // Злость почти прошла, а его гладят: неловко за вспышку.
+        const Option o[] = {{Expr::apologetic, 2}, {Expr::guilty, 1.5f}, {Expr::embarrassed, 1}};
+        react(pick(o), now, 2500, "отошёл после вспышки, неловко");
       } else if (since_touch > 10u * kMin) {
         react(Expr::surprised, now, 1800, "тап после долгой паузы", Clip::startle);
       } else {
@@ -526,8 +538,10 @@ void Behavior::on_event(Event e, uint32_t now) {
         if (progress_) progress_->fell();
         if (falls_[2] && now - falls_[2] < 10u * kMin)
           react(Expr::game_over, now, 3500, "третье падение за 10 минут");
-        else if (falls_[1] && now - falls_[1] < 10u * kMin)
-          react(Expr::crying, now, 4000, "опять уронили");
+        else if (falls_[1] && now - falls_[1] < 10u * kMin) {
+          const Option o[] = {{Expr::crying, 3}, {Expr::sobbing, 1}};
+          react(pick(o), now, 4000, "опять уронили");
+        }
         else
           react(Expr::knocked_out, now, 3500, "упал и ударился");
       } else {
@@ -546,8 +560,12 @@ void Behavior::on_event(Event e, uint32_t now) {
       } else if (since_touch > 10u * kMin) {
         react(Expr::hello, now, 2500, "взяли в руки после перерыва", Clip::hop);
       } else {
-        const Option o[] = {
-            {Expr::happy, good ? 3.0f : 1.0f}, {Expr::curious, 2}, {Expr::alert, 1}, {Expr::suspicious, 0.4f}};
+        const Option o[] = {{Expr::happy, good ? 3.0f : 1.0f},
+                            {Expr::curious, 2},
+                            {Expr::alert, 1},
+                            {Expr::suspicious, 0.4f},
+                            {Expr::kiss, good && mood_.affection > 0.35f ? 0.6f : 0.0f},
+                            {Expr::uwu, good ? 0.3f : 0.0f}};
         react(pick(o), now, 2000, "взяли в руки");
       }
       break;
@@ -566,6 +584,7 @@ void Behavior::on_event(Event e, uint32_t now) {
       break;
     }
     case Event::run: {
+      if (!running) run_since_ = now;
       moving = running = true;
       moved_at_ = now;
       mood_.arousal = clamp01(mood_.arousal + 0.3f);
@@ -603,7 +622,7 @@ void Behavior::on_event(Event e, uint32_t now) {
       if (asleep) {
         react(Expr::scared, now, 2500, "громкий звук разбудил");
       } else if (again) {
-        const Option o[] = {{Expr::annoyed, 2}, {Expr::disapproval, 1}, {Expr::unamused, 1}};
+        const Option o[] = {{Expr::annoyed, 2}, {Expr::disapproval, 1}, {Expr::unamused, 1}, {Expr::disgusted, 0.5f}};
         react(pick(o), now, 2500, "опять шумят");
       } else {
         const Option o[] = {{Expr::startled, 4},
@@ -759,11 +778,14 @@ Expr Behavior::choose_base(uint32_t now) {
   if (music_on) return ((now / 15000u) & 1u) ? Expr::vibing : Expr::music;
   if (speech_on) return Expr::listening;
   if (battery == 1) return ((now / 20000u) & 1u) ? Expr::low_battery : Expr::hungry;
-  if (running) return Expr::running;
+  // Бег дольше 5 минут или без сил — выдохся.
+  if (running) return now - run_since_ > 5u * kMin || mood_.energy < 0.3f ? Expr::exhausted : Expr::running;
   if (mood_.annoyance > 0.6f) return Expr::grumpy;
   if (mood_.annoyance > 0.35f) return Expr::annoyed;
   if (mood_.energy < 0.12f) return Expr::sleepy;
-  if (mood_.energy < 0.25f) return clock_min_ >= 60 && clock_min_ < 6 * 60 ? Expr::sleep_deprived : Expr::tired;
+  // С ним возятся во втором часу ночи и позже — недосып (без дела он к этому времени спит).
+  if (clock_min_ >= 60 && clock_min_ < 6 * 60) return Expr::sleep_deprived;
+  if (mood_.energy < 0.25f) return Expr::tired;
   // Игнор, но брелок двигается: зовёт хозяина (не чаще раза в 20 минут).
   if (moving && alone > 60u * kMin && now - last_calling_ > 20u * kMin) {
     last_calling_ = now;
@@ -839,13 +861,13 @@ void Behavior::idle_action(uint32_t now) {
   // Эмоции из имплантов, которые иначе встречались бы только в сценах наград.
   w[kFocused] = night() ? 0.0f : 0.15f;
   w[kNervous] = m.annoyance * 0.3f + 0.05f * pers_.shy;
-  w[kUwu] = happy ? meme * 0.5f : 0.0f;
-  w[kDoomer] = m.valence < 0.0f ? meme * 0.6f : 0.0f;
-  w[kImDead] = happy ? meme * 0.3f : 0.0f;
+  w[kUwu] = happy ? meme * 0.6f : 0.0f;
+  w[kDoomer] = (m.valence < 0.0f || m.boredom > 0.5f) ? meme * 0.8f : 0.0f;  // хандра от скуки
+  w[kImDead] = happy ? meme * 0.4f : 0.0f;
   w[kNervousLaugh] = 0.08f * pers_.shy;
-  w[kGuilty] = m.annoyance > 0.3f ? 0.08f : 0.0f;
-  w[kApologetic] = m.annoyance > 0.3f ? 0.05f * pers_.shy : 0.0f;
-  w[kKiss] = m.affection > 0.6f ? 0.12f : 0.0f;
+  w[kGuilty] = m.annoyance > 0.2f ? 0.15f : 0.0f;  // злость проходит — неловко за неё
+  w[kApologetic] = m.annoyance > 0.2f ? 0.1f + 0.1f * pers_.shy : 0.0f;
+  w[kKiss] = m.affection > 0.4f ? 0.15f : 0.0f;
   float total = 0;
   for (int i = 0; i < kIdleCount; ++i) {
     if (kIdle[i].expr != Expr::Count && !usable(kIdle[i].expr)) w[i] = 0.0f;
@@ -1351,7 +1373,10 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_h
   p.set_text(code);
   p.value = is_new ? 0 : 1;
   if (other) p.set_sub(other == temp_ ? "TWIN!" : other->tag);
-  queue_shared(Scene::greet, p, greet_after(other, is_new), now,
+  // Легендарный брелок рядом — звёзды в глазах, кто бы ни встретил.
+  const bool legend = peer_hash && identity_from_hash(peer_hash).rarity == Rarity::Legendary;
+  queue_shared(Scene::greet, p,
+               legend ? pick_unlocked({Expr::starstruck, Expr::amazed, Expr::excited}) : greet_after(other, is_new), now,
                other == temp_ && other ? "встретил такого же" : is_new ? "новый знакомый брелок" : "встретил знакомого");
   // Ворчун при виде брелока с золотым глазом, глюк с глюком — данные текут рекой.
   if (other && temp_ && other == temp_ && temp_->glitches)

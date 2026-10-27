@@ -23,5 +23,6 @@ class PDMClass {
   uint64_t next_us_ = 0;
   int16_t block_[512];
   uint32_t phase_ = 0;
+  int start_blocks_ = 0;  // блоки выхода на режим после begin
 };
 extern PDMClass PDM;

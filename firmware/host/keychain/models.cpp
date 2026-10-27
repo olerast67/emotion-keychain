@@ -44,16 +44,29 @@ float noise(float a) { return ((float)(rnd() % 2001) / 1000.0f - 1.0f) * a; }
 
 class Lis3dhModel : public I2cDevice {
  public:
+  Lis3dhModel() { glitch(); }
+  bool acks() const override { return world.lis_ok; }
   void write(const uint8_t* d, size_t n, bool) override {
     sample_until(now_us);
     if (!n) return;
     reg_ = d[0] & 0x7F;
     inc_ = (d[0] & 0x80) != 0;
     for (size_t i = 1; i < n; ++i) {
+      // CTRL_REG0: младшие семь бит по документации должны быть 0010000, иначе датчик
+      // работает неправильно; бит 7 отключает подтяжку SA0.
+      if (reg_ == 0x1E && (d[i] & 0x7F) != 0x10) ++status.i2c_errors;
       regs_[reg_] = d[i];
       if (reg_ == 0x20) odr_since_ = now_us;
       if (inc_) ++reg_;
     }
+  }
+  // Сброс по питанию (провал VDD, сбой): регистры — по умолчанию, FIFO пуст.
+  void glitch() {
+    memset(regs_, 0, sizeof regs_);
+    regs_[0x1E] = 0x10;
+    regs_[0x20] = 0x07;
+    count_ = head_ = 0;
+    click_ = 0;
   }
   size_t read(uint8_t* d, size_t n) override {
     sample_until(now_us);
@@ -166,7 +179,15 @@ class Lis3dhModel : public I2cDevice {
 
 class Ltr303Model : public I2cDevice {
  public:
-  bool powered() const override { return now_us >= 100000; }  // отвечает через 100 мс после питания
+  bool powered() const override { return now_us >= on_since_ + 100000; }  // отвечает через 100 мс после питания
+  bool acks() const override { return world.ltr_ok && powered(); }
+  // Сброс по питанию: регистры по умолчанию (замер 100 мс раз в 500 мс, датчик спит).
+  void glitch() {
+    memset(regs_, 0, sizeof regs_);
+    regs_[0x85] = 0x03;
+    fresh_ = false;
+    on_since_ = now_us;
+  }
   void write(const uint8_t* d, size_t n, bool) override {
     update();
     if (!n) return;
@@ -214,7 +235,7 @@ class Ltr303Model : public I2cDevice {
   uint8_t reg_ = 0;
   uint8_t data_[4] = {};
   bool fresh_ = false;
-  uint64_t next_ = 0;
+  uint64_t next_ = 0, on_since_ = 0;
 };
 
 Lis3dhModel lis;
@@ -223,6 +244,9 @@ OledModel oled_dev;
 
 bool lis_active() { return lis.active(); }
 void world_changing() { lis.sync(); }
+void lis_glitch() { lis.glitch(); }
+void ltr_glitch() { ltr.glitch(); }
+void oled_wedge() { oled_dev.wedge(); }
 bool ltr_active() { return ltr.active(); }
 uint32_t lis_overruns() { return lis.overruns; }
 uint32_t ltr_measurements() { return ltr.measurements; }
@@ -236,40 +260,77 @@ I2cDevice* i2c_device(int bus, uint8_t addr) {
 
 bool oled_powered() { return pin_mode[19] == kOutput && pin_out[19]; }
 bool OledModel::powered() const { return oled_powered() && now_us >= power_since + 30000; }
+bool OledModel::acks() const { return powered() && world.oled_ok && !wedged; }
+
+void OledModel::track_vcc() {
+  const double dt = (double)(now_us - vcc_t) / 1e6;
+  vcc_t = now_us;
+  if (oled_powered() || dt <= 0) return;
+  // Линии экрана: P0.15 (SDA) и P0.13 (SCL). Ноль разряжает модуль через его подтяжки,
+  // подтяжка nRF или единица — питает его.
+  double g = 1.0 / 0.85;
+  bool fed = false;
+  for (int pin : {15, 13}) {
+    const uint8_t m = pin_mode[pin];
+    if (m == kOutput && !pin_out[pin]) g += 1.0 / 0.1;
+    if (m == kInputPullup || (m == kOutput && pin_out[pin])) fed = true;
+  }
+  const float floor_v = fed ? 2.6f : 0.0f;
+  if (vcc > floor_v) vcc = floor_v + (vcc - floor_v) * (float)exp(-dt * g);
+  if (vcc < vcc_min) vcc_min = vcc;
+}
 
 // ---------------------------------------------------------------- флеш SoftDevice
 
 namespace {
+// Запись идёт по слову за ~41 мкс прямо в отображённый файл флеша: обрыв питания (убийство
+// процесса) посреди неё оставляет недописанную запись, как на плате. Стирание — целиком в
+// конце (обрыв посреди стирания оставляет страницу как была; оборванное стирание с мусором
+// проверяет storage_tests).
 struct FlashOp {
   int kind = 0;  // 0 — нет, 1 — запись, 2 — стирание
   uint32_t* dst = nullptr;
   const uint32_t* src = nullptr;
   uint32_t words = 0, page = 0;
-  uint64_t done_us = 0;
+  uint64_t start_us = 0, done_us = 0;
+  uint32_t written = 0;
+  bool fails = false;  // SoftDevice не дал окна: событие ошибки, память не тронута
 } flash_op;
 uint32_t flash_failures = 0;
+
+void write_words_until(uint64_t t) {
+  FlashOp& op = flash_op;
+  if (op.kind != 1 || op.fails || t < op.start_us + 50) return;
+  uint64_t k = (t - op.start_us - 50) / 41;
+  if (k > op.words) k = op.words;
+  for (; op.written < k; ++op.written) op.dst[op.written] &= op.src[op.written];
+}
 
 void finish_flash() {
   FlashOp op = flash_op;
   if (getenv("SIM_TRACE_FLASH"))
     fprintf(stderr, "%llu flash op %d page %x dst %p words %u\n", (unsigned long long)(now_us / 1000), op.kind, op.page,
             (void*)op.dst, op.words);
-  flash_op = FlashOp{};
-  // Окно для флеша SoftDevice даёт между радиособытиями; при сплошном прослушивании
-  // операция может не успеть — событие ошибки, память не тронута.
-  if (Bluefruit.Scanner.isRunning() && rnd() % 4 == 0) {
+  if (op.fails) {
     ++flash_failures;
+    flash_op = FlashOp{};
     return;
   }
   if (op.kind == 1) {
-    for (uint32_t i = 0; i < op.words; ++i) op.dst[i] &= op.src[i];
+    write_words_until(op.done_us + 41);
   } else {
     memset((void*)(uintptr_t)(op.page * 4096u), 0xFF, 4096);
   }
+  flash_op = FlashOp{};
 }
+
+// Окно для флеша SoftDevice даёт между радиособытиями; при сплошном прослушивании операция
+// может не успеть.
+bool flash_will_fail() { return Bluefruit.Scanner.isRunning() && rnd() % 4 == 0; }
 }  // namespace
 
 uint32_t flash_failure_count() { return flash_failures; }
+bool flash_busy() { return flash_op.kind != 0; }
 
 // ---------------------------------------------------------------- время
 
@@ -286,6 +347,7 @@ void advance_us(uint64_t us) {
     }
     if (next < now_us) next = now_us;
     now_us = next;
+    write_words_until(now_us);
     if (flash_op.kind && now_us >= flash_op.done_us) finish_flash();
     PDM.tick(now_us);
     if (status.wdt_started && now_us >= status.wdt_fed_us + status.wdt_timeout_us) throw Reset{ResetKind::Watchdog};
@@ -299,6 +361,9 @@ int read_pin(int pin) {
   const uint8_t m = pin_mode[pin];
   if (m == kOutput) return pin_out[pin];
   if (m == kDefault) return (int)(rnd() & 1);  // вход отключён: читать нечего
+  // Шина датчиков: зажатую линию видно на входе, кто бы ни управлял ножкой.
+  if (pin == PIN_WIRE_SDA && world.sda_stuck > 0) return LOW;
+  if (pin == PIN_WIRE_SCL && world.scl_stuck) return LOW;
   if (pin == 22) return world.button ? LOW : (m == kInputPullup ? HIGH : (int)(rnd() & 1));
   if (pin == 4) return lis.int1() ? HIGH : LOW;
   if (pin == 20) {
@@ -331,13 +396,29 @@ PDMClass PDM;
 AdafruitBluefruit Bluefruit;
 Adafruit_LittleFS_Namespace::InternalFileSystemHost InternalFS;
 
-void pinMode(uint32_t pin, uint32_t mode) {
-  pin_mode[pin] = mode == OUTPUT || mode == OUTPUT_S0D1 ? kOutput : mode == INPUT_PULLUP ? kInputPullup : kInput;
+namespace sim {
+void pin_changing(int pin) {
+  if (pin == 19 || pin == PIN_WIRE1_SDA || pin == PIN_WIRE1_SCL) oled_dev.track_vcc();
+}
+void pin_changed(int pin) {
   if (pin == 19) oled_dev.on_power(oled_powered());
 }
+}  // namespace sim
+
+void pinMode(uint32_t pin, uint32_t mode) {
+  pin_changing((int)pin);
+  pin_mode[pin] = mode == OUTPUT || mode == OUTPUT_S0D1 ? kOutput : mode == INPUT_PULLUP ? kInputPullup : kInput;
+  pin_changed((int)pin);
+}
 void digitalWrite(uint32_t pin, uint32_t v) {
+  pin_changing((int)pin);
+  const bool rise = v && !pin_out[pin];
   pin_out[pin] = v ? 1 : 0;
-  if (pin == 19) oled_dev.on_power(oled_powered());
+  // Такт SCL шины датчиков от i2c_recover: ведомый, зажавший SDA, выдвигает следующий бит.
+  // Пока TWIM включён, ножкой управляет он, и запись в GPIO до шины не доходит.
+  if (pin == PIN_WIRE_SCL && rise && pin_mode[pin] == kOutput && !Wire.enabled() && world.sda_stuck > 0)
+    --world.sda_stuck;
+  pin_changed((int)pin);
 }
 int digitalRead(uint32_t pin) { return read_pin((int)pin); }
 
@@ -428,6 +509,26 @@ struct RegHooks {
 
 // ---------------------------------------------------------------- I2C
 
+void TwoWire::begin() {
+  on_ = true;
+  const int pins[2] = {bus_ ? PIN_WIRE1_SDA : PIN_WIRE_SDA, bus_ ? PIN_WIRE1_SCL : PIN_WIRE_SCL};
+  for (int pin : pins) {
+    pin_changing(pin);
+    pin_mode[pin] = kInputPullup;
+    pin_changed(pin);
+  }
+}
+
+// Неисправность шины датчиков. SCL в нуле: TWIM ядра ждёт событий без срока — до сброса
+// сторожевым таймером (или пока линию не отпустят). SDA в нуле: адрес и данные читаются
+// нулями, «подтверждение» тоже ноль — обмен будто бы проходит, но записи не доходят, а
+// чтения дают нули.
+bool TwoWire::bus_fault() {
+  if (bus_ != 0) return false;
+  while (world.scl_stuck) advance_us(1000);
+  return world.sda_stuck > 0;
+}
+
 void TwoWire::spend(size_t n) {
   const double us = (double)(n + 1) * 9.0 * 1e6 / (double)hz_ + 15.0;
   power.cpu_us += us;  // ядро ждёт конца передачи в Wire
@@ -441,9 +542,13 @@ uint8_t TwoWire::endTransmission(bool stop) {
     ++status.i2c_errors;  // шина не запущена: в ядре это зависание или ошибка
     return 4;
   }
+  if (bus_fault()) {
+    spend(n_);
+    return 0;
+  }
   spend(n_);
   I2cDevice* d = i2c_device(bus_, addr_);
-  if (!d || !d->powered()) return 2;  // адрес без ответа
+  if (!d || !d->acks()) return 2;  // адрес без ответа
   d->write(buf_, n_, stop);
   return 0;
 }
@@ -455,9 +560,15 @@ uint8_t TwoWire::requestFrom(uint8_t addr, uint8_t n) {
     return 0;
   }
   if (n > sizeof rx_) n = sizeof rx_;
+  if (bus_fault()) {
+    spend(n);
+    memset(rx_, 0, n);
+    rx_n_ = n;
+    return n;
+  }
   spend(n);
   I2cDevice* d = i2c_device(bus_, addr);
-  if (!d || !d->powered()) return 0;
+  if (!d || !d->acks()) return 0;
   rx_n_ = d->read(rx_, n);
   return (uint8_t)rx_n_;
 }
@@ -470,6 +581,7 @@ int PDMClass::begin(int, long rate) {
   running_ = true;
   status.pdm_running = true;
   next_us_ = now_us + 32000;
+  start_blocks_ = 3;
   return 1;
 }
 void PDMClass::end() {
@@ -483,6 +595,18 @@ void PDMClass::tick(uint64_t t) {
   next_us_ += 32000;
   float db = world.mic_db;
   if (world.mic_pattern == 1 && (t / 1000) % 450 >= 200) db = -62;  // речь: слоги и паузы
+  // Первые блоки после включения: библиотека отдаёт обнулённые буферы (два), потом микрофон
+  // выходит на режим — блок с броском.
+  if (start_blocks_ > 0) {
+    --start_blocks_;
+    if (start_blocks_ > 0) {
+      memset(block_, 0, sizeof block_);
+      have_ = true;
+      if (cb_) cb_();
+      return;
+    }
+    db = -15;
+  }
   const float amp = 32768.0f * powf(10.0f, db / 20.0f) * 1.41421f;
   for (int i = 0; i < 512; ++i) {
     const float s = amp * sinf((float)(phase_++) * 0.39f) + noise(30.0f) + 40.0f;
@@ -544,12 +668,12 @@ uint32_t sd_flash_write(uint32_t* dst, const uint32_t* src, uint32_t words) {
   if (flash_op.kind) return NRF_ERROR_BUSY;
   const uintptr_t a = (uintptr_t)dst;
   if (a < 0xEA000 || a + words * 4 > 0xED000 || (a & 3)) abort();  // мимо журнала — ошибка прошивки
-  flash_op = FlashOp{1, dst, src, words, 0, now_us + 50 + words * 41};
+  flash_op = FlashOp{1, dst, src, words, 0, now_us, now_us + 50 + words * 41, 0, flash_will_fail()};
   return NRF_SUCCESS;
 }
 uint32_t sd_flash_page_erase(uint32_t page) {
   if (flash_op.kind) return NRF_ERROR_BUSY;
   if (page < 0xEA || page > 0xEC) abort();
-  flash_op = FlashOp{2, nullptr, nullptr, 0, page, now_us + 85000};
+  flash_op = FlashOp{2, nullptr, nullptr, 0, page, now_us, now_us + 85000, 0, flash_will_fail()};
   return NRF_SUCCESS;
 }

@@ -281,6 +281,7 @@ class Behavior {
   bool fed_ = false;  // покормили (зарядили голодного) в fed_at_
   uint32_t fed_at_ = 0;
   uint32_t moved_at_ = 0;  // последнее событие походки
+  uint32_t run_since_ = 0;  // бежит с этого момента
   float shake_level_ = 0;
   uint8_t recent_idle_[4] = {255, 255, 255, 255};
   const char* reason_ = "";

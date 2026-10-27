@@ -1,8 +1,9 @@
 # После сборки платы rev B:
 #   firmware.uf2         — перетащить на диск KEYCHAIN в режиме загрузчика;
 #   firmware-factory.hex — всё сразу для программатора или заводской прошивки: загрузчик с
-#                          SoftDevice, приложение и отметка «приложение рабочее». Залил —
-#                          и брелок сразу запускается, дальше обновления по USB.
+#                          SoftDevice, приложение, отметка «приложение рабочее» и UICR.REGOUT0
+#                          = 3.3 В. Залил — и после сброса брелок сразу работает при 3.3 В,
+#                          дальше обновления по USB.
 import os
 
 Import("env")  # noqa: F821
@@ -13,6 +14,10 @@ Import("env")  # noqa: F821
 STORE_START = 0xEA000
 APP_START = 0x26000  # после MBR и SoftDevice S140 6.1.1
 BOOTLOADER_SETTINGS = 0xFF000
+# UICR.REGOUT0: напряжение REG0 модуля (VDD платы). Стёртый UICR (0xFFFFFFFF) — 1.8 В, VOUT = 5
+# (0xFFFFFFFD) — 3.3 В; остальные биты как у стёртого.
+UICR_REGOUT0 = 0x10001304
+REGOUT0_3V3 = 0xFFFFFFFD
 BOOTLOADER_HEX = os.path.join("bootloader", "emotion_keychain_revb_bootloader-0.11.0-keychain_s140_6.1.1.hex")
 
 
@@ -87,8 +92,17 @@ def make_factory(app, out, project_dir):
     # залитое программатором, но так надёжнее.
     for i, b in enumerate((1, 0, 0, 0)):
         merged[BOOTLOADER_SETTINGS + i] = b
+    # REG0 = 3.3 В уже в файле. Значение действует со следующего сброса, которым программатор
+    # и заканчивает: загрузчик и прошивка с первого же запуска работают при 3.3 В, и прошивке
+    # не нужно записывать UICR и перезагружаться. Сам сеанс программатора на чистом чипе всё
+    # равно идёт при VDD = 1.8 В — программатор должен подстраиваться под VTref (README).
+    for i, b in enumerate(REGOUT0_3V3.to_bytes(4, "little")):
+        a = UICR_REGOUT0 + i
+        if merged.get(a, b) != b:
+            raise SystemExit("в загрузчике или приложении другое значение UICR.REGOUT0 (0x%X)" % a)
+        merged[a] = b
     write_hex(out, merged)
-    print("Заводская прошивка: %s (загрузчик + SoftDevice + приложение)" % out)
+    print("Заводская прошивка: %s (загрузчик + SoftDevice + приложение, REGOUT0 = 3.3 В)" % out)
 
 
 def after_hex(source, target, env):
