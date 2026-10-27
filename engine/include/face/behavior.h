@@ -96,11 +96,21 @@ class Behavior {
   void update(uint32_t now_ms);
   uint32_t next_update_ms() const { return next_; }
 
-  // Часы для суточного ритма: минуты от полуночи (0..1439).
+  // Часы для суточного ритма: минуты от начала текущих суток (0..1439). Если часы известны —
+  // это минуты от полуночи.
   void set_clock(uint16_t minutes) {
     clock_min_ = (uint16_t)(minutes % 1440);
     if (voice_) voice_->set_quiet(night());  // тихие часы — сразу, а не на следующем пробуждении
   }
+  // Известно ли настоящее время (по умолчанию — да). Без часов минуты set_clock — только счёт
+  // суток (лимит кормления), а всё «по часам» выключено: ночь (приглушённый экран, тихий
+  // голос, сон без дела), недосып, пасхалки по времени и достижения за 3 и 5 утра. Темноту
+  // брелок и без часов видит по датчику света.
+  void set_clock_known(bool known) {
+    clock_known_ = known;
+    if (voice_) voice_->set_quiet(night());
+  }
+  bool clock_known() const { return clock_known_; }
   // Без автоматики поведение только ведёт настроение; включённое снова — сразу в деле.
   void set_auto(bool on) {
     auto_ = on;
@@ -237,7 +247,9 @@ class Behavior {
   Expr pick_unlocked(const Expr (&opts)[N]) {
     return pick_unlocked(opts, N);
   }
-  bool night() const { return clock_min_ >= 23 * 60 || clock_min_ < 6 * 60; }
+  // Время суток в [from, to) по настоящим часам; без часов — никогда.
+  bool clock_in(int from, int to) const { return clock_known_ && clock_min_ >= from && clock_min_ < to; }
+  bool night() const { return clock_known_ && (clock_min_ >= 23 * 60 || clock_min_ < 6 * 60); }
   // Эмоция доступна: открыта ростом или своя у характера.
   bool usable(Expr e) const;
   // Подмена через характер: «в покое» — его лицо, «рад» — его радость и т. д.
@@ -250,6 +262,7 @@ class Behavior {
   Mood mood_;
   bool auto_ = true;
   uint16_t clock_min_ = 12 * 60;
+  bool clock_known_ = true;
 
   Expr base_ = Expr::neutral;
   // Сроки с флагом «взведён»: устаревший срок не путается с будущим после переполнения millis().

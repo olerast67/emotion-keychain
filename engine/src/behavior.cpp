@@ -402,8 +402,8 @@ void Behavior::on_event(Event e, uint32_t now) {
       last_touch_ = now;
       off_ = false;
       if (progress_) grant(progress_->touch(), now);
-      if (clock_min_ >= 3 * 60 && clock_min_ < 4 * 60) earn(Ach::night_owl, now);
-      if (clock_min_ >= 5 * 60 && clock_min_ < 6 * 60) earn(Ach::early_bird, now);
+      if (clock_in(3 * 60, 4 * 60)) earn(Ach::night_owl, now);
+      if (clock_in(5 * 60, 6 * 60)) earn(Ach::early_bird, now);
       // Секретный стук «Shave and a haircut»: отвечает «two bits» и подмигивает.
       if (e == Event::tap && knock(now)) {
         react(pick_unlocked({Expr::playful, Expr::wink}), now, 3000, "секретный стук", Clip::wink);
@@ -705,10 +705,13 @@ void Behavior::on_event(Event e, uint32_t now) {
       if (battery == 1) x = Expr::grateful, why = "голодного покормили";
       // Покормить можно не чаще раза в 3 часа: иначе «голод» набивали бы, дёргая кабель
       // (после отключения датчик снова говорит «мало заряда», если ячейка не набралась).
-      if (battery <= 1 && progress_ && (!fed_ || now - fed_at_ >= 3u * 60u * kMin)) {
+      // Отметка о кормлении — и в записи роста по минутам суток: выключение и включение
+      // кнопкой её не сбрасывают.
+      if (battery <= 1 && progress_ && (!fed_ || now - fed_at_ >= 3u * 60u * kMin) &&
+          progress_->may_feed(clock_min_)) {
         fed_ = true;
         fed_at_ = now;
-        grant(progress_->feed(), now);
+        grant(progress_->feed(clock_min_), now);
       }
       set_eco(0);
       SceneParams p;
@@ -769,7 +772,9 @@ void Behavior::on_event(Event e, uint32_t now) {
 }
 
 Expr Behavior::choose_base(uint32_t now) {
-  const uint32_t quiet = now - last_event_;
+  // Шаги не события (походку датчик сообщает, только когда она меняется): на ходу брелок не
+  // «без дела», и ночью он не засыпает посреди прогулки.
+  const uint32_t quiet = moving ? 0u : now - last_event_;
   const uint32_t alone = now - last_touch_;
   if (off_) return Expr::sleeping;
   if (charging) return Expr::charging;
@@ -789,7 +794,7 @@ Expr Behavior::choose_base(uint32_t now) {
   if (mood_.annoyance > 0.35f) return Expr::annoyed;
   if (mood_.energy < 0.12f) return Expr::sleepy;
   // С ним возятся во втором часу ночи и позже — недосып (без дела он к этому времени спит).
-  if (clock_min_ >= 60 && clock_min_ < 6 * 60) return Expr::sleep_deprived;
+  if (clock_in(60, 6 * 60)) return Expr::sleep_deprived;
   if (mood_.energy < 0.25f) return Expr::tired;
   // Игнор, но брелок двигается: зовёт хозяина (не чаще раза в 20 минут).
   if (moving && alone > 60u * kMin && now - last_calling_ > 20u * kMin) {
@@ -805,7 +810,7 @@ Expr Behavior::choose_base(uint32_t now) {
   if (mood_.valence > 0.55f) return flavor(Expr::happy);
   if (temp_) return temp_->rest;  // у характера своё лицо в покое
   if (mood_.valence > 0.35f) return Expr::content;
-  if (clock_min_ >= 21 * 60 && clock_min_ < 22 * 60) return Expr::content;
+  if (clock_in(21 * 60, 22 * 60)) return Expr::content;
   if (quiet > 5u * kMin) return Expr::calm;
   return Expr::neutral;
 }
@@ -1262,6 +1267,7 @@ bool Behavior::date_eggs(uint32_t now) {
 }
 
 bool Behavior::time_eggs(uint32_t now) {
+  if (!clock_known_) return false;  // без часов «13:37» и «3 AM» показывались бы когда попало
   if (clock_min_ < last_clock_) time_eggs_done_ = 0;  // часы прошли полночь
   last_clock_ = clock_min_;
   auto once = [&](int bit) {

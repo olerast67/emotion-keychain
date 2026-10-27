@@ -1224,6 +1224,112 @@ static void test_brightness_levels() {
   CHECK(bh.brightness() == Brightness::Dim, "во сне — приглушённо");
 }
 
+// Часы не заданы (после выключения у платы их нет): минуты — только счёт суток, и ничего
+// «по часам» не включается, что бы в них ни было.
+static void test_clock_unknown() {
+  FaceEngine eng;
+  Behavior bh;
+  Voice voice;
+  Progress pr;
+  pr.reset();
+  eng.init(6, 0);
+  bh.init(&eng, 6, 0);
+  voice.init(nullptr, 6);
+  bh.attach_voice(&voice);
+  bh.attach_progress(&pr);
+  bh.set_clock_known(false);
+  bh.set_clock(2 * 60);
+  CHECK(bh.brightness() == Brightness::Normal && !voice.quiet(), "часы не заданы, в счёте 02:00 — не ночь");
+  uint32_t t = 1000;
+  int night_faces = 0, eggs = 0;
+  auto run_for = [&](uint32_t ms) {
+    for (const uint32_t end = t + ms; t < end; t += 500) {
+      bh.update(t), eng.update(t);
+      const Expr b = bh.base_expression();
+      night_faces += b == Expr::sleepy || b == Expr::sleeping || b == Expr::sleep_deprived;
+      eggs += eng.scene() == Scene::banner || eng.scene() == Scene::error404;
+      night_faces += bh.brightness() != Brightness::Normal && eng.expression() != Expr::sleepy &&
+                     eng.expression() != Expr::sleeping;
+    }
+  };
+  bh.on_event(Event::tap, t);
+  run_for(15u * 60000u);  // без дела 15 минут «ночью»
+  bh.set_clock(3 * 60);  // «3 AM» и 03:00–04:00 для NIGHT OWL
+  bh.on_event(Event::tap, t);
+  run_for(60000);
+  bh.set_clock(4 * 60 + 4);
+  run_for(60000);
+  bh.set_clock(5 * 60 + 30);
+  bh.on_event(Event::double_tap, t);
+  run_for(60000);
+  CHECK(night_faces == 0, "без часов нет сна без дела, недосыпа и ночной яркости (%d)", night_faces);
+  CHECK(eggs == 0 && !pr.earned(Ach::night_owl) && !pr.earned(Ach::early_bird),
+        "без часов нет «3 AM», «04:04» и достижений за 3 и 5 утра");
+  // Часы задали — ночь снова по ним.
+  bh.set_clock_known(true);
+  bh.set_clock(23 * 60 + 30);
+  CHECK(bh.brightness() == Brightness::Dim && voice.quiet(), "часы задали — ночью снова приглушённо и тихо");
+}
+
+// Ночная прогулка при свете: шаги — не события, но на ходу брелок не засыпает.
+static void test_night_walk() {
+  for (const uint16_t clock : {(uint16_t)(23 * 60 + 30), (uint16_t)(1 * 60 + 30)}) {
+    FaceEngine eng;
+    Behavior bh;
+    MotionSensor m;
+    eng.init(8, 0);
+    bh.init(&eng, 8, 0);
+    bh.set_clock(clock);
+    Event ev[kSenseEvents];
+    int asleep = 0, walking = 0, samples = 0;
+    uint32_t next_step = 1000, bump_end = 0;
+    for (uint32_t t = 0; t < 12u * 60000u; t += 10) {
+      if (t >= next_step) bump_end = t + 80, next_step += 500;  // 2 шага в секунду
+      const int n = m.feed(0.0f, t < bump_end ? 1.4f : 1.0f, 0.0f, t, ev);
+      for (int i = 0; i < n; ++i) bh.on_event(ev[i], t);
+      if (t % 50 == 0) bh.update(t), eng.update(t);
+      if (t > 20000 && t % 1000 == 0) {
+        ++samples;
+        const Expr b = bh.base_expression();
+        asleep += b == Expr::sleepy || b == Expr::sleeping;
+        walking += b == Expr::walking || b == Expr::sleep_deprived;
+      }
+    }
+    CHECK(asleep == 0 && walking == samples, "%02u:%02u, 12 минут ходьбы при свете — не засыпает (сон %d, шаг %d из %d)",
+          clock / 60u, clock % 60u, asleep, walking, samples);
+  }
+}
+
+// Встреча с легендарным брелоком: после приветствия — звёзды в глазах у любого характера.
+static void test_legend_greeting() {
+  uint32_t legend = 1;
+  while (identity_from_hash(legend).rarity != Rarity::Legendary) ++legend;
+  int ok = 0;
+  for (int a = 0; a < kArchetypeCount; ++a) {
+    FaceEngine eng;
+    Behavior bh;
+    eng.init(3, 0);
+    bh.init(&eng, 3, 0);  // без роста: открыто всё, и pick_unlocked берёт первый вариант
+    bh.set_temperament(&temperament((Archetype)a));
+    bh.set_clock(12 * 60);
+    bh.meet("LG-0001", true, 1000, legend);
+    bool greeted = false;
+    Expr after = Expr::Count;
+    for (uint32_t t = 1000; t < 40000 && after == Expr::Count; t += 20) {
+      eng.update(t);
+      if (eng.scene() == Scene::greet) greeted = true;
+      bh.update(t);
+      if (greeted && eng.scene() != Scene::greet) after = eng.expression();
+    }
+    ok += greeted && after == Expr::starstruck;
+    if (after != Expr::starstruck)
+      printf("  %s: после приветствия легенды %s\n", temperament((Archetype)a).tag,
+             after == Expr::Count ? "—" : expression(after).id);
+  }
+  CHECK(ok == kArchetypeCount, "легенда рядом — после приветствия звёзды в глазах у всех характеров (%d из %d)", ok,
+        kArchetypeCount);
+}
+
 // ---------------------------------------------------------------- звук
 
 static uint32_t voice_ms(const Voice& v) {
@@ -1937,7 +2043,7 @@ static void test_encounter_attacks() {
   const uint32_t me = 0x80000000u;
   Advert fake;
   fake.hash = 1;  // всегда меньше: «объявляет» он
-  fake.countdown = 1;
+  fake.countdown = 30;
   fake.to = (uint16_t)(me & 0xFFFF);
   fake.flags = kAdvDuelReady | kAdvDuelCalled;
   {
@@ -1962,7 +2068,7 @@ static void test_encounter_attacks() {
     e.on_advert(fake, -60, 500);
     Meeting m;
     bool got = false;
-    for (uint32_t t = 500; t < 3000; t += 50) got |= e.poll(t, &m);
+    for (uint32_t t = 500; t < 5000; t += 50) got |= e.poll(t, &m);
     CHECK(got && m.kind == Rendezvous::Greet, "дуэль без моего согласия не начинается — только приветствие (%d)",
           (int)m.kind);
   }
@@ -1981,16 +2087,19 @@ static void test_encounter_attacks() {
     CHECK(!e.pending(), "отсчёт на 25 с — подделка, не принимается");
     cd.countdown = 15;
     e.on_advert(cd, -60, 100);
+    CHECK(!e.pending(), "объявление за 1.5 с до сцены — поздно: «принял» объявивший уже не услышит");
+    cd.countdown = 30;
+    e.on_advert(cd, -60, 100);
     CHECK(e.pending(), "обычный отсчёт принимается");
     Meeting m;
     bool got = false;
     uint32_t at = 0;
-    for (uint32_t t = 100; t < 4000; t += 50) {
-      cd.countdown = 15;  // пытается откладывать начало
+    for (uint32_t t = 100; t < 6000; t += 50) {
+      cd.countdown = 30;  // пытается откладывать начало
       e.on_advert(cd, -60, t);
       if (!got && e.poll(t, &m)) got = true, at = t;
     }
-    CHECK(got && at <= 1650, "начало нельзя отложить повторными пакетами: %u мс", (unsigned)at);
+    CHECK(got && at <= 3150, "начало нельзя отложить повторными пакетами: %u мс", (unsigned)at);
     CHECK(!e.wants_busy(at + 100), "после встречи сосед в перерыве — эфир не слушаем чаще");
     // 20 выдуманных соседей не сбрасывают перерыв настоящему.
     for (uint32_t i = 0; i < 20; ++i) {
@@ -2212,22 +2321,22 @@ static void test_encounter_cooldown_wrap() {
 }
 
 static void test_encounter_rate_limit() {
-  // Поток поддельных соседей: каждые 2.5 с новый позывной, дважды вблизи и с объявлением.
+  // Поток поддельных соседей: каждые 4 с новый позывной, дважды вблизи и с объявлением.
   Encounters e;
   const uint32_t me = 0x80000000u;
   e.init(me);
   e.set_self(1, kAdvDuelReady, 128);
   int scenes = 0;
   Meeting m;
-  for (uint32_t t = 0, i = 0; t < 600000; t += 2500, ++i) {
+  for (uint32_t t = 0, i = 0; t < 600000; t += 4000, ++i) {
     Advert f;
     f.hash = 1000 + i;
     e.on_advert(f, -50, t);
     e.on_advert(f, -50, t + 100);
     Advert cd = f;
-    cd.countdown = 10, cd.to = (uint16_t)(me & 0xFFFF), cd.flags = kAdvDuelReady | kAdvDuelCalled;
+    cd.countdown = 30, cd.to = (uint16_t)(me & 0xFFFF), cd.flags = kAdvDuelReady | kAdvDuelCalled;
     e.on_advert(cd, -50, t + 200);
-    for (uint32_t k = t; k < t + 2500; k += 100) scenes += e.poll(k, &m);
+    for (uint32_t k = t; k < t + 4000; k += 100) scenes += e.poll(k, &m);
   }
   CHECK(scenes <= 6, "поток подделок: за 10 минут не больше 6 сцен (%d)", scenes);
   // Знакомый брелок лимит не тратит: после потока подделок встреча с ним проходит.
@@ -2239,10 +2348,10 @@ static void test_encounter_rate_limit() {
   e.on_advert(fr, -50, t0);
   e.on_advert(fr, -50, t0 + 100);
   Advert cd = fr;
-  cd.countdown = 10, cd.to = (uint16_t)(me & 0xFFFF);
+  cd.countdown = 30, cd.to = (uint16_t)(me & 0xFFFF);
   e.on_advert(cd, -50, t0 + 200);
   bool met = false;
-  for (uint32_t k = t0; k < t0 + 3000; k += 100) met |= e.poll(k, &m) && m.peer == kFriend;
+  for (uint32_t k = t0; k < t0 + 4000; k += 100) met |= e.poll(k, &m) && m.peer == kFriend;
   CHECK(met, "знакомый встречается и сразу после потока подделок");
 }
 
@@ -2855,8 +2964,32 @@ static void test_feed_cooldown() {
   CHECK(pr.feeds == 1 && !pr.earned(Ach::caring), "шесть раз дёрнули кабель — покормили один раз (%u)",
         (unsigned)pr.feeds);
   at(Event::battery_low, 3u * 3600000u);
+  bh.set_clock(15 * 60 + 10);  // прошивка ведёт минуты суток
   at(Event::charge_start, 10000);
   CHECK(pr.feeds == 2, "через 3 часа — снова (%u)", (unsigned)pr.feeds);
+
+  // Выключили кнопкой и включили: поведение и датчик батареи начинают заново, а запись роста —
+  // та же. Отметка о кормлении в ней, и перезагрузки не кормят.
+  Progress saved = pr;
+  for (int i = 0; i < 5; ++i) {
+    saved.seal();
+    Progress loaded;
+    CHECK(loaded.load(&saved, sizeof saved), "запись роста читается");
+    FaceEngine e2;
+    Behavior b2;
+    e2.init(20 + (uint32_t)i, 0);
+    b2.init(&e2, 20 + (uint32_t)i, 0);
+    b2.attach_progress(&loaded);
+    b2.set_clock((uint16_t)(15 * 60 + 20 + i * 2));  // минуты суток идут дальше с того же места
+    b2.on_event(Event::battery_low, 31000);
+    b2.on_event(Event::charge_start, 41000);
+    saved = loaded;
+  }
+  CHECK(saved.feeds == 2 && !saved.earned(Ach::caring), "пять перезагрузок с кабелем — не кормление (%u)",
+        (unsigned)saved.feeds);
+  CHECK(!saved.may_feed(18 * 60 + 5) && saved.may_feed(18 * 60 + 15), "снова — не раньше чем через 3 часа");
+  saved.new_day();
+  CHECK(saved.may_feed(0), "новые сутки — снова можно");
 }
 
 // День рождения хозяина — важнее праздника в тот же день; новые сутки без часов открывают
@@ -3030,12 +3163,15 @@ static void test_encounter_level_frozen() {
     a.init(0x10002000u), b.init(0x90003000u);
     a.set_self(1, kAdvDuelReady, (uint8_t)mood), b.set_self(3, kAdvDuelReady, 128);
     Meeting ma, mb;
-    bool ga = false, gb = false, a_up = false, b_up = false;
+    bool ga = false, gb = false, a_up = false, b_mid = false, b_up = false;
     for (uint32_t t = 0; t < 20000; t += 50) {
       if (t % 1000 == 0) b.on_advert(a.advert(t), -60, t);
       if (t % 1000 == 500) a.on_advert(b.advert(t), -60, t);
       if (a.pending() && !a_up) a.set_self(9, kAdvDuelReady, (uint8_t)mood), a_up = true;  // новый имплант
-      if (b.pending() && !b_up) b.set_self(10, kAdvDuelReady, 128), b_up = true;
+      // У B имплант встал после последнего обычного пакета, который слышал A, но до того, как B
+      // принял объявление: A считал исход по уровню 3, а B — по 10. Исход у A — по ответу.
+      if (a.pending() && !b.pending() && !b_mid) b.set_self(10, kAdvDuelReady, 128), b_mid = true;
+      if (b.pending() && !b_up) b.set_self(11, kAdvDuelReady, 128), b_up = true;  // посреди отсчёта
       Meeting m;
       if (!ga && a.poll(t, &m)) ma = m, ga = true;
       if (!gb && b.poll(t, &m)) mb = m, gb = true;
@@ -3043,10 +3179,10 @@ static void test_encounter_level_frozen() {
     if (!(ga && gb && ma.kind == Rendezvous::Duel && mb.kind == Rendezvous::Duel)) continue;
     ++n;
     same += ma.won == mb.won;
-    levels += ma.peer_level == 3 && mb.peer_level == 1;
+    levels += ma.peer_level == 10 && mb.peer_level == 1;
   }
   CHECK(n == 86 && same == 0, "дуэлей %d, исход совпал у обоих в %d (должен быть ровно один победитель)", n, same);
-  CHECK(levels == n, "уровень соседа — каким он был на начало отсчёта (%d из %d)", levels, n);
+  CHECK(levels == n, "уровень соседа — каким он был, когда отсчёт приняли (%d из %d)", levels, n);
 }
 
 // ---------------------------------------------------------------- все эмоции достижимы
@@ -3310,6 +3446,7 @@ int main() {
   test_wake_merge_and_horizon();
   test_calm_breathing();
   test_brightness_levels();
+  test_clock_unknown();
   test_sound_cues();
   test_sound_playback();
   test_scene_music();
@@ -3346,11 +3483,13 @@ int main() {
   test_duel_friendship();
   test_tap_frenzy();
   test_gait_events();
+  test_night_walk();
   test_feed_cooldown();
   test_birthday_first();
   test_encounter_busy_bound();
   test_encounter_cooldown_series();
   test_encounter_level_frozen();
+  test_legend_greeting();
   test_emotion_reachability();
   printf("%d проверок, %d ошибок\n", g_checks, g_fail);
   return g_fail ? 1 : 0;

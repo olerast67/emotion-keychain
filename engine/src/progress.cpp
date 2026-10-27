@@ -358,7 +358,7 @@ int Progress::new_day(const XpRules& r) {
   } else {
     streak = 0;
   }
-  touched_today = fed_today = 0;
+  touched_today = fed_today = fed_at = 0;
   today_touch_xp = today_step_xp = 0;
   today_new_friends = today_gifts = today_duel_prizes = today_duels = today_known_friends = 0;
   return add_xp(r.day);
@@ -412,6 +412,11 @@ int Progress::feed(const XpRules& r) {
   if (fed_today) return -1;
   fed_today = 1;
   return add_xp(r.care);
+}
+
+int Progress::feed(uint16_t day_min, const XpRules& r) {
+  fed_at = (uint8_t)((day_min % 1440u + 9u) / 10u + 1u);
+  return feed(r);
 }
 
 bool Progress::earn(Ach a) {

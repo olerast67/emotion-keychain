@@ -279,6 +279,8 @@ void Encounters::on_advert(const Advert& a, int rssi, uint32_t now) {
       return;
     }
     if (pending()) return;  // уже ждём другую сцену
+    // Услышали объявление слишком поздно: ответ «принял» до объявившего уже не дойдёт.
+    if ((uint32_t)a.countdown * 100u < cfg_.accept_min_ms) return;
     if (cooling(a.hash, now) || !rate_ok(a.hash, now)) return;
     // Дуэль — только если хозяин сам их разрешил. Сколько дуэлей сегодня, решает объявивший:
     // мой список мог пропасть с перезагрузкой, а сцена у обоих должна быть одна. Свой полный
