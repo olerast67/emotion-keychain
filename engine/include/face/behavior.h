@@ -150,9 +150,12 @@ class Behavior {
   // Хакерская дуэль с другим брелоком: победа открывает эмоцию досрочно. С peer_hash
   // и общим nonce сеанса BLE после дуэли брелоки «переговариваются» шифром (сцена chat):
   // оба ставят её в очередь одинаково, поэтому разговор идёт у них одновременно.
-  void duel(const char* code, bool won, uint32_t now_ms, uint32_t peer_hash = 0, uint32_t nonce = 0);
+  void duel(const char* code, bool won, uint32_t now_ms, uint32_t peer_hash = 0, uint32_t nonce = 0,
+            uint8_t peer_level = 0);
   // Секретный разговор с соседом без дуэли.
   void chat(const char* code, uint32_t peer_hash, uint32_t nonce, uint32_t now_ms);
+  // После встречи или дуэли: баннер роста дружбы, опыт, достижение и подарок старшего.
+  void friendship(const char* code, int before, int level, bool first_today, uint8_t peer_level, uint32_t now_ms);
 
   // Питание. Процент заряда показывает сцена зарядки (−1 — неизвестен). При малом заряде
   // поведение само переходит в экорежим: реже кадры и занятия, без сюрпризов.
@@ -271,7 +274,9 @@ class Behavior {
   uint32_t last_calling_ = 0;
   uint32_t last_cyclops_ = 0;
   Expr recent_react_[4] = {Expr::Count, Expr::Count, Expr::Count, Expr::Count};
-  uint32_t tap_times_[8] = {};
+  static constexpr int kTapHistory = 12;  // «тыкают без остановки» — от 9 тапов за 3 с
+  uint32_t tap_times_[kTapHistory] = {};
+  uint32_t fed_at_ = 0;
   float shake_level_ = 0;
   uint8_t recent_idle_[4] = {255, 255, 255, 255};
   const char* reason_ = "";

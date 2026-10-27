@@ -98,8 +98,9 @@ def lipo_pads():
     s += _rect(-c["w"] / 2, -c["h"] / 2, c["w"] / 2, c["h"] / 2, "F.Fab")
     s += _text("user", "LiPo 20x25", 0, 2.0, "F.Fab", 1.0)
     for i, (label, y) in enumerate(zip(("+", "-"), c["pad_y"])):
+        # Без пасты: провода паяются руками, капли припоя с завода только мешали бы.
         s += (f'  (pad "{i + 1}" smd roundrect (at {c["pad_x"]:.3f} {y:.3f}) (size 2.0 1.6) '
-              f'(layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))\n')
+              f'(layers "F.Cu" "F.Mask") (roundrect_rratio 0.25))\n')
         s += _text("user", label, c["pad_x"] - 2.0, y, "F.SilkS", 1.0)
     y0, y1 = c["pad_y"][0] - 1.05, c["pad_y"][1] + 1.05
     s += _rect(c["pad_x"] - 2.7, y0, c["pad_x"] + 1.25, y1, "F.CrtYd", 0.05)
@@ -127,7 +128,7 @@ def vibro_motor():
           ') (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))\n')
     for i, (label, y) in enumerate(zip(("+", "-"), m["pad_y"])):
         s += (f'  (pad "{i + 1}" smd roundrect (at {m["pad_x"]:.3f} {y:.3f}) (size 1.4 1.2) '
-              f'(layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))\n')
+              f'(layers "F.Cu" "F.Mask") (roundrect_rratio 0.25))\n')
         s += _text("user", label, m["pad_x"], y + (-1.65 if i == 0 else 1.65), "F.SilkS", 0.8)
     return s + ")\n"
 

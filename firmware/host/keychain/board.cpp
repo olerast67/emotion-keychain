@@ -150,12 +150,12 @@ void report() {
   char b[4];
   for (uint8_t c : adv.data) snprintf(b, sizeof b, "%02x", c), hex += b;
   printf("ST t=%u adv=%d iv=%u scan=%d disp=%d vis=%d con=%u lit=%d tone=%u vib=%d mic=%d als=%d acc=%d hf=%d "
-         "vibv=%.2f q=%.0f loops=%u mism=%u dark=%u i2c=%u ffail=%u ovr=%u frames=%u xp=%u fr=%u steps=%u scanms=%.0f adv_ev=%.1f "
+         "vibv=%.2f chgen=%d q=%.0f loops=%u mism=%u dark=%u i2c=%u ffail=%u ovr=%u frames=%u xp=%u fr=%u steps=%u scanms=%.0f adv_ev=%.1f "
          "uicr=%x data=%s\n",
          sim::now_ms(), adv.running ? 1 : 0, adv.interval, Bluefruit.Scanner.isRunning() ? 1 : 0,
          sim::oled_powered() ? 1 : 0, sim::oled_dev.visible() ? 1 : 0, sim::oled_dev.contrast, sim::oled_dev.lit(),
          sim::status.tone_hz, NRF_PWM2->ENABLE.v ? 1 : 0, sim::status.pdm_running ? 1 : 0, sim::ltr_active() ? 1 : 0,
-         sim::lis_active() ? 1 : 0, sim::status.hfclk_requested ? 1 : 0, sim::status.vib_peak_v, charge_uams, sim::status.loops, mismatches,
+         sim::lis_active() ? 1 : 0, sim::status.hfclk_requested ? 1 : 0, sim::status.vib_peak_v, sim::pin_mode[23] == sim::kOutput && !sim::pin_out[23] ? 1 : 0, charge_uams, sim::status.loops, mismatches,
          dark_errors, sim::status.i2c_errors, sim::flash_failure_count(), sim::lis_overruns(), frame_changes,
          (unsigned)progress.xp, (unsigned)friends.count(), (unsigned)progress.steps, scan_ms, adv_events,
          sim::status.uicr_regout0, hex.empty() ? "-" : hex.c_str());
@@ -213,7 +213,10 @@ void serve() {
       if (!strcmp(key, "lux")) w.lux = a;
       if (!strcmp(key, "mic")) w.mic_db = a, w.mic_pattern = (int)b;
       if (!strcmp(key, "temp")) w.temp_c = a;
-      if (!strcmp(key, "vbus")) w.vbus = a != 0;
+      if (!strcmp(key, "vbus")) {
+        if (w.vbus && a == 0) w.vbus_off_us = sim::now_us;
+        w.vbus = a != 0;
+      }
       if (!strcmp(key, "chg")) w.charging = a != 0;
       if (!strcmp(key, "cell")) w.cell_v = a;
       if (!strcmp(key, "button")) w.button = a != 0;

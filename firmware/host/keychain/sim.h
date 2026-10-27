@@ -46,6 +46,7 @@ struct World {
   int mic_pattern = 0;  // 0 — ровно, 1 — речь (слоги с паузами)
   float temp_c = 24;
   bool vbus = false;
+  uint64_t vbus_off_us = 0;  // когда отключили USB (провал VSYS через диод Q1)
   bool button = false;
   float cell_v = 3.9f;  // расчётное напряжение ячейки (координатор ведёт заряд)
   bool charging = false;

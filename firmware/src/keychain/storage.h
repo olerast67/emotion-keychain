@@ -23,6 +23,8 @@ constexpr size_t kMaxRecord = 512;
 void begin();
 // Последняя целая запись размера n: true и данные в buf.
 bool load(void* buf, size_t n);
+// Последняя целая запись любого размера: копирует до cap байт, возвращает её длину или −1.
+int load_any(void* buf, size_t cap);
 // Дописать новую запись (n ≤ kMaxRecord). Обычно — одна запись страницы, без стирания.
 bool save(const void* data, size_t n);
 // Записи старой прошивки (файлы LittleFS): число байт или −1.

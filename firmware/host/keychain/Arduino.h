@@ -30,7 +30,7 @@
 #define PIN_PDM_PWR (41)
 
 constexpr int LOW = 0, HIGH = 1;
-constexpr int INPUT = 0, OUTPUT = 1, INPUT_PULLUP = 2, INPUT_PULLDOWN = 3;
+constexpr int INPUT = 0, OUTPUT = 1, INPUT_PULLUP = 2, INPUT_PULLDOWN = 3, OUTPUT_S0D1 = 0xD;
 enum eAnalogReference { AR_DEFAULT, AR_INTERNAL };
 
 // Как в ядре: millis() — тики FreeRTOS (1024 Гц) × 1000 / 1024, тики 32-битные. Через
@@ -50,6 +50,7 @@ void analogReference(eAnalogReference);
 void analogReadResolution(int bits);
 void analogSampleTime(uint8_t us);
 uint32_t analogReadVDDHDIV5();
+inline void analogCalibrateOffset() {}
 float readCPUTemperature();
 uint32_t readResetReason();
 [[noreturn]] void systemOff(uint32_t pin, uint8_t wake_logic);

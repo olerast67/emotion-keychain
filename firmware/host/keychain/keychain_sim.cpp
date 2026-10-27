@@ -252,10 +252,13 @@ void battery(Board& b, uint64_t dt_ms) {
   const double ua = b.uams_window / (double)dt_ms;
   b.uams_window = 0;
   const double h = (double)dt_ms / 3600000.0;
-  if (b.vbus) {
+  if (b.vbus && b.alive && b.num("chgen") == 1) {
+    // Заряжает MCP73832, только когда прошивка опустила нижний конец R3 (CHG_EN).
     if (b.soc_mah >= b.cap_mah * 0.995) b.charging = false;
     else if (b.soc_mah < b.cap_mah * 0.96) b.charging = true;
     if (b.charging) b.soc_mah = fmin(b.cap_mah, b.soc_mah + 100.0 * h);
+  } else if (b.vbus) {
+    b.charging = false;
   } else {
     b.charging = false;
     b.soc_mah -= ua / 1000.0 * h;
@@ -498,6 +501,7 @@ void sc_sensors() {
 void sc_sound() {
   say("\n== Звук ==");
   Board& a = *boards[0];
+  a.cmd("IN v on");  // события печатаются и без сценария sensors
   a.cmd("SET mic -62 0");
   run(6000);
   uint64_t t = g_ms;
@@ -565,6 +569,7 @@ void sc_light_and_pocket() {
 void sc_charge() {
   say("\n== Зарядка ==");
   Board& a = *boards[0];
+  a.cmd("IN v on");
   a.soc_mah = 60;
   uint64_t t = g_ms;
   a.vbus = true;
@@ -583,6 +588,17 @@ void sc_charge() {
   a.cmd("SET vbus 0");
   run(15000);
   CHECK(said(a, "Событие: charge_stop", t), "USB отключили — charge_stop");
+  // Сразу после отключения система ~0.1 с питается через диод P-MOSFET: замер тогда показал
+  // бы почти пустую ячейку.
+  CHECK(!said(a, "Событие: battery_low", t) && !said(a, "Событие: battery_critical", t),
+        "после отключения от полной зарядки — не «мало заряда»");
+  t = g_ms;
+  a.cmd("IN sensors");
+  run(500);
+  int pct = -1;
+  for (auto& [ms, l] : a.out)
+    if (ms >= t && l.find("заряд ") != std::string::npos) sscanf(l.c_str() + l.find("заряд ") + strlen("заряд "), "%d", &pct);
+  CHECK(pct >= 90, "заряд после отключения от полной зарядки: %d%%", pct);
   CHECK(!any_event(a, t), "без сбросов");
   a.soc_mah = 120;
 }
@@ -727,6 +743,45 @@ void sc_power_off_battery() {
   CHECK(a.num("xp") >= xp, "рост сохранён (опыт %ld, был %ld)", a.num("xp"), xp);
   CHECK(said(a, "время и дата сброшены", t), "после выключения время сброшено и консоль просит задать");
   CHECK(!happened(a, "dfu", t), "кнопка без USB не включает загрузчик");
+  // Будят, держа кнопку 6 с, «пока не включится»: это не удержание для выключения.
+  run(5000);
+  a.button = true;
+  a.cmd("SET button 1");
+  run(3500);
+  a.button = false;
+  a.cmd("SET button 0");
+  run(16000);
+  CHECK(!a.alive, "снова выключен");
+  t = g_ms;
+  a.button = true;
+  run(100);
+  a.cmd("SET button 1");
+  run(6000);
+  a.button = false;
+  a.cmd("SET button 0");
+  run(10000);
+  CHECK(a.alive && !happened(a, "off", t), "долгое нажатие, которым разбудили, не выключает снова");
+  // Зажали кнопку и подключили USB — загрузчик, как и написано в README.
+  t = g_ms;
+  a.button = true;
+  a.cmd("SET button 1");
+  run(500);
+  a.vbus = true;
+  a.cmd("SET vbus 1");
+  run(1500);
+  CHECK(happened(a, "dfu", t), "кнопка + USB — загрузчик для новой прошивки");
+  a.button = false;
+  a.vbus = false;
+  run(1000);
+  t = g_ms;
+  a.button = true;
+  run(100);
+  a.cmd("SET button 1");
+  run(300);
+  a.button = false;
+  a.cmd("SET button 0");
+  run(4000);
+  CHECK(a.alive && said(a, "Экран есть", t), "после загрузчика кнопка снова будит");
 }
 
 void sc_power_off_usb() {
@@ -909,6 +964,20 @@ void sc_empty_cell() {
   CHECK(happened(a, "off", t), "ячейка почти пуста — брелок сам выключился");
   CHECK(a.soc_mah > 0, "раньше, чем плата защиты отключила бы питание (осталось %.2f мА·ч)", a.soc_mah);
   CHECK(said(a, "почти пуста", t), "консоль сообщает причину");
+  // Кнопка на пустой ячейке: секунда с пустой батареей на экране и снова сон, без загрузки.
+  const double before = a.soc_mah;
+  const uint64_t tp = g_ms;
+  for (int i = 0; i < 3; ++i) {
+    a.button = true;
+    run(100);
+    a.cmd("SET button 1");
+    run(300);
+    a.button = false;
+    a.cmd("SET button 0");
+    run(5000);
+  }
+  CHECK(!a.alive && !said(a, "Брелок с эмоциями", tp), "кнопка на пустой ячейке не загружает брелок целиком");
+  CHECK(before - a.soc_mah < 0.05, "три нажатия стоили %.3f мА·ч", before - a.soc_mah);
   a.soc_mah = 120;
   const uint64_t tw = g_ms;
   a.vbus = true;

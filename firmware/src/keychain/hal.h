@@ -17,19 +17,22 @@ bool warm_reset();
 float vsys_volts();
 bool usb_present();
 bool charging();  // зарядник заряжает (статус MCP73832)
+// Разрешить заряд ячейки (ножка CHG_EN, нижний конец R3). По умолчанию — запрещён.
+void charge_enable(bool on);
 float temperature_c();
 
 // Сторожевой таймер: 8 с; считает и во сне процессора. Загрузчик тоже его кормит.
 void watchdog_start();
 void watchdog_feed();
-// Освободить шину I2C, если ведомый держит SDA (до Wire.begin).
-void i2c_recover(uint8_t sda, uint8_t scl);
+// Освободить шину I2C, если ведомый держит SDA или SCL (до Wire.begin). true — шина свободна.
+bool i2c_recover(uint8_t sda, uint8_t scl);
 // Шина на 390 кГц вместо 400 (errata 219), после setClock: 0 — Wire, 1 — Wire1.
 void i2c_390k(int bus);
 
 // Выключение: всё гаснет, плата просыпается от кнопки или USB (с перезагрузкой).
 // При подключённом USB не вызывать: кнопка при USB включает загрузчик (см. main.cpp).
-[[noreturn]] void system_off();
+// Возвращается, только если USB подключили, пока ждали отпускания кнопки.
+void system_off();
 // Перезагрузка в загрузчик для обновления прошивки по USB (диск KEYCHAIN и последовательный DFU).
 [[noreturn]] void enter_bootloader();
 

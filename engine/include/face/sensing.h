@@ -137,6 +137,8 @@ class BatterySensor {
   bool low_said_ = false, critical_said_ = false, empty_ = false;
   uint32_t empty_since_ = 0;
   bool empty_timing_ = false;
+  bool settling_ = false;  // первые 30 с без USB: заряд по наибольшему замеру
+  uint32_t settle_from_ = 0;
 };
 
 }  // namespace face

@@ -46,8 +46,23 @@ void power_init() {
   // опуститься ниже порога. Высокий уровень даёт светодиод заряда от VBUS, низкий — STAT.
   // Вход подключается только на время чтения (charging).
   nrf_gpio_cfg_default(board::kChgIo);
+  // Заряд выключен, пока прошивка не проверит температуру (charge_enable).
+  nrf_gpio_cfg_default(board::kChgEn);
   // У делителя VDDH/5 большое сопротивление: замеру нужно время выборки побольше.
   analogSampleTime(40);
+  // Смещение нуля АЦП — калибровкой по внутреннему эталону (несколько миллисекунд).
+  analogCalibrateOffset();
+}
+
+void charge_enable(bool on) {
+  // R3 задаёт ток заряда, только когда его нижний конец на земле: ножка в нуле — заряд,
+  // ножка отпущена — PROG висит, и MCP73832 не заряжает (питание от USB через D1 остаётся).
+  if (on) {
+    digitalWrite(board::kChgEn, LOW);
+    pinMode(board::kChgEn, OUTPUT);
+  } else {
+    nrf_gpio_cfg_default(board::kChgEn);
+  }
 }
 
 bool warm_reset() {
@@ -99,27 +114,34 @@ void watchdog_start() {
 
 void watchdog_feed() { NRF_WDT->RR[0] = WDT_RR_RR_Reload; }
 
-void i2c_recover(uint8_t sda, uint8_t scl) {
+bool i2c_recover(uint8_t sda, uint8_t scl) {
   // Датчик, сброшенный посреди чтения, может держать SDA в нуле: шина зависла бы навсегда.
-  // До девяти тактов SCL выпускают его, потом — стоп.
+  // До девяти тактов SCL выпускают его, потом — стоп. Обе линии — открытым стоком, как на
+  // шине I2C: «единицу» дают подтяжки, и ножка никогда не спорит с ведомым, держащим ноль.
   pinMode(sda, INPUT_PULLUP);
   pinMode(scl, INPUT_PULLUP);
   delayMicroseconds(10);
-  if (digitalRead(sda) == HIGH) return;
-  pinMode(scl, OUTPUT);
+  if (digitalRead(sda) == HIGH && digitalRead(scl) == HIGH) return true;
+  digitalWrite(scl, HIGH);
+  pinMode(scl, OUTPUT_S0D1);
   for (int i = 0; i < 9 && digitalRead(sda) == LOW; ++i) {
     digitalWrite(scl, LOW);
     delayMicroseconds(5);
     digitalWrite(scl, HIGH);
     delayMicroseconds(5);
   }
-  pinMode(sda, OUTPUT);
   digitalWrite(sda, LOW);
+  pinMode(sda, OUTPUT_S0D1);
   delayMicroseconds(5);
   digitalWrite(sda, HIGH);  // стоп: SDA вверх при высоком SCL
   delayMicroseconds(5);
+  pinMode(sda, INPUT_PULLUP);
+  pinMode(scl, INPUT_PULLUP);
+  delayMicroseconds(10);
+  const bool free = digitalRead(sda) == HIGH && digitalRead(scl) == HIGH;
   pinMode(sda, INPUT);
   pinMode(scl, INPUT);
+  return free;
 }
 
 void i2c_390k(int bus) {
@@ -148,6 +170,9 @@ void system_off() {
   digitalWrite(board::kDispEn, LOW);
   mic_end();
   delay(20);
+  // Пока ждали кнопку, могли подключить USB: из сна без кнопки его подключение уже не
+  // разбудит, а кнопка при USB включила бы загрузчик. Возвращаемся в выключение на USB.
+  if (usb_present()) return;
   // Кнопка будит из полного сна; подключение USB — тоже (событие VBUS у nRF52840).
   if (!stuck) systemOff(board::kButton, LOW);
   // Кнопка залипла: сон без неё, разбудит только USB.
@@ -303,6 +328,7 @@ namespace {
 int16_t mic_buf[512];
 volatile float mic_level = -90.0f;
 volatile bool mic_fresh = false;
+volatile int mic_skip = 0;
 bool mic_running = false;
 
 void on_pdm() {
@@ -310,6 +336,12 @@ void on_pdm() {
   const int n = PDM.available();
   const int got = PDM.read(mic_buf, n > (int)sizeof(mic_buf) ? (int)sizeof(mic_buf) : n) / 2;
   if (got <= 0) return;
+  // Первые блоки после включения — нули из буфера библиотеки и выход микрофона на режим:
+  // по ним вышло бы, что вокруг полная тишина, а потом — внезапный шум.
+  if (mic_skip > 0) {
+    --mic_skip;
+    return;
+  }
   int32_t mean = 0;
   for (int i = 0; i < got; ++i) mean += mic_buf[i];
   mean /= got;  // постоянная составляющая
@@ -328,6 +360,8 @@ bool mic_begin() {
   if (mic_running) return true;
   PDM.onReceive(on_pdm);
   PDM.setBufferSize((int)sizeof(mic_buf));
+  mic_skip = 4;  // ~130 мс
+  mic_fresh = false;
   mic_running = PDM.begin(1, 16000) == 1;
   // PDM.begin просит у SoftDevice кварц 64 МГц, а PDM.end его не отпускает: кварц (~0.25 мА)
   // работал бы до выключения, в том числе в кармане. Для уровня в дБ хватает внутреннего

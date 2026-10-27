@@ -126,6 +126,15 @@ enum IdleId : uint8_t {
   kDevil,
   kBoo,
   kCyclops,
+  kFocused,
+  kNervous,
+  kUwu,
+  kDoomer,
+  kImDead,
+  kNervousLaugh,
+  kGuilty,
+  kApologetic,
+  kKiss,
   kIdleCount
 };
 
@@ -141,6 +150,9 @@ const IdleAct kIdle[kIdleCount] = {
     {Expr::troll_grin, Clip::None, 3500},  {Expr::money, Clip::None, 3000},        {Expr::robot, Clip::None, 5000},
     {Expr::party, Clip::None, 5000},       {Expr::derp, Clip::None, 3500},         {Expr::cool, Clip::None, 5000},
     {Expr::devilish, Clip::None, 4000},    {Expr::boo, Clip::None, 3000},          {Expr::cyclops, Clip::None, 3000},
+    {Expr::focused, Clip::None, 4500},     {Expr::nervous, Clip::None, 3000},      {Expr::uwu, Clip::None, 3500},
+    {Expr::doomer, Clip::None, 4500},      {Expr::im_dead, Clip::None, 3500},      {Expr::nervous_laugh, Clip::None, 3000},
+    {Expr::guilty, Clip::None, 3000},      {Expr::apologetic, Clip::None, 3000},   {Expr::kiss, Clip::None, 2500},
 };
 
 }  // namespace
@@ -163,6 +175,7 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   next_eval_ = now;
   shake_level_ = 0;
   for (uint32_t& t : tap_times_) t = 0;
+  fed_at_ = 0;
   for (uint32_t& t : falls_) t = 0;
   for (uint8_t& r : recent_idle_) r = 255;
   for (Expr& r : recent_react_) r = Expr::Count;
@@ -395,7 +408,7 @@ void Behavior::on_event(Event e, uint32_t now) {
       }
       const int add = e == Event::double_tap ? 2 : 1;
       for (int a = 0; a < add; ++a) {
-        for (int i = 7; i > 0; --i) tap_times_[i] = tap_times_[i - 1];
+        for (int i = kTapHistory - 1; i > 0; --i) tap_times_[i] = tap_times_[i - 1];
         tap_times_[0] = now;
       }
       int n = 0;
@@ -423,7 +436,8 @@ void Behavior::on_event(Event e, uint32_t now) {
         react(pick(o), now, 3500, "слишком много тапов");
       } else if (n >= 4) {
         mood_.annoyance = clamp01(mood_.annoyance + 0.12f);
-        const Option o[] = {{Expr::annoyed, 3}, {Expr::unamused, 2}, {Expr::bruh, 1.5f}, {Expr::skeptical, 1}};
+        const Option o[] = {{Expr::annoyed, 3},   {Expr::unamused, 2},  {Expr::bruh, 1.5f},
+                            {Expr::skeptical, 1}, {Expr::disgusted, 0.5f}};
         react(pick(o), now, 2600, "надоедают тапами", Clip::headshake);
       } else if (n == 3) {
         mood_.valence = clamp11(mood_.valence + 0.1f);
@@ -657,7 +671,11 @@ void Behavior::on_event(Event e, uint32_t now) {
       const char* why = "подключили зарядку";
       if (battery == 0) x = Expr::relieved, why = "зарядку подключили в последний момент";
       if (battery == 1) x = Expr::grateful, why = "голодного покормили";
-      if (battery <= 1 && progress_) grant(progress_->feed(), now);
+      // Покормить можно не чаще раза в 3 часа: иначе «голод» набивали бы, дёргая кабель.
+      if (battery <= 1 && progress_ && (!fed_at_ || now - fed_at_ >= 3u * 60u * kMin)) {
+        fed_at_ = now;
+        grant(progress_->feed(), now);
+      }
       set_eco(0);
       SceneParams p;
       p.value = battery_pct_;
@@ -674,6 +692,8 @@ void Behavior::on_event(Event e, uint32_t now) {
     case Event::charge_stop:
       charging = false;
       react(battery < 2 ? Expr::disappointed : Expr::hello, now, 2200, "отключили зарядку");
+      // Заряд снова меряется без USB: если ячейка ещё мало заряжена, датчик сам скажет.
+      battery = 2;
       break;
     case Event::battery_low: {
       battery = 1;
@@ -723,8 +743,8 @@ Expr Behavior::choose_base(uint32_t now) {
   if (hot) return Expr::hot;
   if (music_on) return ((now / 15000u) & 1u) ? Expr::vibing : Expr::music;
   if (speech_on) return Expr::listening;
-  if (running) return Expr::running;
   if (battery == 1) return ((now / 20000u) & 1u) ? Expr::low_battery : Expr::hungry;
+  if (running) return Expr::running;
   if (mood_.annoyance > 0.6f) return Expr::grumpy;
   if (mood_.annoyance > 0.35f) return Expr::annoyed;
   if (mood_.energy < 0.12f) return Expr::sleepy;
@@ -801,6 +821,16 @@ void Behavior::idle_action(uint32_t now) {
   w[kBoo] = night() ? 0.08f : 0.0f;
   // Циклоп — не чаще раза в 2 часа.
   w[kCyclops] = (happy && now - last_cyclops_ > 120u * kMin) ? 0.05f : 0.0f;
+  // Эмоции из имплантов, которые иначе встречались бы только в сценах наград.
+  w[kFocused] = night() ? 0.0f : 0.15f;
+  w[kNervous] = m.annoyance * 0.3f + 0.05f * pers_.shy;
+  w[kUwu] = happy ? meme * 0.5f : 0.0f;
+  w[kDoomer] = m.valence < 0.0f ? meme * 0.6f : 0.0f;
+  w[kImDead] = happy ? meme * 0.3f : 0.0f;
+  w[kNervousLaugh] = 0.08f * pers_.shy;
+  w[kGuilty] = m.annoyance > 0.3f ? 0.08f : 0.0f;
+  w[kApologetic] = m.annoyance > 0.3f ? 0.05f * pers_.shy : 0.0f;
+  w[kKiss] = m.affection > 0.6f ? 0.12f : 0.0f;
   float total = 0;
   for (int i = 0; i < kIdleCount; ++i) {
     if (kIdle[i].expr != Expr::Count && !usable(kIdle[i].expr)) w[i] = 0.0f;
@@ -1126,6 +1156,11 @@ bool Behavior::date_eggs(uint32_t now) {
   if (holiday_done_ == key) return false;
   holiday_done_ = key;
   const int m = month_, d = day_;
+  // День рождения хозяина важнее любого праздника в тот же день.
+  if (bday_m_ && m == bday_m_ && d == bday_d_) {
+    queue_scene(Scene::birthday, SceneParams{}, pick_unlocked({Expr::party, Expr::love}), now, "день рождения хозяина");
+    return true;
+  }
   if ((m == 12 && d == 31) || (m == 1 && d == 1)) {
     char y[6];
     const uint16_t yy = m == 12 ? (uint16_t)(year_ + 1) : year_;
@@ -1134,10 +1169,6 @@ bool Behavior::date_eggs(uint32_t now) {
     SceneParams p;
     p.set_text(y);
     queue_scene(Scene::new_year, p, pick_unlocked({Expr::party, Expr::happy}), now, "Новый год");
-    return true;
-  }
-  if (bday_m_ && m == bday_m_ && d == bday_d_) {
-    queue_scene(Scene::birthday, SceneParams{}, pick_unlocked({Expr::party, Expr::love}), now, "день рождения хозяина");
     return true;
   }
   if (m == 10 && d == 31) {
@@ -1242,6 +1273,7 @@ bool Behavior::knock(uint32_t now) {
 }
 
 void Behavior::new_day(uint32_t now) {
+  time_eggs_done_ = 0;  // без часов полночь не видна: новые сутки открывают пасхалки заново
   if (!progress_) return;
   grant(progress_->new_day(), now);
   achieve(now);
@@ -1316,6 +1348,14 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_h
     chat(code, peer_hash, nonce, now);
     reason_ = "старые знакомые шепчутся";
   }
+  friendship(code, before, level, first_today, peer_level, now);
+  if (other && other == temp_) earn(Ach::twin, now);
+  if (peer_hash && identity_from_hash(peer_hash).rarity == Rarity::Legendary) earn(Ach::legend, now);
+  if (progress_ && (is_new || first_today)) grant(progress_->met_friend(is_new), now);  // старый знакомый — раз в день
+  achieve(now);
+}
+
+void Behavior::friendship(const char* code, int before, int level, bool first_today, uint8_t peer_level, uint32_t now) {
   if (friends_ && before >= 0 && level > before) {
     banner(friend_level_tag(level), code, BannerIcon::Heart, pick_unlocked({Expr::love, Expr::happy}), now,
            "дружба крепнет");
@@ -1333,20 +1373,17 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_h
       queue_scene(Scene::banner, g, gift, now, "подарок от старшего брелока", true);
     }
   }
-  if (other && other == temp_) earn(Ach::twin, now);
-  if (peer_hash && identity_from_hash(peer_hash).rarity == Rarity::Legendary) earn(Ach::legend, now);
-  if (progress_ && (is_new || first_today)) grant(progress_->met_friend(is_new), now);  // старый знакомый — раз в день
-  achieve(now);
 }
 
-void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash, uint32_t nonce) {
+void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash, uint32_t nonce,
+                    uint8_t peer_level) {
   last_event_ = now;
   if (eng_) eng_->note_activity(now);
   SceneParams p;
   p.set_text(code);
   p.value = won ? 1 : 0;
-  Expr after =
-      won ? pick_unlocked({Expr::proud, Expr::smug, Expr::happy}) : pick_unlocked({Expr::sulking, Expr::grumpy});
+  Expr after = won ? pick_unlocked({Expr::proud, Expr::smug, Expr::happy, Expr::starstruck})
+                   : pick_unlocked({Expr::sulking, Expr::grumpy, Expr::sobbing});
   const char* why = won ? "выиграл дуэль" : "проиграл дуэль";
   bool fresh = false;
   if (won && progress_) {
@@ -1368,8 +1405,10 @@ void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash
   if (friends_ && peer_hash) {
     int before = -1;
     bool first_today = false;
-    friends_->meet(peer_hash, progress_ ? progress_->days : 0, &before, &first_today);
+    const int level = friends_->meet(peer_hash, progress_ ? progress_->days : 0, &before, &first_today);
     if (progress_ && before < 0) grant(progress_->met_friend(true), now);
+    // Рост дружбы и подарок — как после встречи: первая встреча дня часто и есть дуэль.
+    friendship(code, before, level, first_today, peer_level, now);
   }
   achieve(now);
 }

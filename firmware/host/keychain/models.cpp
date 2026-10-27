@@ -228,7 +228,7 @@ uint32_t lis_overruns() { return lis.overruns; }
 uint32_t ltr_measurements() { return ltr.measurements; }
 
 I2cDevice* i2c_device(int bus, uint8_t addr) {
-  if (bus == 0 && addr == 0x18) return &lis;
+  if (bus == 0 && addr == 0x19) return &lis;  // SA0 на VDD
   if (bus == 0 && addr == 0x29) return &ltr;
   if (bus == 1 && addr == 0x3C) return &oled_dev;
   return nullptr;
@@ -332,7 +332,7 @@ AdafruitBluefruit Bluefruit;
 Adafruit_LittleFS_Namespace::InternalFileSystemHost InternalFS;
 
 void pinMode(uint32_t pin, uint32_t mode) {
-  pin_mode[pin] = mode == OUTPUT ? kOutput : mode == INPUT_PULLUP ? kInputPullup : kInput;
+  pin_mode[pin] = mode == OUTPUT || mode == OUTPUT_S0D1 ? kOutput : mode == INPUT_PULLUP ? kInputPullup : kInput;
   if (pin == 19) oled_dev.on_power(oled_powered());
 }
 void digitalWrite(uint32_t pin, uint32_t v) {
@@ -350,8 +350,10 @@ void analogReference(eAnalogReference r) { adc_internal = r == AR_INTERNAL; }
 void analogReadResolution(int bits) { adc_bits = bits; }
 void analogSampleTime(uint8_t us) { adc_tacq = us; }
 uint32_t analogReadVDDHDIV5() {
-  // VDDH: от USB — через диод около 4.7 В, иначе ячейка.
-  const float vddh = world.vbus ? 4.7f : world.cell_v;
+  // VDDH: от USB — через диод около 4.7 В, иначе ячейка. Первые ~100 мс после отключения USB
+  // система питается через диод в P-MOSFET (пока VBUS не спадёт): на 0.55 В ниже ячейки.
+  float vddh = world.vbus ? 4.7f : world.cell_v;
+  if (!world.vbus && world.vbus_off_us && now_us - world.vbus_off_us < 100000) vddh -= 0.55f;
   float v = vddh / 5.0f;
   if (adc_tacq < 40) v *= 0.9f;  // делитель VDDH/5 не успевает зарядить выборку
   const float full = adc_internal ? 3.6f : 3.6f;

@@ -55,7 +55,9 @@ struct Settings {
   uint8_t month = 0, day = 0;
   uint16_t clock_min = 12 * 60;
   uint8_t clock_known = 0;
-  uint8_t reserved[5] = {};  // до 24 байт без выравнивания: memcmp не видит мусора
+  uint8_t empty_off = 0;  // выключились на пустой ячейке: кнопка без USB не будит целиком
+  uint16_t day_min = 0;   // без часов: минут работы с начала текущих суток
+  uint8_t reserved[2] = {};  // до 24 байт без выравнивания: memcmp не видит мусора
 };
 static_assert(sizeof(Settings) == 24, "настройки без скрытых байтов выравнивания");
 
@@ -104,6 +106,15 @@ uint32_t off_at = 0;
 uint32_t charge_t0 = 0;
 int charge_pct0 = -1;
 bool charged_full = false;  // с этого подключения USB ячейка уже заряжалась до конца
+bool charge_allowed = false;  // заряд разрешён по температуре (ножка CHG_EN)
+uint32_t vib_end = 0, voice_end = 0;  // когда кончились вибро и звук — датчики их не слышат
+bool usb_seen = false;        // USB на прошлом проходе: подключили с зажатой кнопкой — загрузчик
+uint32_t oled_off_at = 0;     // экран обесточен для перезапуска с этого момента
+bool oled_cycling = false;
+uint32_t next_health = 0;
+int als_fail = 0;
+Settings cfg_seen;
+uint32_t cfg_changed_at = 0;
 
 bool verbose = false;
 char line[64];
@@ -182,8 +193,15 @@ void event(Event e, uint32_t now) {
 
 // ---------------------------------------------------------------- флеш
 
-// Всё, что переживает выключение, — одной записью журнала (storage.h).
+// Всё, что переживает выключение, — одной записью журнала (storage.h). Заголовок хранит
+// длины частей: прошивка, у которой Progress, Friends или Settings выросли, прочтёт старую
+// запись по частям (у Progress — своя миграция по версии), и рост не пропадёт.
+struct SnapHead {
+  uint32_t magic = 0x4B43534Eu;  // «KCSN»
+  uint16_t p_len = sizeof(Progress), f_len = sizeof(Friends), s_len = sizeof(Settings), reserved = 0;
+};
 struct Snapshot {
+  SnapHead head;
   Progress progress;
   Friends friends;
   Settings settings;
@@ -200,17 +218,25 @@ void save_all(uint32_t now, bool force) {
   if (!p_changed && !f_changed && !s_changed) return;
   const bool unlocks = progress.implant != progress_saved.implant || progress.flags != progress_saved.flags ||
                        memcmp(progress.extra, progress_saved.extra, sizeof progress.extra) != 0;
-  // Часы меняют настройки каждые 10 минут — это обычная запись, остальное в настройках — сразу.
+  // Часы и счёт суток меняют настройки каждые 10 минут — это обычная запись. Остальное в
+  // настройках — скоро, но не на каждое изменение: через 3 с после последнего и не чаще раза
+  // в 10 с, иначе скрипт, гоняющий команды консоли, протёр бы флеш за часы.
   Settings a = cfg, b = cfg_saved;
   a.clock_min = b.clock_min = 0;
-  const bool user_settings = memcmp(&a, &b, sizeof a) != 0;
+  a.day_min = b.day_min = 0;
+  if (memcmp(&cfg, &cfg_seen, sizeof cfg) != 0) cfg_seen = cfg, cfg_changed_at = now;
+  const bool user_settings = memcmp(&a, &b, sizeof a) != 0 && now - cfg_changed_at >= 3000u &&
+                             now - last_save >= 10000u;
   const bool urgent = force || unlocks || user_settings;
   if (!urgent && now - last_save < 600000u) return;
+  // Стирание страницы останавливает цикл на доли секунды: посреди звука или вибро это слышно.
+  if (!force && (voice.busy(now) || hal::vibro_busy())) return;
   if (!force && save_failed && now - last_save_try < 60000u) return;  // сорвалась: повтор через минуту
   last_save_try = now;
   static Snapshot snap;
   progress.seal();
   friends.seal();
+  snap.head = SnapHead{};
   snap.progress = progress;
   snap.friends = friends;
   snap.settings = cfg;
@@ -246,18 +272,40 @@ void sanitize(Settings& s) {
     s.year = 0, s.month = 0, s.day = 0;
   if (s.clock_min >= 1440) s.clock_min = d.clock_min, s.clock_known = 0;
   s.clock_known = s.clock_known ? 1 : 0;
+  s.empty_off = s.empty_off ? 1 : 0;
+  if (s.day_min >= 1440) s.day_min = 0;
 }
 
 void load_all() {
   storage::begin();
-  static Snapshot snap;
+  static uint8_t raw[storage::kMaxRecord];
   bool p_ok = false, f_ok = false, s_ok = false;
-  if (storage::load(&snap, sizeof snap)) {
-    p_ok = progress.load(&snap.progress, sizeof snap.progress);
-    f_ok = friends.load(&snap.friends, sizeof snap.friends);
-    s_ok = settings_ok(snap.settings);
-    if (s_ok) cfg = snap.settings;
-  } else {
+  const int n = storage::load_any(raw, sizeof raw);
+  // Части записи: смещение и длина каждой.
+  const uint8_t *pp = nullptr, *fp = nullptr, *sp = nullptr;
+  size_t pl = 0, fl = 0, sl = 0;
+  SnapHead h;
+  if (n >= (int)sizeof h) memcpy(&h, raw, sizeof h);
+  if (n >= (int)sizeof h && h.magic == SnapHead{}.magic &&
+      sizeof h + h.p_len + h.f_len + h.s_len <= (size_t)n) {
+    pp = raw + sizeof h, pl = h.p_len;
+    fp = pp + pl, fl = h.f_len;
+    sp = fp + fl, sl = h.s_len;
+  } else if (n == (int)(sizeof(Progress) + sizeof(Friends) + sizeof(Settings))) {
+    // Запись прошивки до заголовка: части подряд.
+    pp = raw, pl = sizeof(Progress);
+    fp = pp + pl, fl = sizeof(Friends);
+    sp = fp + fl, sl = sizeof(Settings);
+  }
+  if (pp) {
+    p_ok = progress.load(pp, (uint32_t)pl);
+    f_ok = friends.load(fp, (uint32_t)fl);
+    // Настройки: короче нынешних — новые поля остаются заводскими, длиннее — лишнее отбрасывается.
+    Settings st;
+    memcpy(&st, sp, sl < sizeof st ? sl : sizeof st);
+    s_ok = settings_ok(st);
+    if (s_ok) cfg = st;
+  } else if (n < 0) {
     // Журнала ещё нет: записи прошлой прошивки в файлах LittleFS.
     uint8_t blob[sizeof(Progress)];
     const int n = storage::legacy_load("progress", blob, sizeof blob);
@@ -288,8 +336,11 @@ uint8_t wanted_contrast() {
 }
 
 bool start_oled() {
+  nrf_gpio_cfg_default(PIN_WIRE1_SDA);
+  nrf_gpio_cfg_default(PIN_WIRE1_SCL);
   digitalWrite(board::kDispEn, HIGH);
   delay(40);  // ключ включается плавно (C11), модулю нужно время на старт
+  hal::i2c_recover(PIN_WIRE1_SDA, PIN_WIRE1_SCL);
   Wire1.begin();
   Wire1.setClock(400000);
   hal::i2c_390k(1);
@@ -307,8 +358,10 @@ void screen_power(bool on, uint32_t now) {
   if (on) {
     screen_on = true;
     oled_retry_ms = 2000;  // прошлые сбои не в счёт: первый повтор — через 2 с
+    oled_cycling = false;
     start_oled();          // не ответил — повторы в loop
   } else {
+    oled_cycling = false;
     if (have_oled) oled.power(false);
     // Шина экрана отпускается: иначе подтяжки ножек питали бы обесточенный модуль через SDA и SCL.
     Wire1.end();
@@ -387,6 +440,11 @@ void tick_clock(uint32_t now) {
     new_day = true;
   }
   last_clock = m;
+  // Без часов сутки — 24 часа работы, и отсчёт переживает выключение: минуты с начала
+  // текущих суток сохраняются раз в 10 минут. Иначе брелок, который выключают на ночь,
+  // никогда не дожил бы до новых суток, и дневные лимиты не сбрасывались бы.
+  const uint16_t dm = cfg.clock_known ? 0 : (uint16_t)((uptime - day_t0) / 60000u % 1440u);
+  if (new_day || dm / 10 != cfg.day_min / 10) cfg.day_min = dm;
   if (new_day) {
     advance_date();
     if (cfg.year) bh.set_date(cfg.year, cfg.month, cfg.day);
@@ -409,18 +467,27 @@ void poll_motion(uint32_t now) {
   static float xyz[32][3];
   const int n = acc.read_fifo(xyz, 32);
   Event ev[kSenseEvents];
+  // Свой вибромотор трясёт датчик: пока он работает и 150 мс после, толчки — не события.
+  if (hal::vibro_busy()) vib_end = now;
+  const bool buzzing = hal::vibro_busy() || now - vib_end < 150;
   for (int i = 0; i < n; ++i) {
     float d[3];
     for (int k = 0; k < 3; ++k) d[k] = xyz[i][board::kAccMap[k][0]] * board::kAccMap[k][1];
     const uint32_t t = now - (uint32_t)(n - 1 - i) * 10u;  // 100 Гц
     const int ne = motion.feed(d[0], d[1], d[2], t, ev);
-    for (int j = 0; j < ne; ++j) event(ev[j], now);
+    for (int j = 0; j < ne; ++j) {
+      const Event e = ev[j];
+      if (buzzing && (e == Event::shake || e == Event::shake_hard || e == Event::impact || e == Event::free_fall))
+        continue;
+      event(e, now);
+    }
   }
   if (n) eng.set_tilt(motion.tilt_x(), motion.tilt_y());
   float jx, jy;
   if (motion.take_jerk(&jx, &jy)) eng.jerk(jx, jy, now);
   if (digitalRead(board::kAccInt1) == HIGH) {
-    const int c = acc.take_click();
+    int c = acc.take_click();
+    if (buzzing) c = 0;  // флаг касания снят, а само касание — от мотора
     // Двойное касание датчик сначала отмечает как одиночное: одиночное ждёт окно 0.5 с.
     if (c == 2) {
       tap_wait = false;
@@ -462,8 +529,11 @@ void poll_environment(uint32_t now) {
         als_measuring = false;
         next_light = now + 2000;
         if (lux >= 0) {
+          als_fail = 0;
           const int n = light.feed(lux, now, ev);
           for (int i = 0; i < n; ++i) event(ev[i], now);
+        } else {
+          ++als_fail;  // три замера подряд без ответа — перезапуск (check_sensors)
         }
       }
     }
@@ -474,7 +544,9 @@ void poll_environment(uint32_t now) {
     for (int i = 0; i < n; ++i) event(ev[i], now);
   }
   float db;
-  if (hal::mic_take(&db)) {
+  // Своя пищалка — не звук вокруг: пока она звучит и 150 мс после, уровень не учитывается.
+  if (voice.busy(now)) voice_end = now;
+  if (hal::mic_take(&db) && !voice.busy(now) && now - voice_end >= 150) {
     const int n = hearing.feed(db, now, ev);
     for (int i = 0; i < n; ++i) event(ev[i], now);
   }
@@ -486,12 +558,60 @@ void poll_environment(uint32_t now) {
     hal::mic_end();
 }
 
+// Заряд — только в разумной температуре: у MCP73832 нет входа термистора, а литиевая ячейка
+// на морозе от заряда портится. Температура — кристалла nRF, она близка к температуре внутри
+// брелока. Разрешено от 3 до 42 °C, запрещено ниже 1 или выше 45 °C.
+void update_charge_gate(bool usb) {
+  static uint32_t next = 0;
+  static bool started = false;
+  const uint32_t now = (uint32_t)uptime;
+  if (!usb) {
+    if (charge_allowed) hal::charge_enable(false), charge_allowed = false;
+    started = false;
+    return;
+  }
+  if (started && !time_reached(now, next)) return;
+  started = true;
+  next = now + 30000;
+  const float t = hal::temperature_c();
+  const bool ok = charge_allowed ? (t >= 1.0f && t <= 45.0f) : (t >= 3.0f && t <= 42.0f);
+  if (ok != charge_allowed) {
+    charge_allowed = ok;
+    hal::charge_enable(ok);
+    out("Заряд %s (%.0f °C)\n", ok ? "разрешён" : "остановлен: температура вне 3–42 °C", t);
+  }
+}
+
 void poll_battery(uint32_t now) {
   static bool usb_was = false;
+  static bool unplug_wait = false;
+  static uint32_t unplug_at = 0;
   const bool usb = hal::usb_present();
+  // Подключили USB с зажатой кнопкой — загрузчик для новой прошивки (как при сбросе).
+  if (usb && !usb_seen && digitalRead(board::kButton) == LOW) {
+    cfg.clock_min = (uint16_t)clock_minutes();
+    save_all(now, true);
+    hal::enter_bootloader();
+  }
+  usb_seen = usb;
+  update_charge_gate(usb);
+  if (cfg.empty_off && usb) cfg.empty_off = 0;  // зарядили — снова обычное включение
+  // Сразу после отключения USB система ~0.1 с питается через диод в P-MOSFET, на 0.5 В
+  // ниже ячейки: замер в это время показал бы почти пустую ячейку. Ждём 1.5 с.
+  if (usb_was && !usb && !unplug_wait) unplug_wait = true, unplug_at = now;
+  if (usb) unplug_wait = false;
+  if (unplug_wait) {
+    if (now - unplug_at < 1500) return;
+    unplug_wait = false;
+  }
   if (!time_reached(now, next_batt) && usb == usb_was) return;
   usb_was = usb;
   next_batt = now + 10000;
+  // Заряд запрещён по температуре: зарядник молчит, и это не «зарядился до конца».
+  if (usb && !charge_allowed) {
+    bh.set_battery_percent(-1);
+    return;
+  }
   const bool chg = hal::charging();
   Event ev[kSenseEvents];
   const int n = battery.feed(hal::vsys_volts(), usb, chg, now, ev);
@@ -518,8 +638,28 @@ void poll_battery(uint32_t now) {
   bh.set_battery_percent(pct);
   if (battery.empty() && !powering_off) {
     out_line("Ячейка почти пуста — выключаюсь");
+    cfg.empty_off = 1;
     powering_off = true;
     bh.power_off(now);
+  }
+}
+
+// Датчики, переставшие отвечать или потерявшие настройки (сброс питания, сбой шины), —
+// перезапуск, а не тишина до выключения.
+void check_sensors(uint32_t now) {
+  if (!time_reached(now, next_health)) return;
+  next_health = now + 10000;
+  if (!acc.healthy()) {
+    hal::i2c_recover(PIN_WIRE_SDA, PIN_WIRE_SCL);
+    Wire.begin();
+    Wire.setClock(400000);
+    hal::i2c_390k(0);
+    if (acc.begin(Wire, board::kLis3dhAddr)) out_line("Акселерометр перезапущен");
+  }
+  if (!als.ok() || als_fail >= 3) {
+    als_fail = 0;
+    als_measuring = false;
+    if (als.begin(Wire, board::kLtr303Addr)) out_line("Датчик света перезапущен");
   }
 }
 
@@ -539,12 +679,16 @@ void poll_radio(uint32_t now) {
     if (!cfg.ghost) enc.on_advert(a, rssi, now);
 
   radio::Pace pace = radio::Pace::Normal;
+  // Ночью и в кармане эфир слушается редко, даже если рядом сосед: чаще — только когда
+  // общая сцена уже объявлена.
   if (powering_off)
     pace = radio::Pace::Off;
-  else if (enc.wants_busy(now))
+  else if (enc.pending())
     pace = radio::Pace::Busy;
   else if (bh.brightness() != Brightness::Normal)
     pace = radio::Pace::Night;
+  else if (enc.wants_busy(now))
+    pace = radio::Pace::Busy;
   radio::set_pace(pace);
   radio::set_advert(enc.advert(now));
   radio::update(now);
@@ -629,7 +773,7 @@ void help() {
       "  me           кто я: характер, рост, шаги, дуэли\n"
       "  sensors      показания: ускорение, свет, звук, температура, батарея\n"
       "  ach          достижения; friends — знакомые брелоки\n"
-      "  t ЧЧ:ММ      время; date 2026-12-31 — дата; bday 05-14 — день рождения\n"
+      "  t [ЧЧ:ММ]    время (без числа — показать); date 2026-12-31 — дата; bday 05-14 — день рождения\n"
       "  theme cyber  тема: classic, cyber или retro\n"
       "  snd          звук вкл/выкл; say laugh — реплика\n"
       "  duel         дуэли вкл/выкл (как двойное нажатие); ghost — невидимка в эфире\n"
@@ -691,6 +835,11 @@ void command(char* s, uint32_t now) {
       const int lvl = friends.level(r.hash);
       out("  %s %-10s дней %u, %s\n", id.code, archetype_name(id.archetype), r.days, friend_level_tag(lvl));
     }
+    return;
+  }
+  if (!strcmp(s, "t") && !arg) {
+    const unsigned m = clock_minutes();
+    out("Время %02u:%02u%s\n", m / 60, m % 60, cfg.clock_known ? "" : " (не задано: t ЧЧ:ММ)");
     return;
   }
   if (!strcmp(s, "t")) {
@@ -779,6 +928,7 @@ void command(char* s, uint32_t now) {
     return;
   }
   if (!strcmp(s, "dfu")) {
+    cfg.clock_min = (uint16_t)clock_minutes();
     save_all(now, true);
     out_line("Перезагрузка в загрузчик");
     Serial.flush();
@@ -846,7 +996,9 @@ void off_on_usb() {
     const uint32_t now = (uint32_t)uptime;
     tick_clock(now);
     save_all(now, false);
-    if (!hal::usb_present()) return;
+    const bool usb = hal::usb_present();
+    update_charge_gate(usb);
+    if (!usb) return;
     if (digitalRead(board::kButton) == HIGH) {
       armed = true;
     } else if (armed) {
@@ -903,9 +1055,22 @@ void setup() {
   if (cfg.bday_m) bh.set_birthday(cfg.bday_m, cfg.bday_d);
   if (cfg.year) bh.set_date(cfg.year, cfg.month, cfg.day);
   clock_base_up = uptime;
-  day_t0 = uptime;
+  day_t0 = uptime - (uint64_t)cfg.day_min * 60000u;  // сутки без часов продолжаются с прошлого раза
   last_clock = (uint16_t)clock_minutes();
   if (progress.days == 0) bh.new_day(now);
+
+  // Выключились на пустой ячейке, и с тех пор не заряжали: кнопка показывает пустую батарею
+  // на секунду и снова выключает — полная загрузка с экраном, эфиром и микрофоном съела бы
+  // остаток, а через минуту брелок всё равно выключился бы.
+  if (cfg.empty_off && !hal::usb_present() && hal::vsys_volts() < 3.5f) {
+    eng.set_expression(Expr::critical_battery, now, 0);
+    eng.update(now + 2000);  // переход уже закончился: в кадре само лицо
+    if (start_oled()) {
+      for (int i = 0; i < 15; ++i) hal::watchdog_feed(), delay(100);
+      screen_power(false, now);
+    }
+    hal::system_off();
+  }
 
   acc.begin(Wire, board::kLis3dhAddr);
   als.begin(Wire, board::kLtr303Addr);
@@ -914,6 +1079,8 @@ void setup() {
 
   start_oled();
   next_acc = next_light = next_temp = next_batt = next_steps = now;
+  next_health = now + 10000;
+  usb_seen = hal::usb_present();
   eng.play_scene(Scene::boot, now);
   voice.scene(Scene::boot, SceneParams{}, now);
   hal::watchdog_feed();
@@ -922,6 +1089,11 @@ void setup() {
                 acc.ok() ? "есть" : "нет", als.ok() ? "есть" : "нет");
   print_me();
   if (clock_lost) out_line("После выключения время и дата сброшены: задайте их командами t и date");
+  // Кнопку, которой разбудили, ещё держат: это не новое нажатие и не удержание для выключения.
+  if (digitalRead(board::kButton) == LOW) {
+    btn_down = long_fired = true;
+    btn_change = btn_t0 = (uint32_t)uptime_now();
+  }
 }
 
 void loop() {
@@ -931,14 +1103,21 @@ void loop() {
 
   if (screen_on && !have_oled) {
     // Экран не отвечает: повторы всё реже (до минуты) — каждый стоит 40 мс и тайм-ауты шины.
-    // Перед повтором модуль обесточивается: зависший контроллер так сбрасывается.
+    // Перед повтором модуль обесточивается на секунду: питание за ключом (R7·C11 и
+    // конденсаторы модуля) спадает медленно, и только так зависший контроллер сбрасывается.
+    // SDA и SCL в это время в нуле: через подтяжки модуля они помогают разрядить его питание.
     if (!oled_waiting) oled_waiting = true, oled_fail_at = now;
-    if (now - oled_fail_at >= oled_retry_ms) {
+    if (!oled_cycling && now - oled_fail_at >= oled_retry_ms) {
       Wire1.end();
-      nrf_gpio_cfg_default(PIN_WIRE1_SDA);
-      nrf_gpio_cfg_default(PIN_WIRE1_SCL);
       digitalWrite(board::kDispEn, LOW);
-      delay(30);
+      digitalWrite(PIN_WIRE1_SDA, LOW);
+      digitalWrite(PIN_WIRE1_SCL, LOW);
+      pinMode(PIN_WIRE1_SDA, OUTPUT);
+      pinMode(PIN_WIRE1_SCL, OUTPUT);
+      oled_cycling = true;
+      oled_off_at = now;
+    } else if (oled_cycling && now - oled_off_at >= 1000) {
+      oled_cycling = false;
       if (start_oled()) {
         oled_retry_ms = 2000;
       } else {
@@ -956,6 +1135,7 @@ void loop() {
     poll_environment(now);
   }
   poll_battery(now);
+  if (!powering_off) check_sensors(now);
   poll_radio(now);
   tick_clock(now);
   save_all(now, false);
@@ -998,8 +1178,12 @@ void loop() {
     save_all(now, true);
     acc.power(false);
     als.power(false);
-    if (hal::usb_present()) off_on_usb();  // вернётся, только когда USB отключат
-    hal::system_off();
+    // Выключение на USB и полный сон по очереди: пока ждали кнопку, USB могли подключить
+    // (system_off тогда возвращается), а вернётся off_on_usb, только когда USB отключат.
+    for (;;) {
+      if (hal::usb_present()) off_on_usb();
+      hal::system_off();
+    }
   }
   delay(10);  // процессор спит до следующего прохода
 }
