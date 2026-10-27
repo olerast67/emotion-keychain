@@ -3,7 +3,15 @@
 Собирает одну страницу out/keychain-3d.html из шаблона viewer.html: текстуры платы
 (чёрная маска, золото площадок, белая шелкография) рисуются из слоёв KiCad, лицо на
 экране — кадр из facegen, детали — коробки по дворам с типовыми высотами, корпус —
-слои из case-model.json (сначала запустите case.py).
+слои всех трёх версий из case-model.json (сначала запустите case.py).
+
+  python3 viewer.py                      # out/keychain-3d.html
+  python3 viewer.py --render PNG         # картинка платы: лицо и оборот рядом
+  python3 viewer.py --shots DIR          # case-3d.png и case-exploded.png для README
+
+facegen берётся из build/ в корне репозитория или из переменной FACEGEN. Для --shots
+нужен Node.js с Playwright (shots.js); если браузер не достаёт до CDN, укажите в
+THREE_DIR распакованный пакет npm three@0.128.0.
 """
 import base64
 import io
@@ -24,10 +32,14 @@ sys.path.insert(0, os.path.join(REV, "gen"))
 import footprints  # noqa: E402
 import netlist  # noqa: E402
 
+sys.path.insert(0, HERE)
+import case  # noqa: E402
+
 PCB = os.path.join(REV, "keychain-rev-b.kicad_pcb")
 OUT = os.path.join(HERE, "out")
 PX_PER_MM = 24  # текстуры и картинки платы
 CAIROSVG = os.environ.get("CAIROSVG", "cairosvg")
+FACEGEN = os.environ.get("FACEGEN", os.path.join(ROOT, "build", "facegen"))
 
 # Высоты корпусов деталей над платой, мм, и цвет.
 BODY = {
@@ -99,7 +111,7 @@ def board_texture(side, bbox, tmp):
 
 def face_texture(tmp, emotion="happy"):
     gif = os.path.join(tmp, "face.gif")
-    subprocess.run([os.path.join(ROOT, "build", "facegen"), "still", emotion, gif, "--scale", "1", "--raw"],
+    subprocess.run([FACEGEN, "still", emotion, gif, "--scale", "1", "--raw"],
                    check=True, capture_output=True)
     im = Image.open(gif).convert("RGB")
     w, h = im.size
@@ -162,9 +174,28 @@ def board_render(path):
     print(f"{path}: {out.size[0]}×{out.size[1]}")
 
 
+def shots(out_dir):
+    """Картинки корпуса для README: снимки страницы просмотра в Chromium, обрезанные по брелоку."""
+    page = os.path.join(OUT, "keychain-3d.html")
+    os.makedirs(out_dir, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(["node", os.path.join(HERE, "shots.js"), page, tmp], check=True)
+        for name in ("case-3d", "case-exploded"):
+            im = Image.open(os.path.join(tmp, name + ".png")).convert("RGB")
+            bg = Image.new("RGB", im.size, im.getpixel((0, 0)))
+            x0, y0, x1, y1 = ImageChops.difference(im, bg).convert("L").point(lambda v: 255 if v > 12 else 0).getbbox()
+            m = 16
+            im = im.crop((max(0, x0 - m), max(0, y0 - m), min(im.width, x1 + m), min(im.height, y1 + m)))
+            path = os.path.join(out_dir, name + ".png")
+            im.save(path, optimize=True)
+            print(f"{path}: {im.size[0]}×{im.size[1]}")
+
+
 def main():
     if len(sys.argv) > 2 and sys.argv[1] == "--render":
         return board_render(sys.argv[2])
+    if len(sys.argv) > 2 and sys.argv[1] == "--shots":
+        return shots(sys.argv[2])
     board = pcbnew.LoadBoard(PCB)
     bb = board.GetBoardEdgesBoundingBox()
     bbox = (pcbnew.ToMM(bb.GetX()), pcbnew.ToMM(bb.GetY()), pcbnew.ToMM(bb.GetRight()), pcbnew.ToMM(bb.GetBottom()))
@@ -197,6 +228,8 @@ def main():
     mod_x0 = pins[0][0] + (pins[-1][0] - pins[0][0]) / 2 - o["w"] / 2
     mod_y0 = pins[0][1] - o["pin_y"]
     _, bx, by, _ = netlist.PLACE["BT1"]
+    variants = {v: json.load(open(os.path.join(OUT if v == "s" else os.path.join(OUT, v), "case-model.json")))
+                for v in case.VARIANTS}
     with tempfile.TemporaryDirectory() as tmp:
         data = {
             "bbox": bbox, "outline": outline_points(board), "holes": holes, "parts": parts,
@@ -204,8 +237,11 @@ def main():
             "face": face_texture(tmp),
             "oled": {"x": mod_x0, "y": mod_y0, **o}, "pins": pins, "screws": screws,
             "cell": {"x": bx - footprints.CELL["w"] / 2, "y": by - footprints.CELL["h"] / 2,
-                     "w": footprints.CELL["w"], "h": footprints.CELL["h"], "t": 4.0},
-            "case": json.load(open(os.path.join(OUT, "case-model.json"))),
+                     "w": footprints.CELL["w"], "h": footprints.CELL["h"]},
+            "k": {"module_t": case.MODULE_T, "glass_t": case.GLASS_T, "pin_top": case.PIN_TOP,
+                  "header_plastic": case.HEADER_PLASTIC, "under_cell": case.UNDER_CELL,
+                  "tube_od": case.TUBE_OD, "nut_t": case.NUT_T},
+            "variants": variants,
         }
     html = open(os.path.join(HERE, "viewer.html")).read().replace("/*DATA*/null", json.dumps(data))
     path = os.path.join(OUT, "keychain-3d.html")

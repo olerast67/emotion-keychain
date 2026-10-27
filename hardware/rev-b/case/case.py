@@ -606,12 +606,36 @@ def numbers(v, parts, info):
     return {
         "standoff": h, "thickness": round(top - low, 2), "screw": screw, "screw_need": round(need, 2),
         "screw_out": round(screw - need, 2), "below_module": round(below, 2), "std_header_margin": round(std - below, 2),
-        "long_header": std - below < 0.3, "long_header_out": round(LONG_HEADER - HEADER_SHORT - h - 1.6, 1),
+        "long_header": std - below < 0.3, "std_header_out": round(std - h - 1.6, 2),
+        "long_header_out": round(LONG_HEADER - HEADER_SHORT - h - 1.6, 1),
         "free": [round(f, 2) for f in free], "cell_max": [round(c_, 2) for c_ in cell_max],
         "cell_width_max": round(POCKET_W - 0.3, 2), "tube_len": round(info["tube_len"], 1),
-        "press": [round(p, 2) for p in press],
+        "press": [round(p, 2) for p in press], "tube": [round(c_, 3) for c_ in info["tube_c"]],
         "sheets": sorted({p["t"] for p in parts.values()}),
     }
+
+
+def buy(v, n):
+    """Что купить к корпусу версии v — для README и просмотра."""
+    cfg = VARIANTS[v]
+    frames = ", ".join(f"{t:g}" for t in n["sheets"] if t != 2.0)
+    screw = f"Винты M2 × {n['screw']} и гайки M2 — по 4 шт."
+    if n["screw_out"] > 2.0:
+        screw += f" Конец винта выйдет из гайки на {n['screw_out']:g} мм: укоротите на 1.5–2 мм"
+    if n["long_header"]:
+        header = (f"Модуль экрана без впаянной гребёнки и длинная гребёнка 2.54 на 4 штыря, 15 мм и длиннее "
+                  f"(штыри выйдут из платы на {n['long_header_out']:g} мм, лишнее откусить)")
+    else:
+        header = f"Модуль экрана с обычной гребёнкой 2.54 (штыри выйдут из платы на {n['std_header_out']:g} мм)"
+    return [
+        f"Акрил 2 мм прозрачный (крышка, дно, шайбы) и {frames} мм на рамки, можно цветной",
+        screw,
+        f"Ячейка {cfg['cell']} с платой защиты: толщина не больше {n['cell_max'][1]:g}…{n['cell_max'][0]:g} мм "
+        f"(смотря по модулю), ширина до {n['cell_width_max']:g} мм, длина до 25.0 мм",
+        header,
+        f"Силиконовая трубка 1 × 2 мм, кусок {n['tube_len']:g} мм — к микрофону",
+        "Каптоновый скотч и тонкий двусторонний скотч 0.1–0.15 мм",
+    ]
 
 
 # ---------------------------------------------------------------- вывод
@@ -721,7 +745,8 @@ def main():
     for v in VARIANTS:
         parts, solids, info = build(v)
         check(v, parts, solids, info)
-        results[v] = (parts, numbers(v, parts, info))
+        nums = numbers(v, parts, info)
+        results[v] = (parts, {**nums, "buy": buy(v, nums)})
     for v, (parts, nums) in results.items():
         write_variant(v, parts, nums)
 
