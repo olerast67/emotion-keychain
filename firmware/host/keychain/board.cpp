@@ -140,6 +140,9 @@ void account() {
 // Экран показывает ровно кадр движка? Сверка после каждого прохода цикла.
 void check_display() {
   if (!(screen_on && have_oled && !oled_full)) return;
+  // Контроллер, зажавший SDA (SET osda), кадров не получает по самой неисправности: прошивка
+  // видит её между обменами за ~2 с (сценарий oled проверяет, что видит), и это не расхождение.
+  if (sim::oled_dev.holds_sda()) return;
   if (!sim::oled_dev.visible()) {
     ++dark_errors;
     return;
