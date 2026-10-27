@@ -113,6 +113,7 @@ struct Board {
   int boots = 0;
   uint64_t t0_override = 0;
   double vib_max = 0;  // наибольшее напряжение на моторе, В
+  double off_ua = 12;  // ток в System OFF по тому, что прошивка оставила включённым (offua)
 
   long num(const char* k) const {
     auto it = st.find(k);
@@ -140,7 +141,7 @@ struct Board {
     std::string key(line + 4, strcspn(line + 4, " "));
     // vbus, button, cell, chg задаёт сам координатор; разовые события и состояния, которые
     // сброс платы не переживает, не повторяются.
-    static const char* const kSkip[] = {"vbus", "button", "cell", "chg", "hang", "lisreset", "wedge", "sda"};
+    static const char* const kSkip[] = {"vbus", "button", "cell", "chg", "hang", "lisreset", "wedge", "sda", "osda"};
     for (const char* k : kSkip)
       if (key == k) return;
     if (key == "acc" || key == "walk" || key == "shake" || key == "still") key = "motion";
@@ -225,8 +226,10 @@ void handle_event(Board& b, const std::string& ev) {
     power_on(b, kDog);
   } else if (ev == "off") {
     b.off = true, b.button_wakes = true;
+    b.off_ua = b.dnum("offua");
   } else if (ev == "off_vbus") {
     b.off = true, b.button_wakes = false;
+    b.off_ua = b.dnum("offua");
   } else if (ev == "dfu") {
     enter_boot(b, 1, kSreq);  // программный сброс с просьбой к загрузчику
   } else {
@@ -307,10 +310,11 @@ void battery(Board& b, uint64_t dt_ms) {
     b.charging = false;
   } else {
     b.charging = false;
-    // Без отчётов платы (сон, загрузчик) — ток по состоянию: в System OFF ~12 мкА (датчики спят,
-    // остальное — зарядник, диод и плата защиты ячейки, docs/power.md), загрузчик ~3 мА.
-    // Обрыв питания (dead) — ячейка отключена.
-    const double idle_ua = b.alive || b.dead ? 0 : b.boot_mode ? 3000 : b.off ? 12 : 0;
+    // Без отчётов платы (сон, загрузчик) — ток по состоянию: в System OFF — по тому, что
+    // прошивка оставила включённым (~12 мкА, когда датчики спят: остальное — зарядник, диод и
+    // плата защиты ячейки, docs/power.md), загрузчик ~3 мА. Обрыв питания (dead) — ячейка
+    // отключена.
+    const double idle_ua = b.alive || b.dead ? 0 : b.boot_mode ? 3000 : b.off ? b.off_ua : 0;
     b.soc_mah -= (ua + idle_ua) / 1000.0 * h;
   }
   const float v = ocv(b.soc_mah / b.cap_mah * 100.0) - (float)(ua / 1000.0 * 0.0003);  // 0.3 Ом
@@ -375,6 +379,21 @@ bool happened(Board& b, const char* ev, uint64_t since) {
   for (auto& [t, e] : b.events)
     if (t >= since && e == ev) return true;
   return false;
+}
+int count_events(Board& b, const char* ev, uint64_t since) {
+  int n = 0;
+  for (auto& [t, e] : b.events) n += t >= since && e == ev;
+  return n;
+}
+// Процент заряда, который печатает команда sensors (−1 — не напечатан).
+int sensors_pct(Board& b) {
+  const uint64_t t = g_ms;
+  b.cmd("IN sensors");
+  run(500);
+  int pct = -1;
+  for (auto& [ms, l] : b.out)
+    if (ms >= t && l.find("заряд ") != std::string::npos) sscanf(l.c_str() + l.find("заряд ") + strlen("заряд "), "%d", &pct);
+  return pct;
 }
 bool any_event(Board& b, uint64_t since) {
   for (auto& [t, e] : b.events)
@@ -545,6 +564,10 @@ void sc_first_boot() {
   CHECK(a.hex("uicr") == "fffffffd", "REGOUT0 = 3.3 В (uicr=%s)", a.hex("uicr").c_str());
   CHECK(a.boots == 2, "загрузок: %d (запись UICR и рабочая)", a.boots);
   CHECK(said(a, "Экран есть, акселерометр есть, свет есть", 0), "экран, акселерометр и датчик света отвечают");
+  CHECK(said(a, "плата rev B, прошивка ", 0), "в приветствии — версия прошивки");
+  a.cmd("IN ver");
+  run(300);
+  CHECK(said(a, "Прошивка ", 3500), "команда ver — версия прошивки");
   CHECK(a.num("vis") == 1 && a.num("lit") > 200, "на экране лицо: горит %ld пикселей", a.num("lit"));
   CHECK(a.num("adv") == 1 && a.num("iv") == 1600, "реклама в эфире раз в 1 с");
   CHECK(a.hex("data").find("ffff4b4302") != std::string::npos, "пакет: компания 0xFFFF, метка KC, версия 2");
@@ -570,6 +593,13 @@ void sc_sensors() {
   a.cmd("TAP 2");
   run_rec(rec, 1500);
   CHECK(said(a, "Событие: double_tap", t) && !said(a, "Событие: tap", t), "двойное касание — только double_tap");
+  // Датчик сначала отмечает одиночное касание, двойное — после второго: и при медленном
+  // двойном (0.35 с между касаниями) одиночного события нет.
+  t = g_ms;
+  a.cmd("TAP 2 350");
+  run_rec(rec, 1500);
+  CHECK(said(a, "Событие: double_tap", t) && !said(a, "Событие: tap", t),
+        "медленное двойное касание — тоже только double_tap");
   t = g_ms;
   a.cmd("SET shake 5 2.2");
   run_rec(rec, 3000);
@@ -656,7 +686,7 @@ void sc_light_and_pocket() {
   const uint64_t t0 = g_ms;
   run(120000, 50);
   const double pocket_ua = (a.uams_total - q0) / (double)(g_ms - t0);
-  CHECK(pocket_ua < 300, "ток в кармане %.0f мкА (оценка по коду ~150)", pocket_ua);
+  CHECK(pocket_ua < 170, "ток в кармане %.0f мкА (docs/power.md: ≈0.13 мА)", pocket_ua);
   say("        ток в кармане: %.0f мкА", pocket_ua);
   t = g_ms;
   a.cmd("TAP 1");
@@ -705,6 +735,13 @@ void sc_charge() {
   a.cmd("IN sensors");
   run(500);
   CHECK(said(a, "USB да, заряжается да", t), "консоль видит USB и зарядку");
+  CHECK(a.num("hf") == 1, "на USB кварц 64 МГц запрошен (USBD и замер температуры для заряда)");
+  // Микрофон перезапускается на USB (карман и обратно): его старт не снимает запрос кварца.
+  a.cmd("SET lux 0.3");
+  run(15000);
+  a.cmd("SET lux 300");
+  run(8000);
+  CHECK(a.num("mic") == 1 && a.num("hf") == 1, "микрофон перезапущен на USB — кварц по-прежнему запрошен");
   t = g_ms;
   a.soc_mah = a.cap_mah * 0.994;
   run(15000);
@@ -725,7 +762,27 @@ void sc_charge() {
   for (auto& [ms, l] : a.out)
     if (ms >= t && l.find("заряд ") != std::string::npos) sscanf(l.c_str() + l.find("заряд ") + strlen("заряд "), "%d", &pct);
   CHECK(pct >= 90, "заряд после отключения от полной зарядки: %d%%", pct);
+  CHECK(a.num("hf") == 0, "без USB кварц отпущен");
   CHECK(!any_event(a, t), "без сбросов");
+  // Кабель вставили и почти сразу выдернули (плохой контакт): провал питания через диод сразу
+  // после отключения не попадает в замер, и процент не падает до следующей зарядки.
+  a.soc_mah = 120;
+  run(300000, 50);  // процент устанавливается по новому напряжению ячейки
+  int worst = 0;
+  for (const int hold : {1900, 1950, 1980}) {
+    const int p0 = sensors_pct(a);
+    a.vbus = true;
+    a.cmd("SET vbus 1");
+    run((uint64_t)hold, 10);
+    a.vbus = false;
+    a.cmd("SET vbus 0");
+    run(60000, 20);
+    const int p1 = sensors_pct(a);
+    if (p0 - p1 > worst) worst = p0 - p1;
+    say("        USB на %d мс: заряд %d%% → %d%%", hold, p0, p1);
+  }
+  CHECK(worst <= 2, "USB на 1.9–2 с — процент не падает (худшее падение %d)", worst);
+  CHECK(!said(a, "Событие: battery_low", t), "и без ложного «мало заряда»");
   a.soc_mah = 120;
 }
 
@@ -737,12 +794,23 @@ void sc_meeting() {
   b.cmd("IN v on");
   Recorder rec;
   rec.open("meeting.gif", {&a, &b});
+  a.cmd("IN snd");  // у A без звука: во время вибро микрофон глушит только мотор
   const uint64_t t = g_ms;
   a.vib_max = b.vib_max = 0;
-  uint64_t ta = 0, tb = 0;
+  uint64_t ta = 0, tb = 0, t_inj = 0;
+  bool inj_vib = false;
   for (int i = 0; i < 1800 && !(said(a, "Дуэль с", t, &ta) && said(b, "Дуэль с", t, &tb)); ++i) {
     run(100);
     if (said(a, "Дуэль с", t) || said(b, "Дуэль с", t)) rec.frame(10);
+    if (!t_inj && said(a, "Дуэль с", t)) {
+      // Мотор жужжит: толчок, похожий на касание, и громкий звук — не события.
+      t_inj = g_ms;
+      inj_vib = a.num("vb") == 1;
+      a.cmd("TAP 1");
+      a.cmd("SET mic -8 0");
+      run(40);
+      a.cmd("SET mic -62 0");
+    }
   }
   run_rec(rec, 12000);
   rec.close();
@@ -754,6 +822,9 @@ void sc_meeting() {
   // Мотор на 3 В стоит на VSYS: ШИМ должен давать ему около 3 В, а не VSYS − 3 В.
   CHECK(a.vib_max > 2.6 && a.vib_max < 3.3 && b.vib_max > 2.6 && b.vib_max < 3.3,
         "вибро за дуэль, на моторе ~3 В (A %.2f, B %.2f В)", a.vib_max, b.vib_max);
+  CHECK(t_inj && inj_vib && !said(a, "Событие: tap", t_inj) && !said(a, "Событие: loud", t_inj),
+        "пока жужжит свой мотор, касание и громкий звук не события");
+  a.cmd("IN snd");
   const uint64_t t2 = g_ms;
   run(300000, 20);
   CHECK(!said(a, "Дуэль с", t2) && !said(a, "Встреча с", t2), "5 минут рядом — повторной сцены нет (перерыв 10 мин)");
@@ -857,6 +928,7 @@ void sc_power_off_battery() {
   run(16000);
   CHECK(happened(a, "off", t), "удержание 3 с — сцена и полный сон (System OFF)");
   CHECK(!a.alive, "плата спит");
+  CHECK(a.off_ua < 15, "ток выключенного %.1f мкА: экран, датчики и микрофон выключены", a.off_ua);
   run(5000);
   t = g_ms;
   a.button = true;
@@ -869,7 +941,10 @@ void sc_power_off_battery() {
   CHECK(a.alive && said(a, "Экран есть", t), "кнопка будит: загрузка");
   CHECK(a.num("xp") >= xp, "рост сохранён (опыт %ld, был %ld)", a.num("xp"), xp);
   CHECK(said(a, "время и дата сброшены", t), "после выключения время сброшено и консоль просит задать");
-  CHECK(!happened(a, "dfu", t), "кнопка без USB не включает загрузчик");
+  // Решает это загрузчик (BUTTON_DFU_NEEDS_USB — правило модели в power_on), прошивка тоже
+  // не уходит в него сама.
+  CHECK(!happened(a, "dfu", t) && !happened(a, "boot_button", t),
+        "кнопка без USB не включает загрузчик (модель загрузчика и прошивка)");
   // Будят, держа кнопку 6 с, «пока не включится»: это не удержание для выключения.
   run(5000);
   a.button = true;
@@ -946,11 +1021,13 @@ void sc_power_off_usb() {
   run(3000);
   // Выключают на батарее и не отпускают кнопку, а пока system_off ждёт отпускания, подключают
   // USB: он возвращается, и выключение идёт на USB (экран уже погашен, его шина выключена).
+  // USB — позже 10 с от нажатия: это уже не жест загрузчика.
   t = g_ms;
   a.button = true;
   a.cmd("SET button 1");
   const long w = wait_for([&] { return a.num("disp") == 0; }, 25000);
   CHECK(w >= 0 && a.alive && !happened(a, "off", t), "кнопку держат: сцена прощания, экран погас, ждёт отпускания");
+  if (g_ms < t + 10600) run(t + 10600 - g_ms);
   a.vbus = true;
   a.cmd("SET vbus 1");
   run(1000);
@@ -958,7 +1035,7 @@ void sc_power_off_usb() {
   a.cmd("SET button 0");
   run(5000);
   CHECK(a.alive && !any_event(a, t) && a.num("disp") == 0 && a.num("adv") == 0,
-        "USB подключили во время ожидания — выключение на USB, без сбросов");
+        "USB подключили через 10.6 с, пока ждали отпускания, — выключение на USB, без сбросов");
   health(a, "выключение с USB во время ожидания");
   t = g_ms;
   a.vbus = false;
@@ -966,6 +1043,25 @@ void sc_power_off_usb() {
   wait_for([&] { return happened(a, "off", t); }, 5000);
   CHECK(happened(a, "off", t) && !a.alive, "USB отключили — полный сон с пробуждением от кнопки");
   CHECK(wake(a), "кнопка будит");
+  // Жест загрузчика и после прощания: кнопку, зажатую для выключения, держат, экран уже погас,
+  // и через 8 с от нажатия подключают USB — README обещает 10 с.
+  run(3000);
+  t = g_ms;
+  a.button = true;
+  a.cmd("SET button 1");
+  wait_for([&] { return a.num("disp") == 0; }, 25000);
+  if (g_ms < t + 8000) run(t + 8000 - g_ms);
+  const bool dark = a.alive && a.num("disp") == 0;
+  a.vbus = true;
+  a.cmd("SET vbus 1");
+  run(500);
+  CHECK(dark && happened(a, "dfu", t) && a.boot_mode == 1, "экран погас, USB через 8 с от нажатия — загрузчик");
+  a.button = false;
+  run(2000);
+  t = g_ms;
+  a.vbus = false;
+  wait_for([&] { return a.alive && said(a, "Экран есть", t); }, 5000);
+  CHECK(a.alive && said(a, "Экран есть", t), "USB отключили — загрузчик запускает прошивку");
 }
 
 void sc_stuck_button() {
@@ -1179,11 +1275,11 @@ void sc_day() {
   double mah = 0;
   for (Mode& m : modes) mah += m.ua / 1000.0 * m.hours_per_day;
   say("        за сутки: %.1f мА·ч → %.1f дня на 150 мА·ч (до отсечки 3.35 В — ~142 мА·ч)", mah, 142.0 / mah);
-  CHECK(mah > 1 && mah < 25, "расход за обычный день %.1f мА·ч (в docs/power.md ≈12.9)", mah);
+  CHECK(mah > 10 && mah < 16, "расход за обычный день %.1f мА·ч (в docs/power.md ≈12.9)", mah);
 }
 
 void sc_charge_temp() {
-  say("\n== Заряд только в тепле: 3–42 °C по температуре кристалла ==");
+  say("\n== Заряд только в тепле: 10–42 °C по температуре кристалла ==");
   Board& a = *boards[0];
   a.cmd("IN v on");
   a.soc_mah = 60;
@@ -1194,7 +1290,7 @@ void sc_charge_temp() {
   a.cmd("SET vbus 1");
   run(5000);
   CHECK(a.num("chgen") == 0 && !a.charging, "мороз −5 °C: USB есть, а зарядник выключен (CHG_EN отпущен)");
-  CHECK(said(a, "Заряд не идёт", t), "консоль объясняет: заряжается от 3 до 42 °C");
+  CHECK(said(a, "Заряд не идёт", t) && said(a, "заряжается от 10 до 42 °C", t), "консоль объясняет: заряжается от 10 до 42 °C");
   const double soc0 = a.soc_mah;
   run(60000, 50);
   CHECK(a.soc_mah <= soc0 + 0.001 && !said(a, "Событие: charge_start", t),
@@ -1216,6 +1312,32 @@ void sc_charge_temp() {
   run(35000, 50);
   CHECK(a.num("chgen") == 1 && a.charging && a.soc_mah > soc1 && !said(a, "Событие: charge_full", t),
         "остыл — заряд продолжается без ложного «зарядилась»");
+  // Пороги и запас от дребезга: температура кристалла задана прямо (без +3 °C модели), шаги по
+  // 35 с — проверка раз в 30 с; шум датчика ±0.25 °C, до порога — 0.5 °C.
+  a.cmd("SET dieoffset 0");
+  struct Step {
+    float die;
+    int chgen;
+  } const steps[] = {{7.5f, 1}, {6.5f, 0}, {9.5f, 0}, {10.5f, 1}, {43.5f, 1}, {45.5f, 0}, {43.5f, 0}, {41.5f, 1}};
+  for (const Step& s : steps) {
+    a.cmd("SET temp %.1f", s.die);
+    run(35000, 50);
+    CHECK(a.num("chgen") == s.chgen, "кристалл %.1f °C: заряд %s (chgen=%ld)", s.die, s.chgen ? "идёт" : "запрещён",
+          a.num("chgen"));
+  }
+  CHECK(!said(a, "Событие: charge_full", t), "у порогов — ни одного ложного «зарядилась»");
+  // Оценка заряда на USB стоит, пока заряд запрещён: перерыв — не зарядка.
+  a.cmd("SET temp 24");
+  run(6u * 60000u, 50);
+  const long pct1 = a.num("bpct");
+  a.cmd("SET temp 50");
+  run(30u * 60000u, 100);
+  a.cmd("SET temp 24");
+  run(35000, 50);
+  const long pct2 = a.num("bpct");
+  CHECK(pct1 >= 0 && pct2 >= pct1 && pct2 - pct1 <= 3,
+        "оценка заряда на USB: %ld%% до перерыва, %ld%% после 30 минут без заряда", pct1, pct2);
+  a.cmd("SET dieoffset 3");
   a.vbus = false;
   a.cmd("SET vbus 0");
   run(3000);
@@ -1371,6 +1493,95 @@ void sc_oled() {
   CHECK(w >= 0, "экран вернулся — лицо через %.0f с (повторы не реже раза в минуту)", w / 1000.0);
   run(2000);
   health(a, "экран вернулся");
+  // 3) Контроллер после включения держит SDA: «подтверждение» читается нулём, обмен будто бы
+  // идёт, а экран тёмный. Шина не запускается, и следующий перезапуск питания его сбрасывает.
+  t = g_ms;
+  const long por1 = a.num("por");
+  a.cmd("SET osda 1");
+  a.cmd("SET wedge 1");  // перезапуск питания из-за зависания — и при включении SDA зажата
+  w = wait_for([&] { return a.num("oled") == 1 && a.num("por") >= por1 + 2 && a.num("vis") == 1; }, 25000);
+  CHECK(w >= 0 && said(a, "Шина экрана зажата", t),
+        "контроллер зажал SDA — шина не запущена, после нового перезапуска питания лицо через %.1f с", w / 1000.0);
+  CHECK(!any_event(a, t), "без сбросов платы");
+  run(2000);
+  health(a, "экран после зажатой SDA");
+}
+
+// Шина экрана зажата неисправностью платы: SCL в нуле или SCL замкнута с SDA (перемычка на J2).
+// Обмен по ней в ядре ждёт без срока — один сброс сторожевым таймером, дальше брелок работает
+// без экрана: консоль, зарядка и выключение кнопкой.
+void sc_display_bus() {
+  say("\n== Шина экрана зажата: SCL в нуле или замкнута с SDA ==");
+  Board& a = *boards[0];
+  a.cmd("SET lux 300");
+  run(2000);
+  for (const char* fault : {"dscl", "dbridge"}) {
+    uint64_t t = g_ms;
+    a.cmd("SET %s 1", fault);
+    run(60000);
+    const int dogs = count_events(a, "watchdog", t);
+    CHECK(dogs <= 1 && a.alive, "%s: сбросов сторожевым таймером за минуту — %d (не по кругу)", fault, dogs);
+    CHECK(said(a, "Брелок с эмоциями", t) && said(a, "Шина экрана зажата", t) && a.num("oled") == 0 && a.num("disp") == 0,
+          "%s: загрузка дошла до консоли, экран обесточен и не трогается", fault);
+    t = g_ms;
+    a.cmd("IN me");
+    run(500);
+    CHECK(said(a, "Рост: день", t), "%s: консоль отвечает", fault);
+    a.vbus = true;
+    a.cmd("SET vbus 1");
+    run(5000);
+    CHECK(a.num("chgen") == 1, "%s: на USB при 24 °C заряд разрешён", fault);
+    a.vbus = false;
+    a.cmd("SET vbus 0");
+    run(3000);
+    CHECK(power_off(a), "%s: удержание кнопки выключает", fault);
+    CHECK(wake(a) && said(a, "Экран нет", t), "%s: кнопка будит, загрузка без экрана", fault);
+    t = g_ms;
+    a.cmd("SET %s 0", fault);
+    const long w = wait_for([&] { return a.num("oled") == 1 && a.num("vis") == 1; }, 70000);
+    CHECK(w >= 0 && !any_event(a, t), "%s: шину отпустили — лицо снова на экране через %.0f с", fault, w / 1000.0);
+  }
+  health(a, "шина экрана");
+}
+
+// Часы задают только с консоли, и после выключения кнопкой они потеряны. По старым минутам
+// «ночь» шла бы днём: тусклый экран, эфир не слушается, лицо засыпает.
+void sc_clock_unknown() {
+  say("\n== Часы не заданы: ночи по старым минутам нет ==");
+  Board& a = *boards[0];
+  const double x0 = a.x;
+  a.x = 5000;  // подальше от соседей: встреча сменила бы темп эфира
+  a.cmd("SET lux 300");
+  a.cmd("IN t 23:30");
+  run(3000);
+  CHECK(a.num("con") < 127 && a.num("iv") == 16000, "часы заданы, 23:30 — ночь: экран приглушён (%ld), эфир редкий",
+        a.num("con"));
+  CHECK(power_off(a), "выключили кнопкой в 23:3x");
+  run(5000);
+  uint64_t t = g_ms;
+  CHECK(wake(a), "включили");
+  run(10000);
+  a.cmd("IN t");
+  run(300);
+  CHECK(said(a, "Время не задано", t), "консоль: время не задано");
+  long scan0 = a.num("scanms");
+  run(120000, 20);
+  CHECK(a.num("con") == 127 && a.num("iv") != 16000 && a.num("mic") == 1 && a.num("scanms") > scan0,
+        "часы потеряны: днём обычная яркость (%ld), эфир слушается (%ld мс за 2 мин), микрофон включён", a.num("con"),
+        a.num("scanms") - scan0);
+  // Новая плата, часы не задавали ни разу, проработала 11.5 ч: «12:00 + время работы» — 23:30.
+  Board& n = *make_board(8, "N");
+  n.x = 4000;  // далеко от остальных
+  n.t0_override = (uint64_t)(11.5 * 3600000.0);
+  spawn(n, 0);
+  run(15000);
+  scan0 = n.num("scanms");
+  run(120000, 20);
+  CHECK(n.alive && n.num("con") == 127 && n.num("iv") != 16000 && n.num("mic") == 1 && n.num("scanms") > scan0,
+        "11.5 ч работы без часов — не ночь: яркость %ld, эфир слушается", n.num("con"));
+  health(n, "без часов");
+  drop_board(&n);
+  a.x = x0;
 }
 
 void sc_dfu() {
@@ -1403,9 +1614,8 @@ void sc_dfu() {
   run(12500);
   CHECK(happened(a, "boot_button", t) && a.boot_mode == 2, "кнопку держат 10 с на USB — загрузчик ждёт прошивку");
   a.button = false;
-  const double soc0 = a.soc_mah;
   run(5000);
-  CHECK(a.boot_mode == 2 && a.soc_mah == soc0, "компьютер видит диск: загрузчик ждёт, ячейка в нём не заряжается");
+  CHECK(a.boot_mode == 2 && !a.alive, "компьютер видит диск: загрузчик ждёт, прошивка не идёт");
   t = g_ms;
   a.vbus = false;
   wait_for([&] { return a.alive && said(a, "Экран есть", t); }, 5000);
@@ -1423,8 +1633,11 @@ void sc_dfu() {
   run(12500);
   a.button = false;
   CHECK(a.boot_mode == 2, "кнопку держат 10 с на зарядке — загрузчик");
-  wait_for([&] { return a.alive; }, 15000);
-  CHECK(a.alive && !a.boot_mode, "компьютера нет — через 10 с загрузчик сам запускает прошивку");
+  t = g_ms;
+  wait_for([&] { return a.alive && said(a, "Экран есть", t); }, 15000);
+  // 10 с — правило модели загрузчика (BUTTON_DFU_TIMEOUT_MS), проверяется здесь только то, что
+  // прошивка после него стартует и работает.
+  CHECK(a.alive && !a.boot_mode && said(a, "Экран есть", t), "компьютера нет — загрузчик сам запускает прошивку");
   a.host = true;
   a.vbus = false;
   a.cmd("SET vbus 0");
@@ -1514,7 +1727,8 @@ int main(int argc, char** argv) {
       {"boot", sc_first_boot},         {"sensors", sc_sensors},       {"sound", sc_sound},
       {"pocket", sc_light_and_pocket}, {"charge", sc_charge},         {"chargetemp", sc_charge_temp},
       {"meeting", sc_meeting},         {"lossy", sc_lossy_meeting},   {"attack", sc_attack},
-      {"i2c", sc_i2c},                 {"oled", sc_oled},             {"off", sc_power_off_battery},
+      {"i2c", sc_i2c},                 {"oled", sc_oled},             {"dbus", sc_display_bus},
+      {"clock", sc_clock_unknown},     {"off", sc_power_off_battery},
       {"dfu", sc_dfu},                 {"offusb", sc_power_off_usb},  {"stuck", sc_stuck_button},
       {"watchdog", sc_watchdog},       {"console", sc_console_stuck}, {"cuts", sc_power_cuts},
       {"empty", sc_empty_cell},        {"wrap", sc_millis_wrap},      {"days", sc_days},

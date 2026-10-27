@@ -56,6 +56,8 @@ class Lis3dhModel : public I2cDevice {
       // работает неправильно; бит 7 отключает подтяжку SA0.
       if (reg_ == 0x1E && (d[i] & 0x7F) != 0x10) ++status.i2c_errors;
       regs_[reg_] = d[i];
+      // LPen (CTRL1 бит 3) вместе с HR (CTRL4 бит 3) — запрещённое сочетание.
+      if ((reg_ == 0x20 || reg_ == 0x23) && (regs_[0x20] & 0x08) && (regs_[0x23] & 0x08)) ++status.i2c_errors;
       if (reg_ == 0x20) odr_since_ = now_us;
       if (inc_) ++reg_;
     }
@@ -67,12 +69,15 @@ class Lis3dhModel : public I2cDevice {
     regs_[0x20] = 0x07;
     count_ = head_ = 0;
     click_ = 0;
+    dclick_at_ = 0;
   }
   size_t read(uint8_t* d, size_t n) override {
     sample_until(now_us);
+    // Адрес растёт, только если в адресе регистра был бит 7 (автоприращение): без него
+    // чтение подряд повторяет один и тот же регистр.
     for (size_t i = 0; i < n; ++i) {
       d[i] = get(reg_);
-      if (inc_ || n > 1) advance();
+      if (inc_) advance();
     }
     return n;
   }
@@ -121,9 +126,19 @@ class Lis3dhModel : public I2cDevice {
   }
   bool fifo_on() const { return (regs_[0x24] & 0x40) && (regs_[0x2E] >> 6) == 2; }
   void sample_until(uint64_t t) {
+    // Касание: сначала датчик отмечает одиночное (SClick), двойное (DClick) — когда кончится
+    // второе, через tap_gap_ms. Флаги копятся, пока CLICK_SRC не прочтут. Выключенный датчик
+    // (ODR 0) касаний не видит.
     if (world.tap) {
-      click_ = (uint8_t)(0x40 | (world.tap == 2 ? 0x20 : 0x10) | 0x04);
+      if (active()) {
+        click_ |= 0x40 | 0x10 | 0x04;
+        if (world.tap == 2) dclick_at_ = now_us + (uint64_t)world.tap_gap_ms * 1000u;
+      }
       world.tap = 0;
+    }
+    if (dclick_at_ && t >= dclick_at_) {
+      if (active()) click_ |= 0x40 | 0x20 | 0x04;
+      dclick_at_ = 0;
     }
     const int odr = regs_[0x20] >> 4;
     if (odr != 5) {
@@ -158,11 +173,19 @@ class Lis3dhModel : public I2cDevice {
     }
     // Датчик на обороте платы: x и z перевёрнуты (board::kAccMap).
     const float g[3] = {-ax + noise(0.01f), ay + noise(0.01f), -az + noise(0.01f)};
+    // Шкала и разрядность — как настроила прошивка: FS в CTRL4 (±2…16 g), 12 бит с HR,
+    // 8 бит с LPen, иначе 10; данные выровнены влево (AN3308).
+    const bool lp = regs_[0x20] & 0x08, hr = regs_[0x23] & 0x08;
+    const int fs = (regs_[0x23] >> 4) & 3;
+    static const float kMgHr[4] = {1, 2, 4, 12}, kMgNormal[4] = {4, 8, 16, 48}, kMgLow[4] = {16, 32, 64, 192};
+    const int bits = lp ? 8 : hr ? 12 : 10;
+    const float mg = (lp ? kMgLow : hr ? kMgHr : kMgNormal)[fs];
+    const long top = (1L << (bits - 1)) - 1;
     for (int k = 0; k < 3; ++k) {
-      long v = lroundf(g[k] / 0.002f);
-      if (v > 2047) v = 2047;
-      if (v < -2048) v = -2048;
-      out[k] = (int16_t)(v * 16);  // 12 бит, выровнено влево
+      long v = lroundf(g[k] * 1000.0f / mg);
+      if (v > top) v = top;
+      if (v < -top - 1) v = -top - 1;
+      out[k] = (int16_t)(v * (1L << (16 - bits)));
     }
   }
 
@@ -173,6 +196,7 @@ class Lis3dhModel : public I2cDevice {
   uint32_t head_ = 0, count_ = 0;
   uint64_t next_ = 0, odr_since_ = 0;
   uint8_t click_ = 0;
+  uint64_t dclick_at_ = 0;  // когда датчик отметит двойное касание; 0 — не ждём
 };
 
 // ---------------------------------------------------------------- LTR-303ALS
@@ -259,6 +283,7 @@ I2cDevice* i2c_device(int bus, uint8_t addr) {
 }
 
 bool oled_powered() { return pin_mode[19] == kOutput && pin_out[19]; }
+bool OledModel::holds_sda() const { return sda_hold && oled_powered(); }
 bool OledModel::powered() const { return oled_powered() && now_us >= power_since + 30000; }
 bool OledModel::acks() const { return powered() && world.oled_ok && !wedged; }
 
@@ -364,6 +389,15 @@ int read_pin(int pin) {
   // Шина датчиков: зажатую линию видно на входе, кто бы ни управлял ножкой.
   if (pin == PIN_WIRE_SDA && world.sda_stuck > 0) return LOW;
   if (pin == PIN_WIRE_SCL && world.scl_stuck) return LOW;
+  // Шина экрана: SCL в нуле, SDA держит контроллер, а у замкнутых линий ноль одной — ноль
+  // и другой.
+  if (pin == PIN_WIRE1_SCL && world.dscl_stuck) return LOW;
+  if (pin == PIN_WIRE1_SDA && oled_dev.holds_sda()) return LOW;
+  if (world.disp_bridge && (pin == PIN_WIRE1_SDA || pin == PIN_WIRE1_SCL)) {
+    const int other = pin == PIN_WIRE1_SDA ? PIN_WIRE1_SCL : PIN_WIRE1_SDA;
+    if (pin_mode[other] == kOutput && !pin_out[other]) return LOW;
+    if (world.dscl_stuck || oled_dev.holds_sda()) return LOW;
+  }
   if (pin == 22) return world.button ? LOW : (m == kInputPullup ? HIGH : (int)(rnd() & 1));
   if (pin == 4) return lis.int1() ? HIGH : LOW;
   if (pin == 20) {
@@ -443,7 +477,7 @@ uint32_t analogReadVDDHDIV5() {
   if (raw > (1 << adc_bits) - 1) raw = (1 << adc_bits) - 1;
   return (uint32_t)raw;
 }
-float readCPUTemperature() { return world.temp_c + 3.0f + noise(0.25f); }
+float readCPUTemperature() { return world.temp_c + world.die_offset + noise(0.25f); }
 uint32_t readResetReason() { return world.reset_reason; }
 void systemOff(uint32_t, uint8_t) { throw Reset{ResetKind::SystemOff}; }
 void enterUf2Dfu() { throw Reset{ResetKind::Dfu}; }
@@ -524,7 +558,13 @@ void TwoWire::begin() {
 // нулями, «подтверждение» тоже ноль — обмен будто бы проходит, но записи не доходят, а
 // чтения дают нули.
 bool TwoWire::bus_fault() {
-  if (bus_ != 0) return false;
+  if (bus_ == 1) {
+    // Шина экрана: SCL в нуле или замкнута с SDA (старт тянет SDA в ноль, а с ней и SCL, и
+    // первый бит адреса 0x3C — ноль) — TWIM ждёт без срока. SDA, которую держит контроллер, —
+    // как SDA в нуле на шине датчиков.
+    while (world.dscl_stuck || world.disp_bridge) advance_us(1000);
+    return oled_dev.holds_sda();
+  }
   while (world.scl_stuck) advance_us(1000);
   return world.sda_stuck > 0;
 }
@@ -577,11 +617,18 @@ uint8_t TwoWire::requestFrom(uint8_t addr, uint8_t n) {
 
 int PDMClass::begin(int, long rate) {
   if (rate != 16000) return 0;
-  sd_clock_hfclk_request();  // как в ядре: кварц для PDM
+  // Как в ядре: кварц для PDM — запросом у SoftDevice, если он ещё не идёт.
+  uint32_t running = 0;
+  sd_clock_hfclk_is_running(&running);
+  if (!running) sd_clock_hfclk_request();
   running_ = true;
   status.pdm_running = true;
   next_us_ = now_us + 32000;
   start_blocks_ = 3;
+  // Библиотека отдаёт буфер, который DMA только что начал заполнять заново, — на блок позже.
+  // Какой из двух буферов первый, зависит от указателя, оставшегося с прошлого включения:
+  // через раз нули идут и после блока выхода на режим (ноль, бросок, ноль).
+  zero_after_ = (sessions_++ & 1) != 0;
   return 1;
 }
 void PDMClass::end() {
@@ -595,11 +642,12 @@ void PDMClass::tick(uint64_t t) {
   next_us_ += 32000;
   float db = world.mic_db;
   if (world.mic_pattern == 1 && (t / 1000) % 450 >= 200) db = -62;  // речь: слоги и паузы
-  // Первые блоки после включения: библиотека отдаёт обнулённые буферы (два), потом микрофон
-  // выходит на режим — блок с броском.
+  // Первые блоки после включения: обнулённые буферы библиотеки и блок выхода микрофона на
+  // режим — с броском: ноль, ноль, бросок или ноль, бросок, ноль.
   if (start_blocks_ > 0) {
     --start_blocks_;
-    if (start_blocks_ > 0) {
+    const bool burst = zero_after_ ? start_blocks_ == 1 : start_blocks_ == 0;
+    if (!burst) {
       memset(block_, 0, sizeof block_);
       have_ = true;
       if (cb_) cb_();
@@ -662,6 +710,11 @@ uint32_t sd_clock_hfclk_request() {
 uint32_t sd_power_system_off() { throw Reset{ResetKind::SystemOffUsb}; }
 uint32_t sd_clock_hfclk_release() {
   status.hfclk_requested = false;
+  return NRF_SUCCESS;
+}
+// Кварц идёт, пока его просит приложение (кварц для радио SoftDevice не моделируется).
+uint32_t sd_clock_hfclk_is_running(uint32_t* running) {
+  *running = status.hfclk_requested ? 1 : 0;
   return NRF_SUCCESS;
 }
 uint32_t sd_flash_write(uint32_t* dst, const uint32_t* src, uint32_t words) {

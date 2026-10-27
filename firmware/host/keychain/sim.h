@@ -50,15 +50,23 @@ struct World {
   bool button = false;
   float cell_v = 3.9f;  // расчётное напряжение ячейки (координатор ведёт заряд)
   bool charging = false;
-  int tap = 0;           // 1 — касание, 2 — двойное: модель LIS3DH взводит CLICK
+  // Кристалл nRF теплее воздуха вокруг (SET dieoffset): температура для датчика — temp_c + он.
+  float die_offset = 3.0f;
+  // 1 — касание, 2 — двойное: модель LIS3DH взводит CLICK (SClick, а через tap_gap_ms — DClick,
+  // как настоящий датчик). Сам удар по выборкам не детектируется — флаг задаёт сценарий.
+  int tap = 0;
+  uint32_t tap_gap_ms = 200;
   uint32_t reset_reason = 0;
   uint64_t device_id = 0;
   // Неисправности шин I2C (SET lis/ltr/oled/sda/scl): микросхема не отвечает на свой адрес;
   // ведомый держит SDA шины датчиков, пока не получит столько тактов SCL от i2c_recover;
-  // SCL шины датчиков в нуле — обмен по ней в ядре ждёт без срока.
+  // SCL шины датчиков в нуле — обмен по ней в ядре ждёт без срока. Шина экрана (SET dscl,
+  // dbridge): SCL в нуле или SCL замкнута с SDA (перемычка на J2) — обмен в ядре тоже ждёт
+  // без срока; контроллер, зажавший SDA (SET osda), — в oled_model.h.
   bool lis_ok = true, ltr_ok = true, oled_ok = true;
   int sda_stuck = 0;
   bool scl_stuck = false;
+  bool dscl_stuck = false, disp_bridge = false;
 };
 extern World world;
 

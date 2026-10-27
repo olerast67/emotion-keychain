@@ -5,8 +5,11 @@
 //                           неисправности: lis|ltr|oled 0|1 — микросхема не отвечает и снова
 //                           отвечает (после сброса по питанию), lisreset — сброс LIS3DH,
 //                           wedge — контроллер экрана завис, sda <такты> и scl 0|1 — шина
-//                           датчиков зажата
-//   TAP 1|2                 касание или двойное касание (детектор LIS3DH)
+//                           датчиков зажата, dscl 0|1 и dbridge 0|1 — SCL шины экрана в нуле
+//                           или замкнута с SDA, osda — контроллер экрана после следующего
+//                           включения держит SDA; dieoffset <°C> — кристалл теплее воздуха
+//   TAP 1|2 [мс]            касание или двойное касание (флаги детектора LIS3DH; у двойного —
+//                           второе касание через столько мс, по умолчанию 200)
 //   RX <rssi> <hex>         пакет из эфира — Bluefruit отдаст его прошивке, если слушает
 //   IN <текст>              строка в консоль USB
 //   HOSTREAD 0|1            читает ли хост консоль (0 — порт открыт, но не читается)
@@ -84,6 +87,18 @@ uint32_t frame_hash() {
   return h;
 }
 
+// Ток в полном выключении, мкА: 12 — сон nRF без RAM, зарядник, диод и плата защиты ячейки с
+// датчиками во сне (docs/power.md); сверху — то, что прошивка оставила включённым: ножки и
+// микросхемы в System OFF остаются как были.
+double off_ua() {
+  double ua = 12;
+  if (sim::lis_active()) ua += 20 - 0.5;
+  if (sim::ltr_active()) ua += 220 - 5;
+  if (sim::oled_powered()) ua += 67 + 5;
+  if (sim::status.pdm_running) ua += 800;
+  return ua;
+}
+
 // Ток сейчас, мкА, по состоянию микросхем (типовые значения даташитов; docs/power.md).
 double state_ua() {
   double ua = 3 + 1 + 10;  // сон nRF с RAM, REG0, зарядник и плата защиты ячейки
@@ -157,11 +172,13 @@ void report() {
   // журнала, fop — операция флеша идёт, oled/accok/alsok/sbus — прошивка считает экран,
   // акселерометр, датчик света и шину датчиков рабочими; ls — время последней удачной записи,
   // dm — минуты текущих суток в настройках; ovcc — минимум питания экрана перед
-  // последним включением, por — сколько раз контроллер экрана сбрасывался по питанию.
+  // последним включением, por — сколько раз контроллер экрана сбрасывался по питанию; offua —
+  // ток, если плата сейчас уснёт (System OFF), bpct — процент заряда у характера, vb — вибро
+  // по узору (и в паузах между толчками).
   printf("ST t=%u adv=%d iv=%u scan=%d disp=%d vis=%d con=%u lit=%d tone=%u vib=%d mic=%d als=%d acc=%d hf=%d "
          "vibv=%.2f chgen=%d q=%.0f loops=%u mism=%u dark=%u i2c=%u ffail=%u ovr=%u frames=%u xp=%u sxp=%u fr=%u "
          "steps=%u days=%u dm=%u ls=%u fop=%d oled=%d accok=%d alsok=%d sbus=%d ovcc=%.2f por=%u scanms=%.0f adv_ev=%.1f "
-         "uicr=%x data=%s\n",
+         "offua=%.1f bpct=%d vb=%d uicr=%x data=%s\n",
          sim::now_ms(), adv.running ? 1 : 0, adv.interval, Bluefruit.Scanner.isRunning() ? 1 : 0,
          sim::oled_powered() ? 1 : 0, sim::oled_dev.visible() ? 1 : 0, sim::oled_dev.contrast, sim::oled_dev.lit(),
          sim::status.tone_hz, NRF_PWM2->ENABLE.v ? 1 : 0, sim::status.pdm_running ? 1 : 0, sim::ltr_active() ? 1 : 0,
@@ -171,7 +188,7 @@ void report() {
          (unsigned)progress.xp, (unsigned)progress_saved.xp, (unsigned)friends.count(), (unsigned)progress.steps,
          (unsigned)progress.days, (unsigned)cfg.day_min, (unsigned)last_save, sim::flash_busy() ? 1 : 0, have_oled ? 1 : 0, acc.ok() ? 1 : 0,
          als.ok() ? 1 : 0, sensor_bus ? 1 : 0, sim::oled_dev.last_off_min, sim::oled_dev.resets, scan_ms, adv_events,
-         sim::status.uicr_regout0, hex.empty() ? "-" : hex.c_str());
+         off_ua(), battery_shown, hal::vibro_busy() ? 1 : 0, sim::status.uicr_regout0, hex.empty() ? "-" : hex.c_str());
   charge_uams = 0;
   sim::status.vib_peak_v = sim::status.vib_duty * (sim::world.vbus ? 4.7f : sim::world.cell_v);
   save_uicr();
@@ -249,8 +266,16 @@ void serve() {
       if (!strcmp(key, "wedge")) sim::oled_wedge();
       if (!strcmp(key, "sda")) w.sda_stuck = (int)a;
       if (!strcmp(key, "scl")) w.scl_stuck = a != 0;
+      if (!strcmp(key, "dscl")) w.dscl_stuck = a != 0;
+      if (!strcmp(key, "dbridge")) w.disp_bridge = a != 0;
+      if (!strcmp(key, "osda")) sim::oled_dev.arm_sda_hold();
+      if (!strcmp(key, "dieoffset")) w.die_offset = a;
     } else if (!strcmp(line, "TAP") && arg) {
-      sim::world.tap = atoi(arg);
+      sim::world_changing();
+      int kind = 0, gap = 200;
+      sscanf(arg, "%d %d", &kind, &gap);
+      sim::world.tap = kind;
+      sim::world.tap_gap_ms = (uint32_t)gap;
     } else if (!strcmp(line, "HOSTREAD") && arg) {
       Serial.host_reads = atoi(arg) != 0;
       if (Serial.host_reads) Serial.fifo_used = 0;

@@ -9,15 +9,18 @@
   python3 viewer.py --render PNG         # картинка платы: лицо и оборот рядом
   python3 viewer.py --shots DIR          # case-3d.png и case-exploded.png для README
 
-facegen берётся из build/ в корне репозитория или из переменной FACEGEN. Для --shots
-нужен Node.js с Playwright (shots.js); если браузер не достаёт до CDN, укажите в
-THREE_DIR распакованный пакет npm three@0.128.0.
+Нужны KiCad 7 (pcbnew в Python и kicad-cli), Pillow и программа, которая переводит SVG
+в PNG: cairosvg (pip install cairosvg; другой путь — в переменной CAIROSVG) или
+rsvg-convert. facegen берётся из build/ в корне репозитория или из переменной FACEGEN.
+Для --shots нужен Node.js с Playwright (shots.js); если браузер не достаёт до CDN,
+укажите в THREE_DIR распакованный пакет npm three@0.128.0.
 """
 import base64
 import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -38,7 +41,8 @@ import case  # noqa: E402
 PCB = os.path.join(REV, "keychain-rev-b.kicad_pcb")
 OUT = os.path.join(HERE, "out")
 PX_PER_MM = 24  # текстуры и картинки платы
-CAIROSVG = os.environ.get("CAIROSVG", "cairosvg")
+CAIROSVG = os.environ.get("CAIROSVG") or shutil.which("cairosvg")
+RSVG = shutil.which("rsvg-convert")
 FACEGEN = os.environ.get("FACEGEN", os.path.join(ROOT, "build", "facegen"))
 
 # Высоты корпусов деталей над платой, мм, и цвет.
@@ -70,9 +74,12 @@ def _render(layers, tmp):
                     "--exclude-drawing-sheet", "--page-size-mode", "2", "-o", svg, PCB],
                    check=True, capture_output=True)
     head = open(svg).read(2000)
-    w_mm = float(re.search(r'width="([\d.]+)mm"', head).group(1))
-    subprocess.run([CAIROSVG, svg, "-o", png, "--output-width", str(round(w_mm * PX_PER_MM)), "-b", "white"],
-                   check=True, capture_output=True)
+    width = str(round(float(re.search(r'width="([\d.]+)mm"', head).group(1)) * PX_PER_MM))
+    if CAIROSVG:
+        cmd = [CAIROSVG, svg, "-o", png, "--output-width", width, "-b", "white"]
+    else:
+        cmd = [RSVG, "-w", width, "-b", "white", "-o", png, svg]
+    subprocess.run(cmd, check=True, capture_output=True)
     return ImageChops.invert(Image.open(png).convert("L"))
 
 
@@ -177,6 +184,8 @@ def board_render(path):
 def shots(out_dir):
     """Картинки корпуса для README: снимки страницы просмотра в Chromium, обрезанные по брелоку."""
     page = os.path.join(OUT, "keychain-3d.html")
+    if not shutil.which("node"):
+        sys.exit("viewer.py --shots: нужен Node.js с пакетом playwright (npm install playwright)")
     os.makedirs(out_dir, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(["node", os.path.join(HERE, "shots.js"), page, tmp], check=True)
@@ -191,11 +200,26 @@ def shots(out_dir):
             print(f"{path}: {im.size[0]}×{im.size[1]}")
 
 
+def need_tools():
+    """Внятная ошибка вместо трассировки, если чего-то не хватает."""
+    missing = []
+    if not shutil.which("kicad-cli"):
+        missing.append("kicad-cli (KiCad 7)")
+    if not (CAIROSVG or RSVG):
+        missing.append("cairosvg (pip install cairosvg) или rsvg-convert")
+    if missing:
+        sys.exit("viewer.py: не хватает: " + ", ".join(missing) + ". Готовые out/keychain-3d.html и файлы резки "
+                 "уже лежат в out/, для резки запускать скрипты не нужно.")
+
+
 def main():
-    if len(sys.argv) > 2 and sys.argv[1] == "--render":
-        return board_render(sys.argv[2])
     if len(sys.argv) > 2 and sys.argv[1] == "--shots":
         return shots(sys.argv[2])
+    need_tools()
+    if len(sys.argv) > 2 and sys.argv[1] == "--render":
+        return board_render(sys.argv[2])
+    if not os.access(FACEGEN, os.X_OK):
+        sys.exit(f"viewer.py: нет {FACEGEN}: соберите движок (cmake, см. README в корне) или укажите путь в FACEGEN")
     board = pcbnew.LoadBoard(PCB)
     bb = board.GetBoardEdgesBoundingBox()
     bbox = (pcbnew.ToMM(bb.GetX()), pcbnew.ToMM(bb.GetY()), pcbnew.ToMM(bb.GetRight()), pcbnew.ToMM(bb.GetBottom()))

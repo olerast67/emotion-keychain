@@ -24,5 +24,7 @@ class PDMClass {
   int16_t block_[512];
   uint32_t phase_ = 0;
   int start_blocks_ = 0;  // блоки выхода на режим после begin
+  bool zero_after_ = false;  // ноль и после броска (другой буфер первым)
+  uint32_t sessions_ = 0;
 };
 extern PDMClass PDM;

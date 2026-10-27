@@ -92,7 +92,7 @@
         <div><b id="d-h">—</b><span>высота, мм</span></div>
         <div><b id="d-t">—</b><span>толщина, мм</span></div>
       </div>
-      <p class="note" style="margin-top:8px">Без ушка платы и выступа толкателя кнопки.</p>
+      <p class="note" style="margin-top:8px">Без ушка платы и прилива с толкателем кнопки.</p>
     </div>
     <div>
       <h2>Показать</h2>
@@ -245,16 +245,16 @@ const L_CELL = 0.45, L_TUBE = 2.0, L_MODULE = 2.9, L_SCREW = 5.6, L_NUT = -3.2;
 const o = DATA.oled, c = DATA.cell;
 const pinsX0 = DATA.pins[0][0] - 1.27, pinsX1 = DATA.pins[DATA.pins.length - 1][0] + 1.27, py = DATA.pins[0][1];
 const faceMat = new THREE.MeshBasicMaterial({ map: texture(DATA.face) });
-const steel = mat("#9aa1aa", { metalness: 0.9, roughness: 0.3 });
+const nylon = mat("#ece6d6", { metalness: 0, roughness: 0.6 });
 
 for (const [vk, model] of Object.entries(DATA.variants)) {
-  const V = model.variant, h = V.standoff;
+  const V = model.variant, h = V.standoff, mt = V.module_t ?? K.module_t;
   const layer = id => model.layers.find(l => l.id === id);
   add(box(c.x, c.y, c.x + c.w, c.y + c.h, K.under_cell, K.under_cell + V.cell_t,
           mat("#c3c8cf", { metalness: 0.6, roughness: 0.4 })), L_CELL, "module", vk);
   // Модуль экрана лежит на ушках рамок ячейки — своих стоек нет.
-  add(box(o.x, o.y, o.x + o.w, o.y + o.h, h, h + K.module_t, mat("#1f4e9a", { roughness: 0.7, metalness: 0 })), L_MODULE, "module", vk);
-  const gx = o.x + (o.w - o.glass_w) / 2, gz = h + K.module_t;
+  add(box(o.x, o.y, o.x + o.w, o.y + o.h, h, h + mt, mat("#1f4e9a", { roughness: 0.7, metalness: 0 })), L_MODULE, "module", vk);
+  const gx = o.x + (o.w - o.glass_w) / 2, gz = h + mt;
   add(box(gx, o.y + o.glass_y, gx + o.glass_w, o.y + o.glass_y + o.glass_h, gz, gz + K.glass_t,
           mat("#0b0e12", { roughness: 0.15, metalness: 0.3 })), L_MODULE, "module", vk);
   const face = new THREE.Mesh(new THREE.PlaneGeometry(o.view_w, o.view_h), faceMat);
@@ -262,7 +262,7 @@ for (const [vk, model] of Object.entries(DATA.variants)) {
   add(face, L_MODULE, "module", vk);
   add(box(pinsX0, py - 1.25, pinsX1, py + 1.25, h - K.header_plastic, h, mat("#141414")), L_MODULE, "module", vk);
   for (const [x, y] of DATA.pins) {
-    add(cyl(x, y, 0.32, -T - 0.8, h + K.module_t + K.pin_top, mat("#d6b36a", { metalness: 0.9, roughness: 0.3 }), 8),
+    add(cyl(x, y, 0.32, -T - 0.8, h + mt + K.pin_top, mat("#d6b36a", { metalness: 0.9, roughness: 0.3 }), 8),
         L_MODULE, "module", vk);
   }
   // Силиконовая трубка микрофона: от отверстия в плате до крышки.
@@ -283,12 +283,13 @@ for (const [vk, model] of Object.entries(DATA.variants)) {
       add(m, LEVEL[L.id] ?? 0, "case", vk);
     }
   }
-  // Винты M2 с головками на крышке и гайки на дне; длина — из расчёта версии.
+  // Нейлоновые винты M2 с головками на крышке и гайки на дне; длина — после того, как конец
+  // откусили над гайкой (из расчёта версии).
   const top = cover.z + cover.t;
   for (const [x, y] of DATA.screws) {
-    add(cyl(x, y, 0.95, top - V.screw, top, steel, 12), L_SCREW, "screws", vk);
-    add(cyl(x, y, 1.9, top, top + 1.3, steel), L_SCREW, "screws", vk);
-    add(cyl(x, y, 2.3, bottom.z - K.nut_t, bottom.z, steel, 6), L_NUT, "screws", vk);
+    add(cyl(x, y, 0.95, top - (V.screw_cut ?? V.screw), top, nylon, 12), L_SCREW, "screws", vk);
+    add(cyl(x, y, 1.9, top, top + 1.3, nylon), L_SCREW, "screws", vk);
+    add(cyl(x, y, 2.3, bottom.z - K.nut_t, bottom.z, nylon, 6), L_NUT, "screws", vk);
   }
 }
 

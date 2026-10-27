@@ -18,7 +18,12 @@ class TwoWire {
   void setClock(uint32_t hz) { hz_ = hz; }
   void beginTransmission(uint8_t a) { addr_ = a, n_ = 0, tx_ = true; }
   size_t write(uint8_t b) {
-    if (n_ >= sizeof buf_) return 0;  // буфер ядра — 64 байта
+    // Буфер ядра — кольцо на 64 байта, в котором помещается 63 (RingBuffer::isFull): лишний
+    // байт ядро молча теряет. Здесь это ошибка прошивки.
+    if (n_ >= sizeof buf_ - 1) {
+      ++sim::status.i2c_errors;
+      return 0;
+    }
     buf_[n_++] = b;
     return 1;
   }

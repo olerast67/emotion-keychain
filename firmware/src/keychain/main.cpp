@@ -30,8 +30,15 @@
 #include "hal.h"
 #include "radio.h"
 #include "sensors.h"
+#include "snapshot.h"
 #include "ssd1306.h"
 #include "storage.h"
+
+// Версия прошивки: git describe при сборке (tools/version.py); без git — «unknown». Видна в
+// приветствии консоли и по команде ver: так видно, какая сборка залита в брелок.
+#ifndef FW_VERSION
+#define FW_VERSION "unknown"
+#endif
 
 using namespace face;
 
@@ -43,26 +50,6 @@ constexpr uint32_t kLongPressMs = 3000;
 // Загрузчик по кнопке: USB подключили, пока кнопку держат, и зажали её не раньше чем за 10 с.
 // Кнопка, которую держат дольше (залипла или зажата с самого включения), загрузчик не включает.
 constexpr uint32_t kDfuPressMs = 10000;
-
-// Настройки, которые переживают перезагрузку.
-struct Settings {
-  uint32_t magic = 0x4B435354u;  // «KCST»
-  uint8_t version = 1;
-  uint8_t theme = 0;
-  uint8_t sound = 1;
-  uint8_t duel_ready = 1;
-  uint8_t ghost = 0;
-  uint8_t contrast = 0x7F;
-  uint8_t bday_m = 0, bday_d = 0;
-  uint16_t year = 0;  // 0 — дата не задана
-  uint8_t month = 0, day = 0;
-  uint16_t clock_min = 12 * 60;
-  uint8_t clock_known = 0;
-  uint8_t empty_off = 0;  // выключились на пустой ячейке: кнопка без USB не будит целиком
-  uint16_t day_min = 0;   // без часов: минут работы с начала текущих суток
-  uint8_t reserved[2] = {};  // до 24 байт без выравнивания: memcmp не видит мусора
-};
-static_assert(sizeof(Settings) == 24, "настройки без скрытых байтов выравнивания");
 
 FaceEngine eng;
 Behavior bh;
@@ -86,6 +73,7 @@ uint32_t last_save = 0, last_save_try = 0;
 bool save_failed = false;
 
 bool have_oled = false, oled_full = false, screen_on = true;
+bool oled_bus_bad = false;  // шина экрана зажата: обмен по ней не начинается
 uint8_t shown_contrast = 0;
 uint32_t oled_fail_at = 0, oled_retry_ms = 2000;
 bool oled_waiting = false;  // экран не ответил: ждём повтора с oled_fail_at
@@ -108,6 +96,7 @@ bool off_timing = false;
 uint32_t off_at = 0;
 uint32_t charge_t0 = 0;
 int charge_pct0 = -1;
+int battery_shown = -1;  // процент заряда, который видит характер (на USB — оценка по времени)
 bool charged_full = false;  // с этого подключения USB ячейка уже заряжалась до конца
 bool charge_allowed = false;  // заряд разрешён по температуре (ножка CHG_EN)
 uint32_t vib_end = 0, voice_end = 0;  // когда кончились вибро и звук — датчики их не слышат
@@ -195,9 +184,11 @@ uint16_t day_minutes() {
 // перезагрузится или уснёт. Начало отсчёта сдвигается вместе с clock_min, иначе прошедшие
 // минуты посчитались бы дважды, если работа всё-таки продолжится.
 void sync_clock() {
-  const uint16_t m = (uint16_t)clock_minutes();
-  clock_base_up = uptime - (uptime - clock_base_up) % 60000u;
-  cfg.clock_min = m;
+  if (cfg.clock_known) {
+    const uint16_t m = (uint16_t)clock_minutes();
+    clock_base_up = uptime - (uptime - clock_base_up) % 60000u;
+    cfg.clock_min = m;
+  }
   cfg.day_min = day_minutes();
 }
 
@@ -219,19 +210,7 @@ void event(Event e, uint32_t now) {
 
 // ---------------------------------------------------------------- флеш
 
-// Всё, что переживает выключение, — одной записью журнала (storage.h). Заголовок хранит
-// длины частей: прошивка, у которой Progress, Friends или Settings выросли, прочтёт старую
-// запись по частям (у Progress — своя миграция по версии), и рост не пропадёт.
-struct SnapHead {
-  uint32_t magic = 0x4B43534Eu;  // «KCSN»
-  uint16_t p_len = sizeof(Progress), f_len = sizeof(Friends), s_len = sizeof(Settings), reserved = 0;
-};
-struct Snapshot {
-  SnapHead head;
-  Progress progress;
-  Friends friends;
-  Settings settings;
-};
+// Всё, что переживает выключение, — одной записью журнала (snapshot.h).
 static_assert(sizeof(Snapshot) <= storage::kMaxRecord, "запись журнала");
 
 void save_all(uint32_t now, bool force) {
@@ -282,9 +261,8 @@ int days_in_month(int y, int m) {
   return m == 2 && leap ? 29 : kDays[m - 1];
 }
 
-// Настройки из флеша: чужая версия или значения вне диапазона — заводские для этого поля.
-bool settings_ok(const Settings& s) { return s.magic == Settings{}.magic && s.version == Settings{}.version; }
-
+// Настройки из флеша: значения вне диапазона — заводские для этого поля (чужую версию
+// отбрасывает settings_ok).
 void sanitize(Settings& s) {
   const Settings d;
   if (s.theme >= (uint8_t)Theme::Count) s.theme = d.theme;
@@ -305,33 +283,10 @@ void sanitize(Settings& s) {
 void load_all() {
   storage::begin();
   static uint8_t raw[storage::kMaxRecord];
-  bool p_ok = false, f_ok = false, s_ok = false;
   const int n = storage::load_any(raw, sizeof raw);
-  // Части записи: смещение и длина каждой.
-  const uint8_t *pp = nullptr, *fp = nullptr, *sp = nullptr;
-  size_t pl = 0, fl = 0, sl = 0;
-  SnapHead h;
-  if (n >= (int)sizeof h) memcpy(&h, raw, sizeof h);
-  if (n >= (int)sizeof h && h.magic == SnapHead{}.magic &&
-      sizeof h + h.p_len + h.f_len + h.s_len <= (size_t)n) {
-    pp = raw + sizeof h, pl = h.p_len;
-    fp = pp + pl, fl = h.f_len;
-    sp = fp + fl, sl = h.s_len;
-  } else if (n == (int)(sizeof(Progress) + sizeof(Friends) + sizeof(Settings))) {
-    // Запись прошивки до заголовка: части подряд.
-    pp = raw, pl = sizeof(Progress);
-    fp = pp + pl, fl = sizeof(Friends);
-    sp = fp + fl, sl = sizeof(Settings);
-  }
-  if (pp) {
-    p_ok = progress.load(pp, (uint32_t)pl);
-    f_ok = friends.load(fp, (uint32_t)fl);
-    // Настройки: короче нынешних — новые поля остаются заводскими, длиннее — лишнее отбрасывается.
-    Settings st;
-    memcpy(&st, sp, sl < sizeof st ? sl : sizeof st);
-    s_ok = settings_ok(st);
-    if (s_ok) cfg = st;
-  } else if (n < 0) {
+  const SnapLoaded got = snapshot_load(raw, n, &progress, &friends, &cfg);
+  bool p_ok = got.progress, f_ok = got.friends, s_ok = got.settings;
+  if (!got.found && n < 0) {
     // Журнала ещё нет: записи прошлой прошивки в файлах LittleFS.
     uint8_t blob[sizeof(Progress)];
     const int n = storage::legacy_load("progress", blob, sizeof blob);
@@ -366,7 +321,21 @@ bool start_oled() {
   nrf_gpio_cfg_default(PIN_WIRE1_SCL);
   digitalWrite(board::kDispEn, HIGH);
   delay(40);  // ключ включается плавно (C11), модулю нужно время на старт
-  hal::i2c_recover(PIN_WIRE1_SDA, PIN_WIRE1_SCL);
+  // Шина экрана зажата: SCL в нуле (замыкание, неисправный модуль), SCL и SDA замкнуты между
+  // собой (соседние выводы J2) или SDA так и держит зависший контроллер. Обмен по такой шине в
+  // ядре ждёт без срока либо не доходит до экрана, а сторожевой таймер перезагружал бы брелок
+  // по кругу — без консоли, зарядки и выключения кнопкой. Её не трогаем: экрана нет, модуль
+  // обесточен, повтор с перезапуском питания — в loop, всё реже.
+  if (!hal::i2c_recover(PIN_WIRE1_SDA, PIN_WIRE1_SCL)) {
+    nrf_gpio_cfg_default(PIN_WIRE1_SDA);
+    nrf_gpio_cfg_default(PIN_WIRE1_SCL);
+    digitalWrite(board::kDispEn, LOW);
+    if (!oled_bus_bad) out_line("Шина экрана зажата: SDA или SCL в нуле или замкнуты между собой");
+    oled_bus_bad = true;
+    have_oled = oled_full = false;
+    return false;
+  }
+  oled_bus_bad = false;
   Wire1.begin();
   Wire1.setClock(400000);
   hal::i2c_390k(1);
@@ -456,7 +425,12 @@ void advance_date() {
 
 void tick_clock(uint32_t now) {
   const uint16_t m = (uint16_t)clock_minutes();
-  bh.set_clock(m);
+  // Движку — минуты текущих суток: по часам, если они заданы, иначе по счёту работы (по ним
+  // он ведёт лимит кормления). Ночь, недосып и пасхалки по времени — только по заданным часам:
+  // после выключения часы потеряны, и «ночь» по старым минутам шла бы днём — тусклый экран,
+  // эфир не слушается, лицо засыпает. В кармане и в темноте брелок и так гаснет по свету.
+  bh.set_clock_known(cfg.clock_known != 0);
+  bh.set_clock(day_minutes());
   // Новые сутки: в полночь, если часы заданы, иначе каждые 24 часа работы.
   bool new_day = false;
   if (cfg.clock_known) {
@@ -574,9 +548,12 @@ void poll_environment(uint32_t now) {
     for (int i = 0; i < n; ++i) event(ev[i], now);
   }
   float db;
-  // Своя пищалка — не звук вокруг: пока она звучит и 150 мс после, уровень не учитывается.
+  // Своя пищалка и свой мотор — не звук вокруг: пока они работают и 150 мс после, уровень не
+  // учитывается.
   if (voice.busy(now)) voice_end = now;
-  if (hal::mic_take(&db) && !voice.busy(now) && now - voice_end >= 150) {
+  if (hal::vibro_busy()) vib_end = now;
+  if (hal::mic_take(&db) && !voice.busy(now) && now - voice_end >= 150 && !hal::vibro_busy() &&
+      now - vib_end >= 150) {
     const int n = hearing.feed(db, now, ev);
     for (int i = 0; i < n; ++i) event(ev[i], now);
   }
@@ -589,9 +566,19 @@ void poll_environment(uint32_t now) {
 }
 
 // Заряд — только в разумной температуре: у MCP73832 нет входа термистора, а литиевая ячейка
-// на морозе от заряда портится. Температура — кристалла nRF, она близка к температуре внутри
-// брелока. Разрешено от 3 до 42 °C, запрещено ниже 1 или выше 45 °C (запас от дребезга у
-// порога). Проверка — сразу после подключения USB и дальше раз в 30 с.
+// на морозе от заряда портится. Температура — кристалла nRF: по документации она верна лишь
+// до ±5 °C, а на USB кристалл ещё и теплее ячейки (его греют зарядник и сам nRF). Поэтому у
+// холода запас большой: заряд разрешается с 10 °C и запрещается ниже 7 °C — так ячейку около
+// нуля не заряжает и датчик с худшей ошибкой (гарантию даст только термистор у ячейки, rev C).
+// У жары кристалл ошибается в безопасную сторону: разрешено до 42 °C, запрещено выше 45 °C.
+// Проверка — сразу после подключения USB и дальше раз в 30 с.
+constexpr float kChargeOnC = 10.0f, kChargeOffC = 7.0f, kChargeHotOnC = 42.0f, kChargeHotOffC = 45.0f;
+
+// Можно ли заряжать при температуре кристалла t: с запасом от дребезга у порогов.
+bool charge_temp_ok(bool allowed, float t) {
+  return allowed ? (t >= kChargeOffC && t <= kChargeHotOffC) : (t >= kChargeOnC && t <= kChargeHotOnC);
+}
+
 // true — заряд только что разрешён: статус зарядника ещё не установился.
 bool update_charge_gate(bool usb) {
   static uint32_t next = 0;
@@ -607,11 +594,11 @@ bool update_charge_gate(bool usb) {
   started = true;
   next = now + 30000;
   const float t = hal::temperature_c();
-  const bool ok = charge_allowed ? (t >= 1.0f && t <= 45.0f) : (t >= 3.0f && t <= 42.0f);
+  const bool ok = charge_temp_ok(charge_allowed, t);
   if (ok == charge_allowed) {
     if (!ok && !blocked) {
       blocked = true;
-      out("Заряд не идёт: %.0f °C, заряжается от 3 до 42 °C\n", t);
+      out("Заряд не идёт: %.0f °C, заряжается от %.0f до %.0f °C\n", t, kChargeOnC, kChargeHotOnC);
     }
     return false;
   }
@@ -619,12 +606,17 @@ bool update_charge_gate(bool usb) {
   hal::charge_enable(ok);
   if (!ok) {
     blocked = true;
-    out("Заряд остановлен: %.0f °C, заряжается от 3 до 42 °C\n", t);
+    out("Заряд остановлен: %.0f °C, заряжается от %.0f до %.0f °C\n", t, kChargeOnC, kChargeHotOnC);
   } else if (blocked) {
     blocked = false;
     out("Заряд снова разрешён (%.0f °C)\n", t);
   }
   return ok;
+}
+
+void set_battery_shown(int pct) {
+  battery_shown = pct;
+  bh.set_battery_percent(pct);
 }
 
 void poll_battery(uint32_t now) {
@@ -639,14 +631,17 @@ void poll_battery(uint32_t now) {
     save_all(now, true);
     hal::enter_bootloader();
   }
+  if (usb != usb_seen) hal::usb_crystal(usb);
+  const bool usb_prev = usb_seen;
   usb_seen = usb;
   const bool opened = update_charge_gate(usb);
   if (cfg.empty_off && usb) cfg.empty_off = 0;  // зарядили — снова обычное включение
   // Замер откладывается. Сразу после отключения USB система ~0.1 с питается через диод в
   // P-MOSFET, на 0.5 В ниже ячейки: замер показал бы почти пустую ячейку — ждём 1.5 с. После
   // разрешения заряда статус MCP73832 устанавливается не сразу, а «USB есть, не заряжается»
-  // после зарядки значило бы «зарядилась до конца» — ждём 2 с.
-  if (usb_was && !usb && !holding) holding = true, hold_until = now + 1500;
+  // после зарядки значило бы «зарядилась до конца» — ждём 2 с. Отключение видно по USB на
+  // прошлом проходе: кабель, выдернутый посреди ожидания после подключения, тоже ждёт 1.5 с.
+  if (usb_prev && !usb) holding = true, hold_until = now + 1500;
   if (opened) holding = true, hold_until = now + 2000;
   if (holding) {
     if (!time_reached(now, hold_until)) return;
@@ -656,9 +651,15 @@ void poll_battery(uint32_t now) {
   if (!time_reached(now, next_batt) && usb == usb_was) return;
   usb_was = usb;
   next_batt = now + 10000;
-  // Заряд запрещён по температуре: зарядник молчит, и это не «зарядился до конца».
+  // Заряд запрещён по температуре: зарядник молчит, и это не «зарядился до конца». Оценка
+  // заряда по времени стоит: перерыв — не зарядка (заряженное до него в ней остаётся).
   if (usb && !charge_allowed) {
-    bh.set_battery_percent(-1);
+    if (charge_pct0 >= 0 && !charged_full) {
+      const int est = charge_pct0 + (int)((now - charge_t0) / 60000u * 2u / 3u);
+      charge_pct0 = est > 99 ? 99 : est;
+      charge_t0 = now;
+    }
+    set_battery_shown(-1);
     return;
   }
   const bool chg = hal::charging();
@@ -684,7 +685,7 @@ void poll_battery(uint32_t now) {
       pct = -1;  // заряд неизвестен (или статус зарядника ещё не установился)
     }
   }
-  bh.set_battery_percent(pct);
+  set_battery_shown(pct);
   if (battery.empty() && !powering_off) {
     out_line("Ячейка почти пуста — выключаюсь");
     cfg.empty_off = 1;
@@ -864,7 +865,7 @@ void help() {
       "  e <событие>  событие для характера: e tap, e music …\n"
       "  x <сцена>    сцена: hack birthday visor bsod …\n"
       "  v [on|off]   печатать события датчиков\n"
-      "  off          выключиться; dfu — загрузчик для новой прошивки\n"
+      "  off          выключиться; dfu — загрузчик для новой прошивки; ver — версия прошивки\n"
       "  reset yes    начать рост заново");
 }
 
@@ -920,9 +921,11 @@ void command(char* s, uint32_t now) {
     }
     return;
   }
+  if (!strcmp(s, "ver")) return (void)out("Прошивка %s, плата rev B\n", FW_VERSION);
   if (!strcmp(s, "t") && !arg) {
+    if (!cfg.clock_known) return (void)out_line("Время не задано: t ЧЧ:ММ");
     const unsigned m = clock_minutes();
-    out("Время %02u:%02u%s\n", m / 60, m % 60, cfg.clock_known ? "" : " (не задано: t ЧЧ:ММ)");
+    out("Время %02u:%02u\n", m / 60, m % 60);
     return;
   }
   if (!strcmp(s, "t")) {
@@ -934,6 +937,8 @@ void command(char* s, uint32_t now) {
     cfg.clock_known = 1;
     clock_base_up = uptime;
     last_clock = cfg.clock_min;
+    bh.set_clock_known(true);  // ночь и пасхалки по часам — сразу
+    bh.set_clock(cfg.clock_min);
     out("Время %02d:%02d\n", hh, mm);
     return;
   }
@@ -1121,7 +1126,8 @@ void setup() {
   load_all();
   // Часов реального времени у платы нет: после выключения неизвестно, сколько прошло.
   const bool clock_lost = !hal::warm_reset() && (cfg.clock_known || cfg.year);
-  if (!hal::warm_reset()) cfg.clock_known = 0, cfg.year = 0, cfg.month = 0, cfg.day = 0;
+  if (!hal::warm_reset())
+    cfg.clock_known = 0, cfg.clock_min = Settings{}.clock_min, cfg.year = 0, cfg.month = 0, cfg.day = 0;
 
   uptime = uptime_now();
   const uint32_t now = (uint32_t)uptime;
@@ -1139,6 +1145,8 @@ void setup() {
   clock_base_up = uptime;
   day_t0 = uptime - (uint64_t)cfg.day_min * 60000u;  // сутки без часов продолжаются с прошлого раза
   last_clock = (uint16_t)clock_minutes();
+  bh.set_clock_known(cfg.clock_known != 0);
+  bh.set_clock(day_minutes());
   if (progress.days == 0) bh.new_day(now);
 
   // Выключились на пустой ячейке, и с тех пор не заряжали: кнопка показывает пустую батарею
@@ -1167,12 +1175,13 @@ void setup() {
   next_health = now + 10000;
   next_fix = now;
   usb_seen = hal::usb_present();
+  if (usb_seen) hal::usb_crystal(true);
   eng.play_scene(Scene::boot, now);
   voice.scene(Scene::boot, SceneParams{}, now);
   hal::watchdog_feed();
 
-  out("\nБрелок с эмоциями, плата rev B. Экран %s, акселерометр %s, свет %s\n", have_oled ? "есть" : "нет",
-                acc.ok() ? "есть" : "нет", als.ok() ? "есть" : "нет");
+  out("\nБрелок с эмоциями, плата rev B, прошивка %s. Экран %s, акселерометр %s, свет %s\n", FW_VERSION,
+      have_oled ? "есть" : "нет", acc.ok() ? "есть" : "нет", als.ok() ? "есть" : "нет");
   print_me();
   if (clock_lost) out_line("После выключения время и дата сброшены: задайте их командами t и date");
   if (!sensor_bus) out_line("Шина датчиков зажата: SDA или SCL в нуле");
@@ -1269,6 +1278,16 @@ void loop() {
     // Экран гаснет здесь, пока шина экрана работает: system_off выключает Wire1, и команда
     // экрану после него ждала бы в ядре без срока.
     screen_power(false, now);
+    // Кнопку, которой выключали, держат и после прощания и подключают USB — это всё ещё жест
+    // загрузчика: все 10 с от нажатия, как и на работающем брелоке. Часы и запись сохранены
+    // выше. USB, который был и до этого, — не жест: тогда выключение идёт на зарядке.
+    if (btn_down && !usb_seen) {
+      while (digitalRead(board::kButton) == LOW && (uint32_t)uptime_now() - btn_t0 < kDfuPressMs) {
+        hal::watchdog_feed();
+        if (hal::usb_present()) hal::enter_bootloader();
+        delay(10);
+      }
+    }
     // Выключение на USB и полный сон по очереди: пока ждали кнопку, USB могли подключить
     // (system_off тогда возвращается), а вернётся off_on_usb, только когда USB отключат.
     for (;;) {

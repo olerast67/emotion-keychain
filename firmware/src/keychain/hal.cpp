@@ -113,6 +113,27 @@ bool charging() {
 
 float temperature_c() { return readCPUTemperature(); }
 
+void usb_crystal(bool on) {
+  // USBD работает только от кварца 64 МГц. TinyUSB просит его при подключении, но не просит,
+  // если кварц в этот момент уже шёл (по запросу радио или микрофона), и тогда, когда тот
+  // запрос снят, USB остался бы на внутреннем генераторе. Запрос у SoftDevice один на всё
+  // приложение, и TinyUSB снимает его при отключении USB — здесь то же. Заодно температура
+  // для разрешения заряда (только на USB) меряется при кварце, как требует документация.
+  uint8_t sd = 0;
+  sd_softdevice_is_enabled(&sd);
+  if (!sd) return;
+  if (!on) {
+    sd_clock_hfclk_release();
+    return;
+  }
+  sd_clock_hfclk_request();
+  uint32_t running = 0;
+  for (int i = 0; i < 20 && !running; ++i) {  // кварц запускается за доли миллисекунды
+    sd_clock_hfclk_is_running(&running);
+    if (!running) delayMicroseconds(100);
+  }
+}
+
 void watchdog_start() {
   NRF_WDT->CONFIG = WDT_CONFIG_SLEEP_Run << WDT_CONFIG_SLEEP_Pos;  // считает и во сне; при отладке — пауза
   NRF_WDT->CRV = 8u * 32768u;
@@ -126,27 +147,49 @@ bool i2c_recover(uint8_t sda, uint8_t scl) {
   // Датчик, сброшенный посреди чтения, может держать SDA в нуле: шина зависла бы навсегда.
   // До девяти тактов SCL выпускают его, потом — стоп. Обе линии — открытым стоком, как на
   // шине I2C: «единицу» дают подтяжки, и ножка никогда не спорит с ведомым, держащим ноль.
+  // Ножка-выход читает не линию, а свой регистр (так в ядре), поэтому линию всегда читаем
+  // на второй ножке, которая сейчас вход.
   pinMode(sda, INPUT_PULLUP);
   pinMode(scl, INPUT_PULLUP);
   delayMicroseconds(10);
-  if (digitalRead(sda) == HIGH && digitalRead(scl) == HIGH) return true;
-  digitalWrite(scl, HIGH);
-  pinMode(scl, OUTPUT_S0D1);
-  for (int i = 0; i < 9 && digitalRead(sda) == LOW; ++i) {
-    digitalWrite(scl, LOW);
-    delayMicroseconds(5);
+  if (digitalRead(sda) == LOW || digitalRead(scl) == LOW) {
     digitalWrite(scl, HIGH);
+    pinMode(scl, OUTPUT_S0D1);
+    for (int i = 0; i < 9 && digitalRead(sda) == LOW; ++i) {
+      digitalWrite(scl, LOW);
+      delayMicroseconds(5);
+      digitalWrite(scl, HIGH);
+      delayMicroseconds(5);
+    }
+    digitalWrite(sda, LOW);
+    pinMode(sda, OUTPUT_S0D1);
     delayMicroseconds(5);
+    digitalWrite(sda, HIGH);  // стоп: SDA вверх при высоком SCL
+    delayMicroseconds(5);
+    pinMode(sda, INPUT_PULLUP);
+    pinMode(scl, INPUT_PULLUP);
+    delayMicroseconds(10);
   }
-  digitalWrite(sda, LOW);
-  pinMode(sda, OUTPUT_S0D1);
-  delayMicroseconds(5);
-  digitalWrite(sda, HIGH);  // стоп: SDA вверх при высоком SCL
-  delayMicroseconds(5);
-  pinMode(sda, INPUT_PULLUP);
-  pinMode(scl, INPUT_PULLUP);
-  delayMicroseconds(10);
-  const bool free = digitalRead(sda) == HIGH && digitalRead(scl) == HIGH;
+  bool free = digitalRead(sda) == HIGH && digitalRead(scl) == HIGH;
+  // Линии не замкнуты между собой: в покое перемычку SCL–SDA (соседние выводы разъёма) не
+  // видно, а TWIM с ней виснет без срока на первом нуле адреса — SDA тянет за собой и SCL.
+  // SDA вниз и вверх при высоком SCL — это старт и стоп, такт SCL при высокой SDA на свободной
+  // шине ведомые пропускают.
+  if (free) {
+    digitalWrite(sda, LOW);
+    pinMode(sda, OUTPUT_S0D1);
+    delayMicroseconds(5);
+    free = digitalRead(scl) == HIGH;
+    pinMode(sda, INPUT_PULLUP);
+    delayMicroseconds(10);
+    digitalWrite(scl, LOW);
+    pinMode(scl, OUTPUT_S0D1);
+    delayMicroseconds(5);
+    free = free && digitalRead(sda) == HIGH;
+    pinMode(scl, INPUT_PULLUP);
+    delayMicroseconds(10);
+    free = free && digitalRead(sda) == HIGH && digitalRead(scl) == HIGH;
+  }
   pinMode(sda, INPUT);
   pinMode(scl, INPUT);
   return free;
@@ -370,13 +413,17 @@ bool mic_begin() {
   PDM.setBufferSize((int)sizeof(mic_buf));
   mic_skip = 4;  // ~130 мс
   mic_fresh = false;
-  mic_running = PDM.begin(1, 16000) == 1;
-  // PDM.begin просит у SoftDevice кварц 64 МГц, а PDM.end его не отпускает: кварц (~0.25 мА)
-  // работал бы до выключения, в том числе в кармане. Для уровня в дБ хватает внутреннего
-  // генератора; радио SoftDevice включает кварц само, когда он ему нужен.
   uint8_t sd = 0;
   sd_softdevice_is_enabled(&sd);
-  if (sd) sd_clock_hfclk_release();
+  uint32_t was_running = 0;
+  if (sd) sd_clock_hfclk_is_running(&was_running);
+  mic_running = PDM.begin(1, 16000) == 1;
+  // PDM.begin просит у SoftDevice кварц 64 МГц, если он ещё не шёл, а PDM.end его не отпускает:
+  // кварц (~0.25 мА) работал бы до выключения, в том числе в кармане. Для уровня в дБ хватает
+  // внутреннего генератора; радио SoftDevice включает кварц само, когда он ему нужен. Запрос
+  // у SoftDevice один на всё приложение: снимаем его, только если его дал сам PDM.begin, — на
+  // USB кварц держит USBD (usb_crystal), и снять запрос значило бы оставить USB без кварца.
+  if (sd && !was_running && !usb_present()) sd_clock_hfclk_release();
   return mic_running;
 }
 

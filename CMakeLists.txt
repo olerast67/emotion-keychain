@@ -38,6 +38,12 @@ target_include_directories(storage_tests PRIVATE firmware/host firmware/src/keyc
 target_compile_options(storage_tests PRIVATE -Wall -Wextra)
 target_compile_definitions(storage_tests PRIVATE STORAGE_HOST_TEST)
 add_test(NAME storage_tests COMMAND storage_tests)
+# Разбор записи журнала прошивки брелока: заголовок длин частей и запись без него.
+add_executable(snapshot_tests firmware/host/snapshot_test.cpp firmware/src/keychain/snapshot.cpp)
+target_include_directories(snapshot_tests PRIVATE firmware/src/keychain)
+target_compile_options(snapshot_tests PRIVATE -Wall -Wextra)
+target_link_libraries(snapshot_tests PRIVATE face_engine)
+add_test(NAME snapshot_tests COMMAND snapshot_tests)
 
 # Плата rev B целиком на ПК: настоящая прошивка firmware/src/keychain, модели микросхем,
 # эфир между брелоками, батарея и сценарии (firmware/host/keychain). Флеш журнала
@@ -50,7 +56,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_executable(keychain_board
     firmware/host/keychain/board.cpp firmware/host/keychain/models.cpp
     firmware/src/keychain/hal.cpp firmware/src/keychain/radio.cpp firmware/src/keychain/sensors.cpp
-    firmware/src/keychain/storage.cpp firmware/src/ssd1306.cpp)
+    firmware/src/keychain/storage.cpp firmware/src/keychain/snapshot.cpp firmware/src/ssd1306.cpp)
   target_include_directories(keychain_board PRIVATE firmware/host/keychain firmware/src firmware/src/keychain)
   target_compile_options(keychain_board PRIVATE ${KC_SAN} -g -O1 -Wall)
   # Адрес буфера PWM пишется в 32-битный регистр: на ПК указатель шире.
