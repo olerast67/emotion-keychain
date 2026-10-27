@@ -17,8 +17,10 @@
   шайбы 4 мм       там же       под винтами
   дно 2 мм         −7.6 … −5.6  прозрачное, вырез под вилку USB-C
 
-Модуль экрана стоит на гладких проставках M2 × 5 (не резьбовых), всё стягивают
-четыре винта M2 × 20 с гайками на обороте.
+Это версия S (ячейка 402025). Версии M и L (502025, 602025) поднимают всё над рамкой
+ячейки на 1 и 2 мм: проставки M2 × 6 и × 7, рамка 6 мм или 4 + 3 мм (VARIANTS).
+Модуль экрана стоит на гладких проставках (не резьбовых), всё стягивают
+четыре винта M2 с гайками на обороте.
 """
 import json
 import math
@@ -47,20 +49,36 @@ TAB_NOTCH = 5.5   # полуширина выреза стенки под ушк
 USB_NOTCH = 6.6   # полуширина выреза под вилку USB-C (корпус вилки ~12.4 мм)
 BTN_Y = 25.4      # ось кнопки на правом торце
 
-# Листы: имя, толщина, z нижней грани, цвет и прозрачность для просмотра.
-SHEETS = {
-    "cover": {"t": 2.0, "z": 8.2, "name": "крышка", "color": "#dff3ff", "opacity": 0.28},
-    "washer_front": {"t": 2.0, "z": 6.2, "name": "шайбы 2 мм", "color": "#dff3ff", "opacity": 0.5},
-    "frame_top": {"t": 3.0, "z": 5.0, "name": "рамка 3 мм", "color": "#ff7a3d", "opacity": 0.55},
-    "frame_mid": {"t": 5.0, "z": 0.0, "name": "рамка 5 мм", "color": "#ff7a3d", "opacity": 0.55},
-    "frame_back": {"t": 4.0, "z": -5.6, "name": "рамка 4 мм", "color": "#ff7a3d", "opacity": 0.55},
-    "washer_back": {"t": 4.0, "z": -5.6, "name": "шайбы 4 мм", "color": "#ff7a3d", "opacity": 0.7},
-    "button": {"t": 4.0, "z": -5.6, "name": "толкатель", "color": "#ffd23d", "opacity": 0.9},
-    "bottom": {"t": 2.0, "z": -7.6, "name": "дно", "color": "#dff3ff", "opacity": 0.28},
+# Три версии под три ячейки 20 × 25 мм: плата, прошивка и раскрой платы те же, меняются
+# только проставки под экраном и рамка вокруг ячейки. Под модулем экрана свободно примерно
+# проставка − 1.1 мм: ячейка с плёнкой должна быть не толще.
+VARIANTS = {
+    "s": {"cell": "402025", "mah": 150, "standoff": 5.0, "mid": [5.0], "screw": 20},
+    "m": {"cell": "502025", "mah": 200, "standoff": 6.0, "mid": [6.0], "screw": 22},
+    "l": {"cell": "602025", "mah": 250, "standoff": 7.0, "mid": [4.0, 3.0], "screw": 22},
 }
-# Из какого листа акрила режется деталь (толщина).
-MATERIAL = {"cover": 2.0, "washer_front": 2.0, "bottom": 2.0, "frame_top": 3.0, "frame_mid": 5.0,
-            "frame_back": 4.0, "washer_back": 4.0, "button": 4.0}
+
+
+def sheets_for(v):
+    """Листы: имя, толщина, z нижней грани, цвет и прозрачность для просмотра; и из какого
+    листа акрила режется каждая деталь."""
+    h = VARIANTS[v]["standoff"]
+    sheets = {
+        "cover": {"t": 2.0, "z": h + 3.2, "name": "крышка", "color": "#dff3ff", "opacity": 0.28},
+        "washer_front": {"t": 2.0, "z": h + 1.2, "name": "шайбы 2 мм", "color": "#dff3ff", "opacity": 0.5},
+        "frame_top": {"t": 3.0, "z": h, "name": "рамка 3 мм", "color": "#ff7a3d", "opacity": 0.55},
+        "frame_back": {"t": 4.0, "z": -5.6, "name": "рамка 4 мм", "color": "#ff7a3d", "opacity": 0.55},
+        "washer_back": {"t": 4.0, "z": -5.6, "name": "шайбы 4 мм", "color": "#ff7a3d", "opacity": 0.7},
+        "button": {"t": 4.0, "z": -5.6, "name": "толкатель", "color": "#ffd23d", "opacity": 0.9},
+        "bottom": {"t": 2.0, "z": -7.6, "name": "дно", "color": "#dff3ff", "opacity": 0.28},
+    }
+    # Рамка вокруг ячейки — одним листом или стопкой из двух.
+    z = 0.0
+    for i, t in enumerate(VARIANTS[v]["mid"]):
+        key = "frame_mid" if i == 0 else f"frame_mid{i + 1}"
+        sheets[key] = {"t": t, "z": z, "name": f"рамка {t:g} мм", "color": "#ff7a3d", "opacity": 0.55}
+        z += t
+    return sheets
 
 
 def MM(v):
@@ -170,6 +188,7 @@ def build():
         "cover": {"shape": outer, "circles": holes + [(mic[0], mic[1], MIC_D)]},
         "frame_top": {"shape": minus(outer, f_cut), "circles": []},
         "frame_mid": {"shape": minus(outer, f_cut), "circles": []},
+        "frame_mid2": {"shape": minus(outer, f_cut), "circles": []},
         "frame_back": {"shape": minus(outer, b_cut), "circles": []},
         "bottom": {"shape": minus(outer, rect(W / 2 - USB_NOTCH, H + 0.3, W / 2 + USB_NOTCH, H + WALL + 1)),
                    "circles": holes},
@@ -224,21 +243,28 @@ def write_dxf(path, items):
         f.write("\n".join(lines) + "\n")
 
 
-def main():
-    os.makedirs(OUT, exist_ok=True)
-    parts = build()
+def write_variant(v, parts):
+    out = OUT if v == "s" else os.path.join(OUT, v)
+    os.makedirs(out, exist_ok=True)
+    sheets_def = sheets_for(v)
     model = {"board": {"w": W, "h": H, "t": 1.6}, "layers": []}
     sheets = {}
     for key, p in parts.items():
+        if key not in sheets_def:
+            continue
         rings = outlines(p["shape"])
-        sheet = SHEETS[key]
+        sheet = sheets_def[key]
         model["layers"].append({"id": key, "name": sheet["name"], "z": sheet["z"], "t": sheet["t"],
                                 "color": sheet["color"], "opacity": sheet["opacity"],
                                 "shapes": rings, "circles": p["circles"]})
-        sheets.setdefault(MATERIAL[key], []).append((key, rings, p["circles"]))
-    with open(os.path.join(OUT, "case-model.json"), "w") as f:
+        sheets.setdefault(sheet["t"], []).append((key, rings, p["circles"]))
+    with open(os.path.join(out, "case-model.json"), "w") as f:
         json.dump(model, f, ensure_ascii=False)
 
+    cfg = VARIANTS[v]
+    top = max(sh["z"] + sh["t"] for sh in sheets_def.values())
+    print(f"Версия {v.upper()}: ячейка {cfg['cell']} (~{cfg['mah']} мА·ч), проставки M2 × {cfg['standoff']:g}, "
+          f"винты M2 × {cfg['screw']}, толщина {top + 7.6:.1f} мм → {os.path.relpath(out, HERE)}/")
     # Листы: детали одной толщины в ряд, с полями 3 мм.
     for t, items in sorted(sheets.items()):
         placed, x = [], 3.0
@@ -251,10 +277,16 @@ def main():
             x += x1 - x0 + 3.0
             hmax = max(hmax, y1 - y0)
         name = f"case-acrylic-{t:g}mm".replace(".", "_")
-        write_svg(os.path.join(OUT, name + ".svg"), placed, x, hmax + 6.0,
-                  f"Корпус брелока: акрил {t:g} мм")
-        write_dxf(os.path.join(OUT, name + ".dxf"), placed)
-        print(f"{name}: {', '.join(SHEETS[k]['name'] for k, _, _ in items)} — лист {x:.0f} × {hmax + 6:.0f} мм")
+        write_svg(os.path.join(out, name + ".svg"), placed, x, hmax + 6.0,
+                  f"Корпус брелока {v.upper()}: акрил {t:g} мм")
+        write_dxf(os.path.join(out, name + ".dxf"), placed)
+        print(f"  {name}: {', '.join(sheets_def[k]['name'] for k, _, _ in items)} — лист {x:.0f} × {hmax + 6:.0f} мм")
+
+
+def main():
+    parts = build()
+    for v in VARIANTS:
+        write_variant(v, parts)
 
 
 if __name__ == "__main__":
