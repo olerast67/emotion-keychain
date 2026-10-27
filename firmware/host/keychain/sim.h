@@ -17,7 +17,9 @@
 namespace sim {
 
 // Чем кончилась работа прошивки.
-enum class ResetKind { Soft = 1, SystemOff = 2, Dfu = 3, Watchdog = 4, Hang = 5 };
+// SystemOff — сон с пробуждением от кнопки (systemOff ядра), SystemOffUsb — без кнопки:
+// sd_power_system_off или SYSTEMOFF напрямую, будит только VBUS.
+enum class ResetKind { Soft = 1, SystemOff = 2, Dfu = 3, Watchdog = 4, Hang = 5, SystemOffUsb = 6 };
 struct Reset {
   ResetKind kind;
 };
@@ -68,6 +70,8 @@ struct Status {
   bool hfclk_requested = false;
   bool pdm_running = false;
   uint16_t tone_hz = 0;
+  float vib_duty = 0;    // доля периода, когда ключ мотора открыт (по биту 15 полярности PWM)
+  float vib_peak_v = 0;  // наибольшее среднее напряжение на моторе с прошлого отчёта
   bool wdt_started = false;
   uint64_t wdt_fed_us = 0;
   uint32_t wdt_timeout_us = 0;

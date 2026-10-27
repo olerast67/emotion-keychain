@@ -96,8 +96,8 @@ double state_ua() {
   if (sim::status.hfclk_requested) ua += 250;
   if (Bluefruit.Scanner.isRunning()) ua += 5500;
   if (sim::status.tone_hz) ua += 4000;
-  // Мотор: ШИМ PWM2 со скважностью из последовательности; ток мотора ~60 мА на 3 В.
-  if (NRF_PWM2->ENABLE.v && NRF_PWM2->COUNTERTOP.v) ua += 60000;
+  // Мотор: ~60 мА на 3 В, ток — по среднему напряжению на нём (скважность × VSYS).
+  if (sim::status.vib_duty > 0) ua += 60000.0 * sim::status.vib_duty * (sim::world.vbus ? 4.7 : sim::world.cell_v) / 3.0;
   return ua;
 }
 
@@ -150,16 +150,17 @@ void report() {
   char b[4];
   for (uint8_t c : adv.data) snprintf(b, sizeof b, "%02x", c), hex += b;
   printf("ST t=%u adv=%d iv=%u scan=%d disp=%d vis=%d con=%u lit=%d tone=%u vib=%d mic=%d als=%d acc=%d hf=%d "
-         "q=%.0f loops=%u mism=%u dark=%u i2c=%u ffail=%u ovr=%u frames=%u xp=%u fr=%u steps=%u scanms=%.0f adv_ev=%.1f "
+         "vibv=%.2f q=%.0f loops=%u mism=%u dark=%u i2c=%u ffail=%u ovr=%u frames=%u xp=%u fr=%u steps=%u scanms=%.0f adv_ev=%.1f "
          "uicr=%x data=%s\n",
          sim::now_ms(), adv.running ? 1 : 0, adv.interval, Bluefruit.Scanner.isRunning() ? 1 : 0,
          sim::oled_powered() ? 1 : 0, sim::oled_dev.visible() ? 1 : 0, sim::oled_dev.contrast, sim::oled_dev.lit(),
          sim::status.tone_hz, NRF_PWM2->ENABLE.v ? 1 : 0, sim::status.pdm_running ? 1 : 0, sim::ltr_active() ? 1 : 0,
-         sim::lis_active() ? 1 : 0, sim::status.hfclk_requested ? 1 : 0, charge_uams, sim::status.loops, mismatches,
+         sim::lis_active() ? 1 : 0, sim::status.hfclk_requested ? 1 : 0, sim::status.vib_peak_v, charge_uams, sim::status.loops, mismatches,
          dark_errors, sim::status.i2c_errors, sim::flash_failure_count(), sim::lis_overruns(), frame_changes,
          (unsigned)progress.xp, (unsigned)friends.count(), (unsigned)progress.steps, scan_ms, adv_events,
          sim::status.uicr_regout0, hex.empty() ? "-" : hex.c_str());
   charge_uams = 0;
+  sim::status.vib_peak_v = sim::status.vib_duty * (sim::world.vbus ? 4.7f : sim::world.cell_v);
   save_uicr();
 }
 
@@ -301,6 +302,7 @@ int main(int argc, char** argv) {
     account();
     const char* k = r.kind == sim::ResetKind::Soft        ? "reset"
                     : r.kind == sim::ResetKind::SystemOff ? "off"
+                    : r.kind == sim::ResetKind::SystemOffUsb ? "off_vbus"
                     : r.kind == sim::ResetKind::Dfu       ? "dfu"
                                                           : "watchdog";
     printf("EV %s\n", k);

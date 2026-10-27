@@ -205,12 +205,14 @@ void buzzer(uint16_t hz, bool soft) {
   const uint32_t top = 4000000u / hz;
   NRF_PWM3->COUNTERTOP = top > 32767u ? 32767u : top < 3u ? 3u : top;  // допустимо 3…32767
   const uint16_t half = (uint16_t)(NRF_PWM3->COUNTERTOP / 2);
+  // Бит 15 значения — полярность: 1 — с начала периода высокий до сравнения, потом низкий
+  // (так пишет analogWrite ядра), 0 — наоборот.
   if (soft) {
-    seq[0] = (uint16_t)(NRF_PWM3->COUNTERTOP / 8);  // узкий импульс на одном выводе
-    seq[1] = 0;                                     // второй вывод в нуле
+    seq[0] = (uint16_t)(NRF_PWM3->COUNTERTOP / 8) | 0x8000;  // узкий импульс на одном выводе
+    seq[1] = 0x8000;                                         // второй вывод всё время в нуле
   } else {
-    seq[0] = half;           // A: бит 15 = 0 — сначала высокий, спад на половине периода
-    seq[1] = half | 0x8000;  // B: бит 15 = 1 — сначала низкий: противофаза
+    seq[0] = half | 0x8000;  // A: сначала высокий, спад на половине периода
+    seq[1] = half;           // B: сначала низкий — противофаза
   }
   seq[2] = seq[3] = 0;
   NRF_PWM3->ENABLE = 1;
@@ -238,7 +240,7 @@ void vib_on(bool on) {
   const float v = vsys_volts();
   float duty = v > 3.0f ? 3.0f / v : 1.0f;
   if (duty < 0.5f) duty = 0.5f;
-  vib_seq[0] = (uint16_t)(kVibTop * duty);  // бит 15 = 0: сначала высокий
+  vib_seq[0] = (uint16_t)(kVibTop * duty) | 0x8000;  // бит 15 = 1: высокий (ключ открыт) duty периода
   vib_seq[1] = vib_seq[2] = vib_seq[3] = 0;
   NRF_PWM2->ENABLE = 1;
   NRF_PWM2->TASKS_SEQSTART[0] = 1;
@@ -289,6 +291,11 @@ void vibro_update(uint32_t now) {
 }
 
 bool vibro_busy() { return vib_p != nullptr; }
+
+void vibro_stop() {
+  vib_p = nullptr;
+  vib_on(false);
+}
 
 // ---------------------------------------------------------------- микрофон
 

@@ -15,13 +15,13 @@ namespace face {
 // Пакет — данные производителя (Manufacturer Specific Data), 15 байт.
 constexpr int kAdvLen = 15;
 constexpr uint16_t kAdvCompany = 0xFFFF;  // прототип; для продаж — свой ID из Bluetooth SIG
-constexpr uint8_t kAdvVersion = 1;
+constexpr uint8_t kAdvVersion = 2;  // 2: ответ «принял» и отсчёт 4 с — со старой прошивкой встреч нет
 
 // Флаги пакета.
 constexpr uint8_t kAdvDuelReady = 1u << 0;   // хозяин разрешил дуэли
 constexpr uint8_t kAdvCyber = 1u << 1;       // киберпанк-тема
 constexpr uint8_t kAdvLegendary = 1u << 2;   // легендарный брелок
-constexpr uint8_t kAdvDuelCalled = 1u << 3;  // объявленная сцена — дуэль, а не встреча
+constexpr uint8_t kAdvDuelCalled = 1u << 3;  // сцена — дуэль: у объявившего — объявил, у ответившего — принял
 constexpr uint8_t kAdvAck = 1u << 4;         // «принял объявление»: ответ того, с кем сцена
 
 struct Advert {
@@ -78,8 +78,9 @@ class Encounters {
 
   void init(uint32_t my_hash, const Config& cfg);
   void init(uint32_t my_hash) { init(my_hash, Config{}); }
-  // Знакомые брелоки (из таблицы друзей) не тратят общий лимит встреч: иначе поток
-  // поддельных «новых» соседей выбирал бы его, и друг ждал бы до 15 минут.
+  // Друзья не тратят общий лимит встреч: иначе поток поддельных «новых» соседей выбирал бы
+  // его, и друг ждал бы до 15 минут. Прошивка считает другом того, с кем виделись в разные
+  // дни: позывной, выдуманный сегодня, в друзья не попадает.
   using KnownFn = bool (*)(uint32_t hash, const void* ctx);
   void set_known(KnownFn fn, const void* ctx) { known_ = fn, known_ctx_ = ctx; }
   // Что рассылать о себе: уровень, флаги (кроме kAdvDuelCalled) и настроение.
@@ -115,10 +116,14 @@ class Encounters {
   bool dueled_today(uint32_t hash) const;
   void mark_dueled(uint32_t hash);
   bool may_duel(uint32_t hash) const;
+  // Перерыв с соседом: dur мс от at. Хранится начало, а не конец, — сравнение «прошло ли
+  // dur» верно при любом переполнении часов.
   struct Cool {
-    uint32_t hash = 0, until = 0;  // с этим соседом до until — перерыв после встречи
+    uint32_t hash = 0, at = 0, dur = 0;
+    uint8_t fails = 0;  // сколько объявлений подряд сосед не подтвердил
   };
   static constexpr int kCools = 16;
+  static constexpr uint32_t kRetryMs = 60000;  // после неподтверждённого объявления: 1, 2, 4, 8 мин
   bool cooling(uint32_t hash, uint32_t now_ms) const;
   bool rate_ok(uint32_t hash, uint32_t now_ms) const;
   KnownFn known_ = nullptr;
@@ -126,10 +131,11 @@ class Encounters {
   static constexpr int kBurst = 6;
   uint32_t met_at_[kBurst] = {};
   int met_n_ = 0;
-  void cool(uint32_t hash, uint32_t now_ms);
+  Cool& cool(uint32_t hash, uint32_t now_ms, uint32_t dur);
 
   Peer* find(uint32_t hash);
   Peer* slot(uint32_t hash, uint32_t now_ms);
+  Peer* hear(const Advert& a, int rssi, uint32_t now_ms);  // обычный пакет соседа вблизи
   void announce(Peer& p, uint32_t now_ms);
 
   Config cfg_;

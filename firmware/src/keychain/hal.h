@@ -43,6 +43,7 @@ void vibro_begin();
 void vibrate(const uint16_t* pattern, int n);
 void vibro_update(uint32_t now_ms);
 bool vibro_busy();
+void vibro_stop();
 
 // Микрофон PDM: уровень звука в дБ относительно полной шкалы по блокам ~32 мс.
 bool mic_begin();

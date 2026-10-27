@@ -2094,14 +2094,116 @@ static void test_encounter_ack() {
   bool any = false;
   for (uint32_t t = 600; t < 6000; t += 100) any |= a.poll(t, &m);
   CHECK(!any && !a.pending(), "сосед не ответил — сцены нет и объявление снято");
-  // Тот же сосед ответил «принял» — сцена есть.
+  // Повтор — не сразу: сосед мог сыграть сцену, не услышав нас, и теперь в перерыве.
   a.on_advert(b, -50, 7000);
   a.on_advert(b, -50, 7500);
+  CHECK(!a.pending(), "сразу после отмены — без нового объявления");
+  // Через минуту сосед ответил «принял» — сцена есть.
+  a.on_advert(b, -50, 66000);
+  a.on_advert(b, -50, 66500);
+  CHECK(a.pending(), "через минуту — объявил снова");
   Advert ack = b;
   ack.flags = kAdvAck, ack.to = 0x100u, ack.countdown = 30;
-  a.on_advert(ack, -50, 8000);
-  for (uint32_t t = 7500; t < 13000; t += 100) any |= a.poll(t, &m);
+  a.on_advert(ack, -50, 67000);
+  for (uint32_t t = 66500; t < 72000; t += 100) any |= a.poll(t, &m);
   CHECK(any && m.peer == 0x900u, "ответил — сцена начинается");
+
+  // Повторы без ответа — всё реже: 1, 2, 4 минуты.
+  Encounters c;
+  c.init(0x100u);
+  c.set_self(1, 0, 128);
+  Advert d;
+  d.hash = 0x700u;
+  uint32_t t = 0, announced[4] = {};
+  int n = 0;
+  for (; t < 900000 && n < 4; t += 500) {
+    c.on_advert(d, -50, t);
+    if (c.pending() && (!n || t - announced[n - 1] > 5000)) announced[n++] = t;
+    c.poll(t, &m);
+  }
+  CHECK(n == 4, "объявлений: %d", n);
+  CHECK(n == 4 && announced[1] - announced[0] >= 60000 && announced[2] - announced[1] >= 120000 &&
+            announced[3] - announced[2] >= 240000,
+        "повторы реже: %u, %u, %u мс", announced[1] - announced[0], announced[2] - announced[1],
+        announced[3] - announced[2]);
+
+  // Ответ «принял» не считается объявлением: третий брелок с теми же младшими битами
+  // позывного иначе сыграл бы сцену один.
+  Encounters e;
+  e.init(0x00010100u);
+  e.set_self(1, 0, 128);
+  Advert third;
+  third.hash = 0x50u;  // меньше: путь второго брелока
+  e.on_advert(third, -50, 0);
+  e.on_advert(third, -50, 500);
+  Advert third_ack = third;
+  third_ack.flags = kAdvAck, third_ack.to = 0x0100u, third_ack.countdown = 30;
+  e.on_advert(third_ack, -50, 1000);
+  CHECK(!e.pending(), "чужой ответ «принял» — не объявление");
+
+  // Дуэль, принятая как встреча (у второго дуэли выключены), у обоих становится встречей.
+  Encounters f;
+  f.init(0x100u);
+  f.set_self(1, kAdvDuelReady, 128);
+  Advert g;
+  g.hash = 0x900u, g.flags = kAdvDuelReady;
+  f.on_advert(g, -50, 0);
+  f.on_advert(g, -50, 500);
+  CHECK(f.pending() && (f.advert(600).flags & kAdvDuelCalled), "объявил дуэль");
+  Advert g_ack = g;
+  g_ack.flags = kAdvAck, g_ack.to = 0x100u, g_ack.countdown = 30;  // принял без флага дуэли
+  f.on_advert(g_ack, -50, 1000);
+  any = false;
+  for (uint32_t u = 1000; u < 6000; u += 100) any |= f.poll(u, &m);
+  CHECK(any && m.kind == Rendezvous::Greet && !m.won, "второй принял встречу — у объявившего тоже встреча");
+  // И наоборот: принял дуэль — дуэль.
+  Encounters h;
+  h.init(0x100u);
+  h.set_self(1, kAdvDuelReady, 128);
+  Advert k;
+  k.hash = 0x901u, k.flags = kAdvDuelReady;
+  h.on_advert(k, -50, 0);
+  h.on_advert(k, -50, 500);
+  Advert k_ack = k;
+  k_ack.flags = kAdvAck | kAdvDuelCalled, k_ack.to = 0x100u, k_ack.countdown = 30;
+  h.on_advert(k_ack, -50, 1000);
+  any = false;
+  for (uint32_t u = 1000; u < 6000; u += 100) any |= h.poll(u, &m);
+  CHECK(any && m.kind == Rendezvous::Duel, "второй принял дуэль — дуэль");
+  // Второй в ответе показывает, что принял: встречу или дуэль.
+  Encounters fol;
+  fol.init(0x900u);
+  fol.set_self(1, 0, 128);  // дуэли выключены
+  Advert an;
+  an.hash = 0x100u, an.flags = kAdvDuelReady;
+  fol.on_advert(an, -50, 0);
+  fol.on_advert(an, -50, 500);
+  Advert call = an;
+  call.flags = kAdvDuelReady | kAdvDuelCalled, call.to = 0x900u, call.countdown = 30;
+  fol.on_advert(call, -50, 1000);
+  CHECK(fol.pending() && (fol.advert(1100).flags & kAdvAck) && !(fol.advert(1100).flags & kAdvDuelCalled),
+        "второй с выключенными дуэлями отвечает «принял встречу»");
+}
+
+static void test_encounter_cooldown_wrap() {
+  // Перерыв с соседом не «оживает», когда часы уходят за 2^31 мс (24.8 суток без сброса).
+  Encounters a, b;
+  a.init(0x100u), b.init(0x900u);
+  a.set_self(1, 0, 128), b.set_self(1, 0, 128);
+  uint32_t t = 1000, ta = 0, tb = 0;
+  Meeting ma, mb;
+  encounter_run(a, b, t, 20000, -60, &ma, &mb, &ta, &tb);
+  CHECK(ma.kind == Rendezvous::Greet && mb.kind == Rendezvous::Greet, "первая встреча");
+  // Брелоки лежат порознь 24.9 суток: каждый живёт своей жизнью, poll идёт.
+  for (uint32_t u = t; u < t + 2151360000u; u += 60000) {
+    Meeting m;
+    a.poll(u, &m), b.poll(u, &m);
+  }
+  t += 2151360000u;
+  ma = mb = Meeting{};
+  encounter_run(a, b, t, 20000, -60, &ma, &mb, &ta, &tb);
+  CHECK(ma.kind == Rendezvous::Greet && mb.kind == Rendezvous::Greet, "через 24.9 суток встреча снова есть (%d, %d)",
+        (int)ma.kind, (int)mb.kind);
 }
 
 static void test_encounter_rate_limit() {
@@ -2477,6 +2579,7 @@ int main() {
   test_encounter_rewards_capped();
   test_encounter_rate_limit();
   test_encounter_ack();
+  test_encounter_cooldown_wrap();
   test_encounter_sync();
   test_motion_sensing();
   test_hearing();

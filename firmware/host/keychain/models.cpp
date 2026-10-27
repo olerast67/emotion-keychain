@@ -389,8 +389,25 @@ void pwm_update(uint32_t) {
 void pwm_stop(uint32_t v) {
   if (v) status.tone_hz = 0;
 }
+// Мотор: значение последовательности PWM2. Указатель прошивка пишет 32-битным, как на nRF;
+// старшие биты на ПК — те же, что у любой статической переменной этой программы.
+void vib_update(uint32_t) {
+  status.vib_duty = 0;
+  if (!pwm2.ENABLE.v || !pwm2.COUNTERTOP.v || !pwm2.SEQ[0].PTR.v) return;
+  const auto* seq = (const uint16_t*)(((uintptr_t)&pwm2 & ~(uintptr_t)0xFFFFFFFFu) | pwm2.SEQ[0].PTR.v);
+  const uint16_t v = seq[0];
+  const uint32_t top = pwm2.COUNTERTOP.v, cmp = (v & 0x7FFFu) < top ? (v & 0x7FFFu) : top;
+  // Бит 15 = 1: высокий с начала периода до сравнения; 0 — низкий до сравнения, потом высокий.
+  const float f = (float)cmp / (float)top;
+  status.vib_duty = (v & 0x8000u) ? f : 1.0f - f;
+  const float vsys = world.vbus ? 4.7f : world.cell_v;
+  if (status.vib_duty * vsys > status.vib_peak_v) status.vib_peak_v = status.vib_duty * vsys;
+}
+void vib_stop(uint32_t v) {
+  if (v) status.vib_duty = 0;
+}
 void power_off_reg(uint32_t v) {
-  if (v) throw Reset{ResetKind::SystemOff};
+  if (v) throw Reset{ResetKind::SystemOffUsb};
 }
 struct RegHooks {
   RegHooks() {
@@ -400,6 +417,9 @@ struct RegHooks {
     pwm3.TASKS_SEQSTART[0].on_write = pwm_update;
     pwm3.ENABLE.on_write = pwm_update;
     pwm3.TASKS_STOP.on_write = pwm_stop;
+    pwm2.TASKS_SEQSTART[0].on_write = vib_update;
+    pwm2.ENABLE.on_write = vib_update;
+    pwm2.TASKS_STOP.on_write = vib_stop;
   }
 } reg_hooks;
 }  // namespace
@@ -513,7 +533,7 @@ uint32_t sd_clock_hfclk_request() {
   status.hfclk_requested = true;
   return NRF_SUCCESS;
 }
-uint32_t sd_power_system_off() { throw Reset{ResetKind::SystemOff}; }
+uint32_t sd_power_system_off() { throw Reset{ResetKind::SystemOffUsb}; }
 uint32_t sd_clock_hfclk_release() {
   status.hfclk_requested = false;
   return NRF_SUCCESS;

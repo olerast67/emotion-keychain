@@ -82,6 +82,7 @@ struct Board {
   FILE* from = nullptr;
   uint64_t boot_ms = 0;  // общее время последнего сброса
   bool alive = false, off = false, dead = false;
+  bool button_wakes = true;  // сон с пробуждением от кнопки; без неё будит только USB
   double x = 0;  // положение, м
   // Мир
   bool vbus = false, button = false, charging = false, vbus_was = false;
@@ -98,6 +99,7 @@ struct Board {
   uint64_t next_adv_ms = 0;
   int boots = 0;
   uint64_t t0_override = 0;
+  double vib_max = 0;  // наибольшее напряжение на моторе, В
 
   long num(const char* k) const {
     auto it = st.find(k);
@@ -180,7 +182,9 @@ void handle_event(Board& b, const std::string& ev) {
   } else if (ev == "watchdog") {
     spawn(b, kDog);
   } else if (ev == "off") {
-    b.off = true;
+    b.off = true, b.button_wakes = true;
+  } else if (ev == "off_vbus") {
+    b.off = true, b.button_wakes = false;
   } else if (ev == "dfu") {
     b.off = true;  // загрузчик: ждёт новую прошивку
   } else {
@@ -211,6 +215,7 @@ bool talk(Board& b, uint64_t local) {
       }
       const double q = b.dnum("q");
       b.uams_total += q, b.uams_window += q;
+      if (b.dnum("vibv") > b.vib_max) b.vib_max = b.dnum("vibv");
     }
   }
   if (feof(b.from) && ev.empty()) ev = "crash";
@@ -272,7 +277,7 @@ void step(uint64_t dt) {
       talk(*b, b->t0_override + t1 - b->boot_ms);
     } else if ((b->off || b->dead) && b->pid < 0) {
       // Выключена: просыпается от кнопки или подключения USB.
-      if (b->button) {
+      if (b->button && (b->dead || b->button_wakes)) {
         spawn(*b, b->dead ? 0 : kOff);
       } else if (b->vbus && b->dead) {
         spawn(*b, 0);
@@ -427,7 +432,7 @@ void sc_first_boot() {
   CHECK(said(a, "Экран есть, акселерометр есть, свет есть", 0), "экран, акселерометр и датчик света отвечают");
   CHECK(a.num("vis") == 1 && a.num("lit") > 200, "на экране лицо: горит %ld пикселей", a.num("lit"));
   CHECK(a.num("adv") == 1 && a.num("iv") == 1600, "реклама в эфире раз в 1 с");
-  CHECK(a.hex("data").find("ffff4b4301") != std::string::npos, "пакет: компания 0xFFFF, метка KC, версия 1");
+  CHECK(a.hex("data").find("ffff4b4302") != std::string::npos, "пакет: компания 0xFFFF, метка KC, версия 2");
   CHECK(a.num("hf") == 0, "кварц 64 МГц отпущен после старта микрофона");
   CHECK(a.num("mic") == 1 && a.num("acc") == 1, "микрофон и акселерометр работают");
   health(a, "старт");
@@ -440,7 +445,7 @@ void sc_sensors() {
   Board& a = *boards[0];
   Recorder rec;
   rec.open("sensors.gif", {&a});
-  a.cmd("IN v");
+  a.cmd("IN v on");
   run(300);
   uint64_t t = g_ms;
   a.cmd("TAP 1");
@@ -522,6 +527,8 @@ void sc_light_and_pocket() {
   Board& a = *boards[0];
   Recorder rec;
   rec.open("pocket.gif", {&a});
+  a.cmd("IN v on");  // события печатаются и без сценария sensors
+  run(300);
   uint64_t t = g_ms;
   a.cmd("SET lux 0.3");
   run_rec(rec, 12000);
@@ -587,11 +594,12 @@ void sc_meeting() {
   b.x = 1.0;  // метр от A
   spawn(b, 0);
   run(4000);
-  a.cmd("IN v");
-  b.cmd("IN v");
+  a.cmd("IN v on");
+  b.cmd("IN v on");
   Recorder rec;
   rec.open("meeting.gif", {&a, &b});
   const uint64_t t = g_ms;
+  a.vib_max = b.vib_max = 0;
   uint64_t ta = 0, tb = 0;
   for (int i = 0; i < 1800 && !(said(a, "Дуэль с", t, &ta) && said(b, "Дуэль с", t, &tb)); ++i) {
     run(100);
@@ -604,6 +612,9 @@ void sc_meeting() {
   const bool wa = said(a, "победа", t), wb = said(b, "победа", t);
   CHECK(wa != wb, "победитель один (A %s, B %s)", wa ? "победил" : "проиграл", wb ? "победил" : "проиграл");
   CHECK(a.num("fr") == 1 && b.num("fr") == 1, "каждый записал другого в знакомые");
+  // Мотор на 3 В стоит на VSYS: ШИМ должен давать ему около 3 В, а не VSYS − 3 В.
+  CHECK(a.vib_max > 2.6 && a.vib_max < 3.3 && b.vib_max > 2.6 && b.vib_max < 3.3,
+        "вибро за дуэль, на моторе ~3 В (A %.2f, B %.2f В)", a.vib_max, b.vib_max);
   const uint64_t t2 = g_ms;
   run(300000, 20);
   CHECK(!said(a, "Дуэль с", t2) && !said(a, "Встреча с", t2), "5 минут рядом — повторной сцены нет (перерыв 10 мин)");
@@ -618,7 +629,7 @@ void sc_attack() {
   const uint64_t attack_t0 = g_ms;
   // Свой позывной A — в его пакете (байты 5–8 данных производителя).
   const std::string d = a.hex("data");
-  const size_t k = d.find("ffff4b4301");
+  const size_t k = d.find("ffff4b4302");
   const std::string hash_hex = k != std::string::npos ? d.substr(k + 10, 8) : "01020304";
   const std::string to_hex = hash_hex.substr(0, 4);
   uint64_t t = g_ms;
@@ -638,7 +649,7 @@ void sc_attack() {
   t = g_ms;
   for (int i = 0; i < 200; ++i) {
     char h[128];
-    snprintf(h, sizeof h, "02010410ffffff4b430101000000%02x%02x%02x01%s", 0, 0x09, 128, to_hex.c_str());
+    snprintf(h, sizeof h, "02010410ffffff4b430201000000%02x%02x%02x01%s", 0, 0x09, 128, to_hex.c_str());
     a.cmd("RX -40 %s", h);
     run(50);
   }
@@ -649,7 +660,7 @@ void sc_attack() {
   for (int i = 0; i < 60; ++i) {
     char h[128];
     const uint32_t fake = 0xF0000000u + (uint32_t)i * 7919u;
-    snprintf(h, sizeof h, "02010410ffffff4b4301%02x%02x%02x%02x%02x%02x80000000", fake & 0xFF, fake >> 8 & 0xFF,
+    snprintf(h, sizeof h, "02010410ffffff4b4302%02x%02x%02x%02x%02x%02x80000000", fake & 0xFF, fake >> 8 & 0xFF,
              fake >> 16 & 0xFF, fake >> 24, 255, 0x01);
     a.cmd("RX -40 %s", h);
     run(300);
@@ -666,7 +677,7 @@ void sc_attack() {
   for (int i = 0; i < 40; ++i) {
     char h[128];
     const uint32_t fake = 0xF1000000u + (uint32_t)i * 7919u;
-    snprintf(h, sizeof h, "02010410ffffff4b4301%02x%02x%02x%02x%02x%02x80000000", fake & 0xFF, fake >> 8 & 0xFF,
+    snprintf(h, sizeof h, "02010410ffffff4b4302%02x%02x%02x%02x%02x%02x80000000", fake & 0xFF, fake >> 8 & 0xFF,
              fake >> 16 & 0xFF, fake >> 24, 9, 0x01);
     a.cmd("RX -40 %s", h);
     run(300);
@@ -752,6 +763,43 @@ void sc_power_off_usb() {
   run(3000);
 }
 
+void sc_stuck_button() {
+  say("\n== Залипшая кнопка при выключении на зарядке ==");
+  Board& a = *boards[0];
+  a.vbus = true;
+  a.cmd("SET vbus 1");
+  run(3000);
+  uint64_t t = g_ms;
+  a.button = true;  // зажали, чтобы выключить, — и кнопка залипла
+  a.cmd("SET button 1");
+  run(30000);
+  CHECK(a.alive && !happened(a, "off", t) && a.num("disp") == 0, "на USB выключился и ждёт, кнопка всё ещё зажата");
+  t = g_ms;
+  a.vbus = false;
+  a.cmd("SET vbus 0");
+  uint64_t off_at = 0;
+  for (int i = 0; i < 300 && !off_at; ++i) {
+    run(100);
+    for (auto& e : a.events)
+      if (e.first >= t && e.second == "off_vbus") off_at = e.first;
+  }
+  CHECK(off_at && !a.alive, "USB отключили — полный сон без кнопки (через %.1f с)",
+        off_at ? (double)(off_at - t) / 1000.0 : -1.0);
+  run(60000, 50);
+  CHECK(!a.alive, "залипшая кнопка не будит и не держит включённым");
+  a.button = false;
+  run(1000);
+  t = g_ms;
+  a.vbus = true;
+  run(100);
+  a.cmd("SET vbus 1");
+  run(5000);
+  CHECK(a.alive && said(a, "Экран есть", t), "USB будит после сна без кнопки");
+  a.vbus = false;
+  a.cmd("SET vbus 0");
+  run(3000);
+}
+
 void sc_watchdog() {
   say("\n== Зависание и сторожевой таймер ==");
   Board& a = *boards[0];
@@ -770,7 +818,7 @@ void sc_console_stuck() {
   say("\n== Консоль открыта, но не читается ==");
   Board& a = *boards[0];
   a.cmd("HOSTREAD 0");
-  a.cmd("IN v");
+  a.cmd("IN v on");
   const long loops0 = a.num("loops");
   const uint64_t t = g_ms;
   for (int i = 0; i < 20; ++i) {
@@ -780,7 +828,7 @@ void sc_console_stuck() {
   CHECK(!any_event(a, t) && a.num("loops") - loops0 > 1500, "цикл идёт (%ld проходов за 20 с), без сброса",
         a.num("loops") - loops0);
   a.cmd("HOSTREAD 1");
-  a.cmd("IN v");
+  a.cmd("IN v off");
   run(500);
 }
 
@@ -828,7 +876,7 @@ void sc_millis_wrap() {
   spawn(w, 0);
   run(5000);
   run(3000);
-  w.cmd("IN v");
+  w.cmd("IN v on");
   run(80000, 20);
   const uint64_t t = g_ms;
   for (int i = 0; i < 6; ++i) {
@@ -918,6 +966,7 @@ int main(int argc, char** argv) {
       {"boot", sc_first_boot},         {"sensors", sc_sensors},     {"sound", sc_sound},
       {"pocket", sc_light_and_pocket}, {"charge", sc_charge},       {"meeting", sc_meeting},
       {"attack", sc_attack},           {"off", sc_power_off_battery}, {"offusb", sc_power_off_usb},
+      {"stuck", sc_stuck_button},
       {"watchdog", sc_watchdog},       {"console", sc_console_stuck}, {"cuts", sc_power_cuts},
       {"empty", sc_empty_cell},        {"wrap", sc_millis_wrap},      {"day", sc_day},
   };

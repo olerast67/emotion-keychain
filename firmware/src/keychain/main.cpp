@@ -306,7 +306,8 @@ void screen_power(bool on, uint32_t now) {
   if (on == screen_on) return;
   if (on) {
     screen_on = true;
-    start_oled();  // не ответил — повторы в loop
+    oled_retry_ms = 2000;  // прошлые сбои не в счёт: первый повтор — через 2 с
+    start_oled();          // не ответил — повторы в loop
   } else {
     if (have_oled) oled.power(false);
     // Шина экрана отпускается: иначе подтяжки ножек питали бы обесточенный модуль через SDA и SCL.
@@ -337,7 +338,9 @@ void apply_identity(uint32_t now) {
   voice.set_enabled(cfg.sound != 0);
   eng.set_quirks(me.quirks, now);
   enc.init(me.hash);
-  enc.set_known([](uint32_t h, const void* f) { return ((const Friends*)f)->level(h) >= 0; }, &friends);
+  // Лимит встреч не тратят друзья — те, с кем виделись в разные дни (уровень ≥ 1): позывной,
+  // выдуманный сегодня, так не обходит лимит.
+  enc.set_known([](uint32_t h, const void* f) { return ((const Friends*)f)->level(h) >= 1; }, &friends);
 }
 
 void print_me() {
@@ -552,19 +555,20 @@ void poll_radio(uint32_t now) {
   eng.note_activity(now);
   if (m.kind == Rendezvous::Duel) {
     out("Дуэль с %s: %s\n", peer.code, m.won ? "победа" : "поражение");
-    // Вибро — только пока встречи идут в счёт (дневные лимиты): поток подделок не жужжит.
-    const bool buzz = progress.today_duels < XpRules{}.duels_xp_day_cap;
+    // Вибро — только если дуэль пошла в счёт (дневные лимиты): поток подделок не жужжит.
+    const uint8_t duels = progress.today_duels;
     bh.duel(peer.code, m.won, now, m.peer, m.nonce);
     static const uint16_t kBuzz[] = {60, 80, 60, 80, 200};
-    if (buzz) hal::vibrate(kBuzz, 5);
+    if (progress.today_duels != duels) hal::vibrate(kBuzz, 5);
   } else {
     const bool is_new = friends.level(m.peer) < 0;
     out("Встреча с %s (%s), %s\n", peer.code, archetype_name(peer.archetype), is_new ? "новый" : "знакомый");
-    const bool buzz = is_new ? progress.today_new_friends < XpRules{}.new_friends_day_cap
-                             : progress.today_known_friends < XpRules{}.known_friends_day_cap;
+    // Вибро — только если встреча пошла в счёт: новый знакомый или первая за день встреча
+    // со старым, в пределах дневных лимитов. Друг, который весь день рядом, не жужжит.
+    const uint8_t new_n = progress.today_new_friends, known_n = progress.today_known_friends;
     bh.meet(peer.code, is_new, now, m.peer, m.peer_level, m.nonce);
     static const uint16_t kHello[] = {80, 120, 80};
-    if (buzz) hal::vibrate(kHello, 3);
+    if (progress.today_new_friends != new_n || progress.today_known_friends != known_n) hal::vibrate(kHello, 3);
   }
   // Без force: встречу может подстроить кто угодно, запись — по общему правилу save_all.
   save_all(now, false);
@@ -632,7 +636,7 @@ void help() {
       "  b 0..255     яркость\n"
       "  e <событие>  событие для характера: e tap, e music …\n"
       "  x <сцена>    сцена: hack birthday visor bsod …\n"
-      "  v            печатать события датчиков\n"
+      "  v [on|off]   печатать события датчиков\n"
       "  off          выключиться; dfu — загрузчик для новой прошивки\n"
       "  reset yes    начать рост заново");
 }
@@ -650,7 +654,7 @@ void command(char* s, uint32_t now) {
   if (!strcmp(s, "?") || !strcmp(s, "help")) return help();
   if (!strcmp(s, "me")) return print_me();
   if (!strcmp(s, "v")) {
-    verbose = !verbose;
+    verbose = arg ? !strcmp(arg, "on") : !verbose;
     out_line(verbose ? "События датчиков печатаются" : "События датчиков не печатаются");
     return;
   }
@@ -813,17 +817,29 @@ void poll_serial(uint32_t now) {
 // кнопка при USB включает загрузчик. Поэтому экран, датчики и эфир выключены, часы идут,
 // зарядка идёт. Кнопка — включиться (перезагрузкой, часы сохраняются), USB отключили —
 // полный сон.
-void off_on_usb() {
-  // Кнопку, которой выключали, ещё держат: иначе она тут же включила бы брелок обратно.
+// Ждёт, пока отпустят кнопку: не дольше 10 с и только пока есть USB. Залипшая кнопка не
+// держит брелок в этом цикле — дальше её обходит system_off.
+bool wait_release() {
+  const uint32_t t0 = millis();
   while (digitalRead(board::kButton) == LOW) {
+    if (!hal::usb_present() || millis() - t0 > 10000) return false;
     hal::watchdog_feed();
     delay(10);
   }
+  return true;
+}
+
+void off_on_usb() {
+  // Кнопку, которой выключали, ещё держат: иначе она тут же включила бы брелок обратно.
+  wait_release();
   screen_power(false, millis());
   hal::mic_end();
   hal::buzzer(0, false);
+  hal::vibro_stop();
   radio::set_pace(radio::Pace::Off);
   radio::update(millis());
+  // Включает только новое нажатие: кнопка, которая так и не отпустилась, — нет.
+  bool armed = digitalRead(board::kButton) == HIGH;
   for (;;) {
     hal::watchdog_feed();
     uptime = uptime_now();
@@ -831,13 +847,12 @@ void off_on_usb() {
     tick_clock(now);
     save_all(now, false);
     if (!hal::usb_present()) return;
-    if (digitalRead(board::kButton) == LOW) {
+    if (digitalRead(board::kButton) == HIGH) {
+      armed = true;
+    } else if (armed) {
       delay(30);
       if (digitalRead(board::kButton) == LOW) {
-        while (digitalRead(board::kButton) == LOW) {
-          hal::watchdog_feed();
-          delay(10);
-        }
+        wait_release();
         // Часы — с точностью до минуты: после программного сброса они продолжатся.
         cfg.clock_min = (uint16_t)clock_minutes();
         save_all(now, true);
