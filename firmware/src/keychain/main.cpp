@@ -111,7 +111,8 @@ Settings cfg_seen;
 uint32_t cfg_changed_at = 0;
 
 // Кнопка (poll_button): нажата ли после подавления дребезга и с какого момента.
-bool btn_down = false, long_fired = false, tap_pending = false;
+bool btn_down = false, long_fired = false;
+uint8_t taps = 0;  // нажатий в серии: следующее — не позже 400 мс после отпускания
 uint32_t btn_t0 = 0, btn_change = 0, tap_at = 0;
 
 bool verbose = false;
@@ -411,6 +412,19 @@ void set_duel_ready(bool on, uint32_t now) {
   p.value = (int)(on ? BannerIcon::Skull : BannerIcon::Heart);
   bh.queue_scene(Scene::banner, p, eng.expression(), now, on ? "дуэли включены" : "дуэли выключены", true);
   out_line(on ? "Дуэли включены" : "Дуэли выключены");
+}
+
+// Звук вкл/выкл: тройное нажатие или команда snd. Баннер беззвучный по смыслу: при выключении
+// голос уже молчит, при включении отвечает сам баннер.
+void set_sound(bool on, uint32_t now) {
+  cfg.sound = on ? 1 : 0;
+  voice.set_enabled(on);
+  SceneParams p;
+  p.set_text(on ? "SOUND ON" : "SOUND OFF");
+  p.set_sub(on ? "BEEP BEEP" : "SILENT MODE");
+  p.value = (int)(on ? BannerIcon::Sparkles : BannerIcon::Pi);
+  bh.queue_scene(Scene::banner, p, eng.expression(), now, on ? "звук включён" : "звук выключен", true);
+  out_line(on ? "Звук включён" : "Звук выключен");
 }
 
 // ---------------------------------------------------------------- часы и сутки
@@ -818,25 +832,27 @@ void poll_button(uint32_t now) {
       eng.note_activity(now);
       if (!screen_on) screen_power(true, now);
     } else if (!long_fired) {
-      if (tap_pending && now - tap_at < 400) {
-        tap_pending = false;
-        set_duel_ready(!cfg.duel_ready, now);
-      } else {
-        tap_pending = true;
-        tap_at = now;
+      // Серия нажатий: одно — «кнопка» для характера, два — дуэли, три — звук. Решение — через
+      // 400 мс после последнего отпускания, тройное — сразу.
+      taps = taps && now - tap_at < 400 ? taps + 1 : 1;
+      tap_at = now;
+      if (taps == 3) {
+        taps = 0;
+        set_sound(!cfg.sound, now);
       }
     }
   }
   if (btn_down && !long_fired && now - btn_t0 >= kLongPressMs) {
     long_fired = true;
-    tap_pending = false;
+    taps = 0;
     event(Event::button_long, now);
     powering_off = true;
     bh.power_off(now);
   }
-  if (tap_pending && !btn_down && now - tap_at >= 400) {
-    tap_pending = false;
-    event(Event::button, now);
+  if (taps && !btn_down && now - tap_at >= 400) {
+    if (taps == 1) event(Event::button, now);
+    else set_duel_ready(!cfg.duel_ready, now);
+    taps = 0;
   }
 }
 
@@ -859,7 +875,7 @@ void help() {
       "  ach          достижения; friends — знакомые брелоки\n"
       "  t [ЧЧ:ММ]    время (без числа — показать); date 2026-12-31 — дата; bday 05-14 — день рождения\n"
       "  theme cyber  тема: classic, cyber или retro\n"
-      "  snd          звук вкл/выкл; say laugh — реплика\n"
+      "  snd          звук вкл/выкл (как тройное нажатие); say laugh — реплика\n"
       "  duel         дуэли вкл/выкл (как двойное нажатие); ghost — невидимка в эфире\n"
       "  b 0..255     яркость\n"
       "  e <событие>  событие для характера: e tap, e music …\n"
@@ -972,12 +988,7 @@ void command(char* s, uint32_t now) {
     eng.set_expression(eng.expression(), now);
     return;
   }
-  if (!strcmp(s, "snd")) {
-    cfg.sound = cfg.sound ? 0 : 1;
-    voice.set_enabled(cfg.sound != 0);
-    out_line(cfg.sound ? "Звук включён" : "Звук выключен");
-    return;
-  }
+  if (!strcmp(s, "snd")) return set_sound(!cfg.sound, now);
   if (!strcmp(s, "say")) {
     Cue c;
     if (!arg || !cue_from_id(arg, &c)) return (void)out_line("Нет такой реплики");

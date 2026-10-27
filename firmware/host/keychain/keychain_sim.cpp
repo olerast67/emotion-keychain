@@ -1133,6 +1133,42 @@ void sc_console_stuck() {
   run(500);
 }
 
+// Серии нажатий: одно — «кнопка» для характера, два — дуэли вкл/выкл, три — звук вкл/выкл.
+void sc_buttons() {
+  say("\n== Нажатия кнопки: одно, два, три ==");
+  Board& a = *boards[0];
+  auto taps = [&](int n) {
+    for (int i = 0; i < n; ++i) {
+      press(a, 120);
+      run(150);
+    }
+    run(1500);
+  };
+  uint64_t t = g_ms;
+  taps(1);
+  CHECK(!count_said(a, "Дуэли", t) && !count_said(a, "Звук", t), "одно нажатие ничего не переключает");
+  t = g_ms;
+  taps(2);
+  CHECK(count_said(a, "Дуэли выключены", t) == 1 && !count_said(a, "Звук", t), "два нажатия — дуэли выключены");
+  t = g_ms;
+  taps(3);
+  CHECK(count_said(a, "Звук выключен", t) == 1 && !count_said(a, "Дуэли", t), "три нажатия — звук выключен");
+  t = g_ms;
+  taps(3);
+  CHECK(count_said(a, "Звук включён", t) == 1, "ещё три — звук включён");
+  t = g_ms;
+  taps(2);
+  CHECK(count_said(a, "Дуэли включены", t) == 1, "ещё два — дуэли включены");
+  // Нажатия с паузой больше 400 мс — по одному, без переключений.
+  t = g_ms;
+  for (int i = 0; i < 3; ++i) {
+    press(a, 120);
+    run(700);
+  }
+  run(1000);
+  CHECK(!count_said(a, "Дуэли", t) && !count_said(a, "Звук", t), "редкие нажатия — по одному");
+}
+
 void sc_power_cuts() {
   say("\n== Обрывы питания в любой момент ==");
   Board& a = *boards[0];
@@ -1755,7 +1791,8 @@ int main(int argc, char** argv) {
       {"i2c", sc_i2c},                 {"oled", sc_oled},             {"dbus", sc_display_bus},
       {"clock", sc_clock_unknown},     {"off", sc_power_off_battery},
       {"dfu", sc_dfu},                 {"offusb", sc_power_off_usb},  {"stuck", sc_stuck_button},
-      {"watchdog", sc_watchdog},       {"console", sc_console_stuck}, {"cuts", sc_power_cuts},
+      {"watchdog", sc_watchdog},       {"console", sc_console_stuck}, {"buttons", sc_buttons},
+      {"cuts", sc_power_cuts},
       {"empty", sc_empty_cell},        {"wrap", sc_millis_wrap},      {"days", sc_days},
       {"day", sc_day},
   };
