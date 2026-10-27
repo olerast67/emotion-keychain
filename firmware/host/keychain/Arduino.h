@@ -86,4 +86,8 @@ class HostSerial {
 };
 extern HostSerial Serial;
 
-inline void nrf_gpio_cfg_default(uint32_t pin) { sim::pin_mode[pin] = sim::kDefault; }
+inline void nrf_gpio_cfg_default(uint32_t pin) {
+  sim::pin_changing((int)pin);
+  sim::pin_mode[pin] = sim::kDefault;
+  sim::pin_changed((int)pin);
+}

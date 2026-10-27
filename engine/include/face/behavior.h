@@ -154,8 +154,6 @@ class Behavior {
             uint8_t peer_level = 0);
   // Секретный разговор с соседом без дуэли.
   void chat(const char* code, uint32_t peer_hash, uint32_t nonce, uint32_t now_ms);
-  // После встречи или дуэли: баннер роста дружбы, опыт, достижение и подарок старшего.
-  void friendship(const char* code, int before, int level, bool first_today, uint8_t peer_level, uint32_t now_ms);
 
   // Питание. Процент заряда показывает сцена зарядки (−1 — неизвестен). При малом заряде
   // поведение само переходит в экорежим: реже кадры и занятия, без сюрпризов.
@@ -227,6 +225,10 @@ class Behavior {
   // Эмоция после приветствия: зависит от своего характера и характера соседа.
   Expr greet_after(const Temperament* other, bool is_new);
   bool run_queue(uint32_t now);
+  // После встречи или дуэли (Friends::meet уже засчитал день): баннер роста дружбы с опытом
+  // и достижением, подарок старшего, близнец, легенда, опыт за нового или старого знакомого.
+  void friendship(const char* code, uint32_t peer_hash, bool is_new, int before, int level, bool first_today,
+                  uint8_t peer_level, uint32_t now);
   // Первая открытая из вариантов; если закрыты все — ближайшая замена первой.
   Expr pick_unlocked(const Expr* opts, int n);
   template <int N>
@@ -276,7 +278,9 @@ class Behavior {
   Expr recent_react_[4] = {Expr::Count, Expr::Count, Expr::Count, Expr::Count};
   static constexpr int kTapHistory = 12;  // «тыкают без остановки» — от 9 тапов за 3 с
   uint32_t tap_times_[kTapHistory] = {};
+  bool fed_ = false;  // покормили (зарядили голодного) в fed_at_
   uint32_t fed_at_ = 0;
+  uint32_t moved_at_ = 0;  // последнее событие походки
   float shake_level_ = 0;
   uint8_t recent_idle_[4] = {255, 255, 255, 255};
   const char* reason_ = "";

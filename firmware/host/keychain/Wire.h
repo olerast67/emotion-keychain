@@ -10,8 +10,11 @@
 class TwoWire {
  public:
   explicit TwoWire(int bus) : bus_(bus) {}
-  void begin() { on_ = true; }
+  // Как в ядре: begin настраивает ножки входами с подтяжкой (открытый сток), end только
+  // выключает TWIM — ножки остаются с подтяжкой. Пока TWIM включён, линиями управляет он.
+  void begin();
   void end() { on_ = false; }
+  bool enabled() const { return on_; }
   void setClock(uint32_t hz) { hz_ = hz; }
   void beginTransmission(uint8_t a) { addr_ = a, n_ = 0, tx_ = true; }
   size_t write(uint8_t b) {

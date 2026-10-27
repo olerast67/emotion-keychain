@@ -18,6 +18,7 @@ void vib_on(bool on);
 
 namespace {
 uint32_t reset_cause = 0;
+float adc_cal_t = 0;  // температура кристалла при последней калибровке АЦП
 }
 
 void power_init() {
@@ -52,6 +53,13 @@ void power_init() {
   analogSampleTime(40);
   // Смещение нуля АЦП — калибровкой по внутреннему эталону (несколько миллисекунд).
   analogCalibrateOffset();
+  adc_cal_t = temperature_c();
+}
+
+void adc_follow_temperature(float t) {
+  if (fabsf(t - adc_cal_t) <= 10.0f) return;
+  analogCalibrateOffset();
+  adc_cal_t = t;
 }
 
 void charge_enable(bool on) {
@@ -254,8 +262,8 @@ bool vib_started = false;
 uint16_t vib_seq[4];  // значение для PWM2: память в RAM на всё время работы
 constexpr uint16_t kVibTop = 800;  // 16 МГц / 800 = 20 кГц: выше слышимого
 
-// Мотор на 3 В стоит прямо на VSYS (до 4.2 В от ячейки и ~4.7 В от USB): ключ работает ШИМом
-// со скважностью 3 В / VSYS — ресурс и шум как у мотора на своём напряжении.
+// Мотор на 3 В стоит прямо на VSYS (до 4.2 В от ячейки и до ~5.4 В от USB через диод): ключ
+// работает ШИМом со скважностью 3 В / VSYS — ресурс и шум как у мотора на своём напряжении.
 void vib_on(bool on) {
   if (!on) {
     NRF_PWM2->TASKS_STOP = 1;

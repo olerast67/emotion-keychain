@@ -175,7 +175,9 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   next_eval_ = now;
   shake_level_ = 0;
   for (uint32_t& t : tap_times_) t = 0;
+  fed_ = false;
   fed_at_ = 0;
+  moved_at_ = now - kDay;
   for (uint32_t& t : falls_) t = 0;
   for (uint8_t& r : recent_idle_) r = 255;
   for (Expr& r : recent_react_) r = Expr::Count;
@@ -343,6 +345,8 @@ void Behavior::age_marks(uint32_t now) {
   cap(last_calling_);
   cap(last_cyclops_);
   cap(chose_ms_);
+  cap(moved_at_);
+  if (fed_ && now - fed_at_ > kDay) fed_ = false;
   // Отметки, где 0 значит «не было», просто забываются.
   for (uint32_t& t : tap_times_)
     if (t && now - t > kDay) t = 0;
@@ -548,8 +552,11 @@ void Behavior::on_event(Event e, uint32_t now) {
       }
       break;
     case Event::walk: {
-      const bool first = !moving;
+      // «Пошли гулять» — после настоящего перерыва, а не после каждого светофора: походка
+      // кончается уже через 2.5 с без шагов.
+      const bool first = !moving && now - moved_at_ > 2u * kMin;
       moving = true;
+      moved_at_ = now;
       running = false;
       mood_.arousal = clamp01(mood_.arousal + 0.1f);
       if (first && mood_.energy > 0.5f && rng_.chance(0.5f))
@@ -560,6 +567,7 @@ void Behavior::on_event(Event e, uint32_t now) {
     }
     case Event::run: {
       moving = running = true;
+      moved_at_ = now;
       mood_.arousal = clamp01(mood_.arousal + 0.3f);
       mood_.energy = clamp01(mood_.energy - 0.03f);
       if (mood_.energy < 0.3f) {
@@ -671,8 +679,10 @@ void Behavior::on_event(Event e, uint32_t now) {
       const char* why = "подключили зарядку";
       if (battery == 0) x = Expr::relieved, why = "зарядку подключили в последний момент";
       if (battery == 1) x = Expr::grateful, why = "голодного покормили";
-      // Покормить можно не чаще раза в 3 часа: иначе «голод» набивали бы, дёргая кабель.
-      if (battery <= 1 && progress_ && (!fed_at_ || now - fed_at_ >= 3u * 60u * kMin)) {
+      // Покормить можно не чаще раза в 3 часа: иначе «голод» набивали бы, дёргая кабель
+      // (после отключения датчик снова говорит «мало заряда», если ячейка не набралась).
+      if (battery <= 1 && progress_ && (!fed_ || now - fed_at_ >= 3u * 60u * kMin)) {
+        fed_ = true;
         fed_at_ = now;
         grant(progress_->feed(), now);
       }
@@ -689,12 +699,17 @@ void Behavior::on_event(Event e, uint32_t now) {
       react(pick(o), now, 3000, "зарядился");
       break;
     }
-    case Event::charge_stop:
+    case Event::charge_stop: {
       charging = false;
-      react(battery < 2 ? Expr::disappointed : Expr::hello, now, 2200, "отключили зарядку");
-      // Заряд снова меряется без USB: если ячейка ещё мало заряжена, датчик сам скажет.
+      // Недозарядили — расстроен. Заряд на зарядке прошивка оценивает сама; не знает — судим
+      // по тому, был ли голоден до неё.
+      const bool short_charge = battery_pct_ >= 0 ? battery_pct_ < 50 : battery < 2;
+      react(short_charge ? Expr::disappointed : Expr::hello, now, 2200, "отключили зарядку");
+      // Заряд снова меряется без USB: если ячейка ещё мало заряжена, датчик сам скажет
+      // «мало заряда» после установления. Иначе голод держался бы до полной зарядки.
       battery = 2;
       break;
+    }
     case Event::battery_low: {
       battery = 1;
       set_eco(1);
@@ -1348,14 +1363,12 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_h
     chat(code, peer_hash, nonce, now);
     reason_ = "старые знакомые шепчутся";
   }
-  friendship(code, before, level, first_today, peer_level, now);
-  if (other && other == temp_) earn(Ach::twin, now);
-  if (peer_hash && identity_from_hash(peer_hash).rarity == Rarity::Legendary) earn(Ach::legend, now);
-  if (progress_ && (is_new || first_today)) grant(progress_->met_friend(is_new), now);  // старый знакомый — раз в день
+  friendship(code, peer_hash, is_new, before, level, first_today, peer_level, now);
   achieve(now);
 }
 
-void Behavior::friendship(const char* code, int before, int level, bool first_today, uint8_t peer_level, uint32_t now) {
+void Behavior::friendship(const char* code, uint32_t peer_hash, bool is_new, int before, int level,
+                          bool first_today, uint8_t peer_level, uint32_t now) {
   if (friends_ && before >= 0 && level > before) {
     banner(friend_level_tag(level), code, BannerIcon::Heart, pick_unlocked({Expr::love, Expr::happy}), now,
            "дружба крепнет");
@@ -1373,6 +1386,10 @@ void Behavior::friendship(const char* code, int before, int level, bool first_to
       queue_scene(Scene::banner, g, gift, now, "подарок от старшего брелока", true);
     }
   }
+  const Temperament* other = peer_hash ? &temperament(archetype_from_hash(peer_hash)) : nullptr;
+  if (other && other == temp_) earn(Ach::twin, now);
+  if (peer_hash && identity_from_hash(peer_hash).rarity == Rarity::Legendary) earn(Ach::legend, now);
+  if (progress_ && (is_new || first_today)) grant(progress_->met_friend(is_new), now);  // старый знакомый — раз в день
 }
 
 void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash, uint32_t nonce,
@@ -1382,8 +1399,10 @@ void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash
   SceneParams p;
   p.set_text(code);
   p.value = won ? 1 : 0;
-  Expr after = won ? pick_unlocked({Expr::proud, Expr::smug, Expr::happy, Expr::starstruck})
-                   : pick_unlocked({Expr::sulking, Expr::grumpy, Expr::sobbing});
+  // Из пула, а не первую открытую: иначе звёзды в глазах и рыдания не выпадали бы никогда.
+  const Option win[] = {{Expr::proud, 3}, {Expr::smug, 2}, {Expr::starstruck, 1.5f}, {Expr::happy, 1}};
+  const Option lose[] = {{Expr::sulking, 3}, {Expr::grumpy, 2}, {Expr::sobbing, 1}};
+  Expr after = won ? pick(win) : pick(lose);
   const char* why = won ? "выиграл дуэль" : "проиграл дуэль";
   bool fresh = false;
   if (won && progress_) {
@@ -1402,14 +1421,12 @@ void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash
   if (progress_) grant(progress_->duel(won), now);
   // Дуэль — тоже встреча: день дружбы засчитывается, новый соперник становится знакомым
   // (без своей сцены приветствия — её место заняли дуэль и разговор).
-  if (friends_ && peer_hash) {
-    int before = -1;
-    bool first_today = false;
-    const int level = friends_->meet(peer_hash, progress_ ? progress_->days : 0, &before, &first_today);
-    if (progress_ && before < 0) grant(progress_->met_friend(true), now);
-    // Рост дружбы и подарок — как после встречи: первая встреча дня часто и есть дуэль.
-    friendship(code, before, level, first_today, peer_level, now);
-  }
+  // Рост дружбы, подарок старшего, близнец, легенда и опыт за знакомство — как после встречи:
+  // первая встреча дня с готовым к дуэлям соседом и есть дуэль, а короткая встреча — только она.
+  int before = -1, level = 0;
+  bool first_today = false;
+  if (friends_ && peer_hash) level = friends_->meet(peer_hash, progress_ ? progress_->days : 0, &before, &first_today);
+  if (peer_hash) friendship(code, peer_hash, friends_ && before < 0, before, level, first_today, peer_level, now);
   achieve(now);
 }
 

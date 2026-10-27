@@ -53,6 +53,12 @@ struct World {
   int tap = 0;           // 1 — касание, 2 — двойное: модель LIS3DH взводит CLICK
   uint32_t reset_reason = 0;
   uint64_t device_id = 0;
+  // Неисправности шин I2C (SET lis/ltr/oled/sda/scl): микросхема не отвечает на свой адрес;
+  // ведомый держит SDA шины датчиков, пока не получит столько тактов SCL от i2c_recover;
+  // SCL шины датчиков в нуле — обмен по ней в ядре ждёт без срока.
+  bool lis_ok = true, ltr_ok = true, oled_ok = true;
+  int sda_stuck = 0;
+  bool scl_stuck = false;
 };
 extern World world;
 
@@ -87,9 +93,20 @@ extern Status status;
 struct I2cDevice {
   virtual ~I2cDevice() = default;
   virtual bool powered() const { return true; }
+  virtual bool acks() const { return powered(); }  // отвечает на свой адрес
   virtual void write(const uint8_t* d, size_t n, bool stop) = 0;  // байты после адреса
   virtual size_t read(uint8_t* d, size_t n) = 0;
 };
 I2cDevice* i2c_device(int bus, uint8_t addr);
+
+// Ножку перенастроили (pinMode, digitalWrite, nrf_gpio_cfg_default): моделям, которые от
+// неё зависят, — питание экрана, линии I2C, — сначала досчитать своё время по старым уровням.
+void pin_changing(int pin);
+void pin_changed(int pin);
+// Неисправности для координатора: сброс LIS3DH по питанию, «зависший» контроллер экрана.
+void lis_glitch();
+void ltr_glitch();
+void oled_wedge();
+bool flash_busy();  // операция флеша SoftDevice ещё идёт
 
 }  // namespace sim

@@ -18,6 +18,8 @@ class Lis3dh {
   void power(bool on);
   // Отвечает ли датчик и целы ли его настройки; false — пора перезапустить (begin).
   bool healthy();
+  // Шина остановлена: до нового begin датчик молчит, и обмена с ним нет.
+  void lost() { ok_ = false; }
 
  private:
   bool write(uint8_t reg, uint8_t v);
@@ -36,6 +38,8 @@ class Ltr303 {
   // Люксы; −1 — нет свежего замера или датчик не ответил.
   float lux();
   void power(bool on);
+  // Шина остановлена: до нового begin датчик молчит, и обмена с ним нет.
+  void lost() { ok_ = false; }
 
  private:
   bool write(uint8_t reg, uint8_t v);

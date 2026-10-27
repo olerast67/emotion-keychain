@@ -135,7 +135,12 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
   if (step_n_ >= 5) {
     const float span = (float)(step_times_[step_n_ - 1] - step_times_[0]) / 1000.0f;
     const float hz = span > 0.0f ? (float)(step_n_ - 1) / span : 0.0f;
-    gait = hz > 2.6f ? 2 : 1;
+    // Бег — от 2.8 шага в секунду, снова шаг — ниже 2.4: быстрая ходьба у границы иначе
+    // переключала бы «бежим» и «идём» на каждом шаге.
+    if (hz > 2.8f)
+      gait = 2;
+    else if (hz < 2.4f || gait_ != 2)
+      gait = 1;
   } else if (gait_ && now - step_last_ > 2500) {
     gait = 0;
   } else if (!gait_) {
@@ -147,11 +152,9 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
       steps_total_ += steps_held_;
       steps_held_ = 0;
     }
-    // Пошёл или побежал — событие; с бега на шаг — тоже (бег кончился). Остановился — «покой»
-    // для походки: иначе ходьба на лице держалась бы до минуты полной неподвижности.
-    if (gait && (gait > gait_ || gait_ == 2 || now - gait_said_ > 30000)) push(out, n, gait == 2 ? Event::run : Event::walk);
-    if (!gait) push(out, n, Event::still);
-    if (gait) gait_said_ = now;
+    // Пошёл, побежал или с бега перешёл на шаг — событие походки. Остановился — «покой» для
+    // походки: иначе ходьба на лице держалась бы до минуты полной неподвижности.
+    push(out, n, gait == 2 ? Event::run : gait == 1 ? Event::walk : Event::still);
     gait_ = gait;
   }
 

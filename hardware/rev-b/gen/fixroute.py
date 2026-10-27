@@ -22,6 +22,7 @@ DIRS = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
 VIA_COST = 12.0
 NARROW = 0.15  # мм: запасная ширина, если класс не проходит
 HOLE_CLEAR = 0.25  # от края отверстия до чужой меди (DRC требует 0.2)
+VIA_HOLE_R = 0.125  # радиус отверстия переходного (0.25 мм)
 TURN_COST = 0.5
 
 
@@ -161,7 +162,13 @@ class Board:
             bad = self.edge_mask(EDGE + half) | self.rule_mask(layer, False, half + 0.02)
             vbad = self.rule_mask(layer, True, via_r + 0.02)
             for layers, kind, g, n in self.items:
-                if n == net or layer not in layers:
+                if layer not in layers:
+                    continue
+                if n == net:
+                    # Своя SMD-площадка: переходное рядом — можно, отверстием в ней — нет: припой
+                    # ушёл бы в отверстие, а паяльная паста — на другую сторону.
+                    if kind == "r":
+                        self.mark(vbad, kind, g, VIA_HOLE_R + 0.1)
                     continue
                 clr = max(clr_own, _cls(n)["clearance"], HOLE_CLEAR if kind == "h" else 0) + 0.01
                 self.mark(bad, kind, g, clr + half)

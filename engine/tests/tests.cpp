@@ -1430,20 +1430,24 @@ static void test_duel_then_chat() {
   a.attach_voice(&va), b.attach_voice(&vb);
   a.duel("SH-0001", true, 1000, hb, 99);
   b.duel("TR-0002", false, 1000, ha, 99);
-  uint32_t chat_a = 0, chat_b = 0;
+  uint32_t chat_a = 0, chat_b = 0, chat_end = 0;
+  Expr after_chat = Expr::Count;
   for (uint32_t t = 1000; t < 30000; t += 20) {
     // Касание посреди паузы не сдвигает разговор: у соседа его не было.
     if (t == 8600) a.on_event(Event::tap, t);
     a.update(t), b.update(t), ea.update(t), eb.update(t);
     if (!chat_a && ea.scene() == Scene::chat) chat_a = t;
     if (!chat_b && eb.scene() == Scene::chat) chat_b = t;
+    // Эмоция сразу после разговора (позже персонаж может заняться своим).
+    if (chat_a && !chat_end && ea.scene() == Scene::None) chat_end = t;
+    if (chat_end && after_chat == Expr::Count && t >= chat_end + 100) after_chat = ea.expression();
   }
   CHECK(chat_a && chat_a == chat_b, "разговор начался одновременно: %u и %u", (unsigned)chat_a, (unsigned)chat_b);
   CHECK(chat_a >= 1000 + scene_duration_ms(Scene::duel), "сначала дуэль");
   CHECK(ea.scene_params().key == eb.scene_params().key && ea.scene_params().value != eb.scene_params().value,
         "ключ общий, начинает один");
-  CHECK(ea.expression() == Expr::innocent || ea.expression() == Expr::smug || ea.expression() == Expr::mischievous,
-        "после разговора — невинное лицо: %s", expression(ea.expression()).id);
+  CHECK(after_chat == Expr::innocent || after_chat == Expr::smug || after_chat == Expr::mischievous,
+        "после разговора — невинное лицо: %s", after_chat == Expr::Count ? "?" : expression(after_chat).id);
 }
 
 // ---------------------------------------------------------------- рост 2: серии, достижения, друзья
@@ -1884,10 +1888,11 @@ static void test_encounter_two_keychains() {
   CHECK(ga.kind == Rendezvous::Greet && gb.kind == Rendezvous::Greet, "вторая встреча за день — приветствие (%d, %d)",
         (int)ga.kind, (int)gb.kind);
 
-  // Новые сутки — дуэль снова возможна.
+  // Новые сутки — дуэль снова возможна. Вторая встреча подряд дала перерыв 20 минут: он
+  // доживает свой срок и в новых сутках.
   a.new_day();
   b.new_day();
-  t += 600000;
+  t += 1200000;
   Meeting da, db;
   encounter_run(a, b, t, 20000, -60, &da, &db, &ta, &tb);
   CHECK(da.kind == Rendezvous::Duel && db.kind == Rendezvous::Duel, "на следующий день снова дуэль");

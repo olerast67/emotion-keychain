@@ -40,6 +40,9 @@ namespace {
 constexpr uint64_t kDayMs = 24ull * 3600000ull;
 constexpr uint32_t kDarkScreenOffMs = 60000;  // в кармане дольше минуты — экран гаснет
 constexpr uint32_t kLongPressMs = 3000;
+// Загрузчик по кнопке: USB подключили, пока кнопку держат, и зажали её не раньше чем за 10 с.
+// Кнопка, которую держат дольше (залипла или зажата с самого включения), загрузчик не включает.
+constexpr uint32_t kDfuPressMs = 10000;
 
 // Настройки, которые переживают перезагрузку.
 struct Settings {
@@ -113,8 +116,14 @@ uint32_t oled_off_at = 0;     // экран обесточен для перез
 bool oled_cycling = false;
 uint32_t next_health = 0;
 int als_fail = 0;
+bool sensor_bus = false;  // шина датчиков свободна и запущена (Wire)
+uint32_t next_fix = 0, fix_retry_ms = 10000;  // перезапуск датчиков: когда и через сколько повтор
 Settings cfg_seen;
 uint32_t cfg_changed_at = 0;
+
+// Кнопка (poll_button): нажата ли после подавления дребезга и с какого момента.
+bool btn_down = false, long_fired = false, tap_pending = false;
+uint32_t btn_t0 = 0, btn_change = 0, tap_at = 0;
 
 bool verbose = false;
 char line[64];
@@ -174,6 +183,23 @@ void out_line(const char* s) {
 }
 
 unsigned clock_minutes() { return (unsigned)((cfg.clock_min + (uptime - clock_base_up) / 60000u) % 1440u); }
+
+// Минуты с начала текущих суток: по часам, если они заданы, иначе по счёту работы. day_t0
+// может быть «до включения» (сутки продолжаются с прошлого раза): разность беззнаковая и верна
+// по модулю 2^64.
+uint16_t day_minutes() {
+  return (uint16_t)(cfg.clock_known ? clock_minutes() : (unsigned)((uptime - day_t0) / 60000u % 1440u));
+}
+
+// Часы и счёт суток в настройках — с точностью до минуты: перед записью, после которой брелок
+// перезагрузится или уснёт. Начало отсчёта сдвигается вместе с clock_min, иначе прошедшие
+// минуты посчитались бы дважды, если работа всё-таки продолжится.
+void sync_clock() {
+  const uint16_t m = (uint16_t)clock_minutes();
+  clock_base_up = uptime - (uptime - clock_base_up) % 60000u;
+  cfg.clock_min = m;
+  cfg.day_min = day_minutes();
+}
 
 void screen_power(bool on, uint32_t now);
 
@@ -441,9 +467,11 @@ void tick_clock(uint32_t now) {
   }
   last_clock = m;
   // Без часов сутки — 24 часа работы, и отсчёт переживает выключение: минуты с начала
-  // текущих суток сохраняются раз в 10 минут. Иначе брелок, который выключают на ночь,
-  // никогда не дожил бы до новых суток, и дневные лимиты не сбрасывались бы.
-  const uint16_t dm = cfg.clock_known ? 0 : (uint16_t)((uptime - day_t0) / 60000u % 1440u);
+  // текущих суток сохраняются раз в 10 минут (и точно — перед выключением). Иначе брелок,
+  // который выключают на ночь, никогда не дожил бы до новых суток, и дневные лимиты не
+  // сбрасывались бы. С часами это минуты с полуночи: после выключения часы теряются, и сутки
+  // продолжаются по счёту работы с того же места.
+  const uint16_t dm = day_minutes();
   if (new_day || dm / 10 != cfg.day_min / 10) cfg.day_min = dm;
   if (new_day) {
     advance_date();
@@ -540,7 +568,9 @@ void poll_environment(uint32_t now) {
   }
   if (time_reached(now, next_temp)) {
     next_temp = now + 60000;
-    const int n = thermal.feed(hal::temperature_c(), now, ev);
+    const float t = hal::temperature_c();
+    hal::adc_follow_temperature(t);
+    const int n = thermal.feed(t, now, ev);
     for (int i = 0; i < n; ++i) event(ev[i], now);
   }
   float db;
@@ -560,49 +590,68 @@ void poll_environment(uint32_t now) {
 
 // Заряд — только в разумной температуре: у MCP73832 нет входа термистора, а литиевая ячейка
 // на морозе от заряда портится. Температура — кристалла nRF, она близка к температуре внутри
-// брелока. Разрешено от 3 до 42 °C, запрещено ниже 1 или выше 45 °C.
-void update_charge_gate(bool usb) {
+// брелока. Разрешено от 3 до 42 °C, запрещено ниже 1 или выше 45 °C (запас от дребезга у
+// порога). Проверка — сразу после подключения USB и дальше раз в 30 с.
+// true — заряд только что разрешён: статус зарядника ещё не установился.
+bool update_charge_gate(bool usb) {
   static uint32_t next = 0;
   static bool started = false;
+  static bool blocked = false;  // запрещён по температуре — консоль скажет, когда снова можно
   const uint32_t now = (uint32_t)uptime;
   if (!usb) {
     if (charge_allowed) hal::charge_enable(false), charge_allowed = false;
-    started = false;
-    return;
+    started = blocked = false;
+    return false;
   }
-  if (started && !time_reached(now, next)) return;
+  if (started && !time_reached(now, next)) return false;
   started = true;
   next = now + 30000;
   const float t = hal::temperature_c();
   const bool ok = charge_allowed ? (t >= 1.0f && t <= 45.0f) : (t >= 3.0f && t <= 42.0f);
-  if (ok != charge_allowed) {
-    charge_allowed = ok;
-    hal::charge_enable(ok);
-    out("Заряд %s (%.0f °C)\n", ok ? "разрешён" : "остановлен: температура вне 3–42 °C", t);
+  if (ok == charge_allowed) {
+    if (!ok && !blocked) {
+      blocked = true;
+      out("Заряд не идёт: %.0f °C, заряжается от 3 до 42 °C\n", t);
+    }
+    return false;
   }
+  charge_allowed = ok;
+  hal::charge_enable(ok);
+  if (!ok) {
+    blocked = true;
+    out("Заряд остановлен: %.0f °C, заряжается от 3 до 42 °C\n", t);
+  } else if (blocked) {
+    blocked = false;
+    out("Заряд снова разрешён (%.0f °C)\n", t);
+  }
+  return ok;
 }
 
 void poll_battery(uint32_t now) {
   static bool usb_was = false;
-  static bool unplug_wait = false;
-  static uint32_t unplug_at = 0;
+  static bool holding = false;  // замер отложен до hold_until
+  static uint32_t hold_until = 0;
   const bool usb = hal::usb_present();
-  // Подключили USB с зажатой кнопкой — загрузчик для новой прошивки (как при сбросе).
-  if (usb && !usb_seen && digitalRead(board::kButton) == LOW) {
-    cfg.clock_min = (uint16_t)clock_minutes();
+  // Подключили USB, пока держат кнопку, — загрузчик для новой прошивки (как при сбросе).
+  // Только для свежего нажатия: на брелоке с залипшей кнопкой зарядка не включала бы его.
+  if (usb && !usb_seen && btn_down && now - btn_t0 < kDfuPressMs) {
+    sync_clock();
     save_all(now, true);
     hal::enter_bootloader();
   }
   usb_seen = usb;
-  update_charge_gate(usb);
+  const bool opened = update_charge_gate(usb);
   if (cfg.empty_off && usb) cfg.empty_off = 0;  // зарядили — снова обычное включение
-  // Сразу после отключения USB система ~0.1 с питается через диод в P-MOSFET, на 0.5 В
-  // ниже ячейки: замер в это время показал бы почти пустую ячейку. Ждём 1.5 с.
-  if (usb_was && !usb && !unplug_wait) unplug_wait = true, unplug_at = now;
-  if (usb) unplug_wait = false;
-  if (unplug_wait) {
-    if (now - unplug_at < 1500) return;
-    unplug_wait = false;
+  // Замер откладывается. Сразу после отключения USB система ~0.1 с питается через диод в
+  // P-MOSFET, на 0.5 В ниже ячейки: замер показал бы почти пустую ячейку — ждём 1.5 с. После
+  // разрешения заряда статус MCP73832 устанавливается не сразу, а «USB есть, не заряжается»
+  // после зарядки значило бы «зарядилась до конца» — ждём 2 с.
+  if (usb_was && !usb && !holding) holding = true, hold_until = now + 1500;
+  if (opened) holding = true, hold_until = now + 2000;
+  if (holding) {
+    if (!time_reached(now, hold_until)) return;
+    holding = false;
+    next_batt = now;
   }
   if (!time_reached(now, next_batt) && usb == usb_was) return;
   usb_was = usb;
@@ -644,23 +693,57 @@ void poll_battery(uint32_t now) {
   }
 }
 
+// Шина датчиков заново: Wire выключается (пока TWIM включён, ножками управляет он, и такты
+// i2c_recover до шины не дошли бы), ведомый, зажавший SDA, отпускается тактами. Если SDA или
+// SCL так и остались в нуле, Wire не запускается, а датчики считаются потерянными: обмен по
+// зажатой шине в ядре ждёт без срока — до сброса сторожевым таймером.
+bool start_sensor_bus() {
+  Wire.end();
+  sensor_bus = hal::i2c_recover(PIN_WIRE_SDA, PIN_WIRE_SCL);
+  if (!sensor_bus) {
+    acc.lost();
+    als.lost();
+    return false;
+  }
+  Wire.begin();
+  Wire.setClock(400000);
+  hal::i2c_390k(0);
+  return true;
+}
+
 // Датчики, переставшие отвечать или потерявшие настройки (сброс питания, сбой шины), —
-// перезапуск, а не тишина до выключения.
+// перезапуск, а не тишина до выключения. Проверка раз в 10 с; неудачный перезапуск
+// повторяется всё реже, до раза в 5 минут: датчика, которого нет совсем, батарея не замечает.
+// Перезапуск держит цикл до ~0.2 с, поэтому не посреди звука и вибро.
 void check_sensors(uint32_t now) {
   if (!time_reached(now, next_health)) return;
+  if (voice.busy(now) || hal::vibro_busy()) return;  // проверим на следующем проходе
   next_health = now + 10000;
-  if (!acc.healthy()) {
-    hal::i2c_recover(PIN_WIRE_SDA, PIN_WIRE_SCL);
-    Wire.begin();
-    Wire.setClock(400000);
-    hal::i2c_390k(0);
-    if (acc.begin(Wire, board::kLis3dhAddr)) out_line("Акселерометр перезапущен");
+  const bool acc_bad = !acc.healthy();
+  const bool als_bad = !als.ok() || als_fail >= 3;
+  if (!acc_bad && !als_bad) {
+    fix_retry_ms = 10000;
+    return;
   }
-  if (!als.ok() || als_fail >= 3) {
+  if (!time_reached(now, next_fix)) return;
+  bool fixed = start_sensor_bus();
+  if (sensor_bus && acc_bad) {
+    if (acc.begin(Wire, board::kLis3dhAddr))
+      out_line("Акселерометр перезапущен");
+    else
+      fixed = false;
+  }
+  if (sensor_bus && als_bad) {
     als_fail = 0;
     als_measuring = false;
-    if (als.begin(Wire, board::kLtr303Addr)) out_line("Датчик света перезапущен");
+    if (als.begin(Wire, board::kLtr303Addr))
+      out_line("Датчик света перезапущен");
+    else
+      fixed = false;
   }
+  if (!sensor_bus) out_line("Шина датчиков зажата: SDA или SCL в нуле");
+  fix_retry_ms = fixed ? 10000 : fix_retry_ms < 150000 ? fix_retry_ms * 2 : 300000;
+  next_fix = now + fix_retry_ms;
 }
 
 // ---------------------------------------------------------------- встречи по радио
@@ -679,8 +762,8 @@ void poll_radio(uint32_t now) {
     if (!cfg.ghost) enc.on_advert(a, rssi, now);
 
   radio::Pace pace = radio::Pace::Normal;
-  // Ночью и в кармане эфир слушается редко, даже если рядом сосед: чаще — только когда
-  // общая сцена уже объявлена.
+  // Ночью и в кармане эфир не слушается, а реклама — раз в 10 с, даже если рядом сосед:
+  // часто — только когда общая сцена уже объявлена и её надо довести до конца.
   if (powering_off)
     pace = radio::Pace::Off;
   else if (enc.pending())
@@ -719,9 +802,6 @@ void poll_radio(uint32_t now) {
 }
 
 // ---------------------------------------------------------------- кнопка
-
-bool btn_down = false, long_fired = false, tap_pending = false;
-uint32_t btn_t0 = 0, btn_change = 0, tap_at = 0;
 
 void poll_button(uint32_t now) {
   const bool raw = digitalRead(board::kButton) == LOW;
@@ -928,7 +1008,7 @@ void command(char* s, uint32_t now) {
     return;
   }
   if (!strcmp(s, "dfu")) {
-    cfg.clock_min = (uint16_t)clock_minutes();
+    sync_clock();  // загрузчик вернётся в прошивку программным сбросом: часы продолжатся
     save_all(now, true);
     out_line("Перезагрузка в загрузчик");
     Serial.flush();
@@ -1004,9 +1084,9 @@ void off_on_usb() {
     } else if (armed) {
       delay(30);
       if (digitalRead(board::kButton) == LOW) {
+        // Держат дольше 10 с — сброс с зажатой кнопкой при USB: загрузчик ждёт прошивку.
         wait_release();
-        // Часы — с точностью до минуты: после программного сброса они продолжатся.
-        cfg.clock_min = (uint16_t)clock_minutes();
+        sync_clock();  // после программного сброса часы продолжатся
         save_all(now, true);
         NVIC_SystemReset();
       }
@@ -1032,10 +1112,9 @@ void setup() {
   hal::watchdog_start();
   Serial.begin(115200);
 
-  hal::i2c_recover(PIN_WIRE_SDA, PIN_WIRE_SCL);
-  Wire.begin();
-  Wire.setClock(400000);
-  hal::i2c_390k(0);
+  // Шина датчиков зажата (SDA или SCL в нуле) — датчики не трогаем: обмен по ней висел бы до
+  // сторожевого таймера, и брелок перезагружался бы по кругу без лица. Повторит check_sensors.
+  start_sensor_bus();
   load_all();
   // Часов реального времени у платы нет: после выключения неизвестно, сколько прошло.
   const bool clock_lost = !hal::warm_reset() && (cfg.clock_known || cfg.year);
@@ -1060,20 +1139,23 @@ void setup() {
   if (progress.days == 0) bh.new_day(now);
 
   // Выключились на пустой ячейке, и с тех пор не заряжали: кнопка показывает пустую батарею
-  // на секунду и снова выключает — полная загрузка с экраном, эфиром и микрофоном съела бы
-  // остаток, а через минуту брелок всё равно выключился бы.
+  // на полторы секунды и снова выключает — полная загрузка с экраном, эфиром и микрофоном
+  // съела бы остаток, а через минуту брелок всё равно выключился бы. Экран гасит system_off.
+  // Подключили USB, пока ждали кнопку, — system_off возвращается, и загрузка идёт дальше как
+  // обычно: start_oled ниже заново включает экран (часы движка при этом на 2 с впереди — это
+  // сдвигает только ближайшие моргания).
   if (cfg.empty_off && !hal::usb_present() && hal::vsys_volts() < 3.5f) {
     eng.set_expression(Expr::critical_battery, now, 0);
-    eng.update(now + 2000);  // переход уже закончился: в кадре само лицо
-    if (start_oled()) {
+    eng.update(now + 2000);  // значки на лице уже проявились
+    if (start_oled())
       for (int i = 0; i < 15; ++i) hal::watchdog_feed(), delay(100);
-      screen_power(false, now);
-    }
     hal::system_off();
   }
 
-  acc.begin(Wire, board::kLis3dhAddr);
-  als.begin(Wire, board::kLtr303Addr);
+  if (sensor_bus) {
+    acc.begin(Wire, board::kLis3dhAddr);
+    als.begin(Wire, board::kLtr303Addr);
+  }
   radio::begin();
   radio::set_ghost(cfg.ghost != 0);
 
@@ -1089,6 +1171,7 @@ void setup() {
                 acc.ok() ? "есть" : "нет", als.ok() ? "есть" : "нет");
   print_me();
   if (clock_lost) out_line("После выключения время и дата сброшены: задайте их командами t и date");
+  if (!sensor_bus) out_line("Шина датчиков зажата: SDA или SCL в нуле");
   // Кнопку, которой разбудили, ещё держат: это не новое нажатие и не удержание для выключения.
   if (digitalRead(board::kButton) == LOW) {
     btn_down = long_fired = true;
@@ -1175,9 +1258,13 @@ void loop() {
   // Ждём именно сцену выключения: если выключили посреди другой сцены, сначала доиграет она.
   if (powering_off && eng.scene() == Scene::shutdown) off_scene_seen = true;
   if (powering_off && ((off_scene_seen && eng.scene() == Scene::None && !voice.busy(now)) || now - off_at > 15000)) {
+    sync_clock();  // счёт суток без часов продолжится со следующего включения
     save_all(now, true);
     acc.power(false);
     als.power(false);
+    // Экран гаснет здесь, пока шина экрана работает: system_off выключает Wire1, и команда
+    // экрану после него ждала бы в ядре без срока.
+    screen_power(false, now);
     // Выключение на USB и полный сон по очереди: пока ждали кнопку, USB могли подключить
     // (system_off тогда возвращается), а вернётся off_on_usb, только когда USB отключат.
     for (;;) {
