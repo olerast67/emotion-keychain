@@ -6,8 +6,9 @@
 //                           отвечает (после сброса по питанию), lisreset — сброс LIS3DH,
 //                           wedge — контроллер экрана завис, sda <такты> и scl 0|1 — шина
 //                           датчиков зажата, dscl 0|1 и dbridge 0|1 — SCL шины экрана в нуле
-//                           или замкнута с SDA, osda — контроллер экрана после следующего
-//                           включения держит SDA; dieoffset <°C> — кристалл теплее воздуха
+//                           или замкнута с SDA, osda 1|2 — контроллер экрана держит SDA после
+//                           следующего включения или сразу; dieoffset <°C> — кристалл теплее
+//                           воздуха
 //   TAP 1|2 [мс]            касание или двойное касание (флаги детектора LIS3DH; у двойного —
 //                           второе касание через столько мс, по умолчанию 200)
 //   RX <rssi> <hex>         пакет из эфира — Bluefruit отдаст его прошивке, если слушает
@@ -268,7 +269,7 @@ void serve() {
       if (!strcmp(key, "scl")) w.scl_stuck = a != 0;
       if (!strcmp(key, "dscl")) w.dscl_stuck = a != 0;
       if (!strcmp(key, "dbridge")) w.disp_bridge = a != 0;
-      if (!strcmp(key, "osda")) sim::oled_dev.arm_sda_hold();
+      if (!strcmp(key, "osda")) sim::oled_dev.arm_sda_hold(a >= 2);
       if (!strcmp(key, "dieoffset")) w.die_offset = a;
     } else if (!strcmp(line, "TAP") && arg) {
       sim::world_changing();

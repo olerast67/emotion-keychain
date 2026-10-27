@@ -262,7 +262,7 @@ for (const [vk, model] of Object.entries(DATA.variants)) {
   add(face, L_MODULE, "module", vk);
   add(box(pinsX0, py - 1.25, pinsX1, py + 1.25, h - K.header_plastic, h, mat("#141414")), L_MODULE, "module", vk);
   for (const [x, y] of DATA.pins) {
-    add(cyl(x, y, 0.32, -T - 0.8, h + mt + K.pin_top, mat("#d6b36a", { metalness: 0.9, roughness: 0.3 }), 8),
+    add(cyl(x, y, 0.32, -T - 0.8, h + K.header_short, mat("#d6b36a", { metalness: 0.9, roughness: 0.3 }), 8),
         L_MODULE, "module", vk);
   }
   // Силиконовая трубка микрофона: от отверстия в плате до крышки.

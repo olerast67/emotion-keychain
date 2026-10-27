@@ -100,10 +100,18 @@ flowchart LR
 
 **Корпус** — слои акрила, стянутые четырьмя винтами M2. Экран и плата видны насквозь, торцы закрыты. Три версии, S, M и L, отличаются только ячейкой и верхней рамкой вокруг неё: на ушках рамок лежит модуль экрана, покупных стоек нет. Сверху выходит ушко для кольца, снизу — вырез под USB-C, справа — толкатель кнопки. Файлы резки в SVG и DXF лежат в [`hardware/rev-b/case/out`](hardware/rev-b/case/out).
 
+**Для заказа платы ничего запускать не нужно:** она разведена и проверена, файлы для завода лежат в [`hardware/rev-b/out`](hardware/rev-b/out) (одна плата) и [`hardware/rev-b/out/panel`](hardware/rev-b/out/panel) (панель для монтажа) и загружаются как есть — по [README платы](hardware/rev-b/README.md#заказ-на-jlcpcb). Генераторы нужны, только чтобы изменить плату или корпус:
+
 ```sh
 cd hardware/rev-b/gen
-python3 build.py place && python3 build.py route && python3 build.py fab   # плата → out/
-cd ../case && python3 case.py && python3 viewer.py                         # корпус и 3D-просмотр
+python3 build.py fab        # DRC и файлы для заказа → out/, out/panel/ (панель — через KiKit, см. README платы)
+cd ../case && python3 case.py && python3 viewer.py   # корпус и 3D-просмотр
+```
+
+`build.py place --force` и `build.py route` расставляют и разводят плату заново (для `route` нужны Java 21 и Freerouting). Без `--force` `place` разведённую плату не затрёт, а `fab` не выпустит файлы с платы без дорожек, с ошибками DRC или несоединёнными площадками. Вернуть плату и файлы из репозитория:
+
+```sh
+git checkout -- hardware/rev-b/keychain-rev-b.kicad_pcb hardware/rev-b/Keychain.pretty hardware/rev-b/out
 ```
 
 `viewer.py` собирает `case/out/keychain-3d.html`: модель брелока с вращением и разбором по слоям. Открывается в браузере без сервера.

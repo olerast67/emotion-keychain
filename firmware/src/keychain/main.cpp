@@ -1254,6 +1254,22 @@ void loop() {
     const uint8_t c = wanted_contrast();
     if (c != shown_contrast && oled.contrast(c)) shown_contrast = c;
   }
+  // Контроллер, зажавший SDA посреди работы, по обмену не виден: экран только пишут, а ноль на
+  // SDA читается как подтверждение. Между обменами обе линии шины в единице (вход ножки при
+  // TWIM подключён); ноль две проверки подряд (раз в секунду) — экран считается пропавшим, и
+  // повтор в начале loop перезапускает его питание.
+  static uint32_t next_bus_check = 0;
+  static uint8_t bus_low_n = 0;
+  if (have_oled && screen_on && time_reached(now, next_bus_check)) {
+    next_bus_check = now + 1000;
+    const bool low = digitalRead(PIN_WIRE1_SDA) == LOW || digitalRead(PIN_WIRE1_SCL) == LOW;
+    bus_low_n = low ? (uint8_t)(bus_low_n + 1) : 0;
+    if (bus_low_n >= 2) {
+      bus_low_n = 0;
+      have_oled = false;
+      out_line("Шина экрана зажата посреди работы: экран перезапускается");
+    }
+  }
   // В кармане дольше минуты — экран обесточен; свет, касание или кнопка его вернут.
   if (bh.brightness() == Brightness::Dark && eng.scene() == Scene::None) {
     if (!dark_timing) dark_timing = true, dark_since = now;

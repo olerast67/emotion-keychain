@@ -26,10 +26,15 @@ MOTOR = {"d": 8.0, "pad_x": 5.2, "pad_y": (-1.4, 1.4)}
 HEAD = '(footprint "{name}" (version 20221018) (generator "keychain")\n  (layer "F.Cu")\n  (descr "{descr}")\n  (attr {attr})\n'
 
 
-def _text(kind, text, x, y, layer, size=0.8, hide=False):
+SILK_LINE = 0.16  # мм: линия знаков на шёлке — минимум JLCPCB 0.153
+
+
+def _text(kind, text, x, y, layer, size=0.8, hide=False, width=None):
+    """Надпись; на шёлке линия не тоньше SILK_LINE. width — ширина знака, если уже высоты."""
     h = " hide" if hide else ""
+    t = max(SILK_LINE, size * 0.16) if "SilkS" in layer else size * 0.15
     return (f'  (fp_text {kind} "{text}" (at {x:.3f} {y:.3f}) (layer "{layer}"){h}\n'
-            f'    (effects (font (size {size} {size}) (thickness {size * 0.15:.3f}))))\n')
+            f'    (effects (font (size {size} {width or size}) (thickness {t:.3f}))))\n')  # высота, ширина
 
 
 def _line(x0, y0, x1, y1, layer, w=0.1):
@@ -69,8 +74,9 @@ def oled_module():
         dy = 2.0 if sy < 0 else -2.0
         s += _line(sx, sy, sx + dx, sy, "F.SilkS", 0.15)
         s += _line(sx, sy, sx, sy + dy, "F.SilkS", 0.15)
+    # Подписи штырей — 1.0 мм, знак уже (0.75), чтобы SCL и SDA не сливались при шаге 2.54.
     for i, label in enumerate(("1", "2", "SCL", "SDA")):
-        s += _text("user", label, -3.81 + 2.54 * i, 1.7, "F.SilkS", 0.7)
+        s += _text("user", label, -3.81 + 2.54 * i, 1.8, "F.SilkS", 1.0, width=0.75)
     # Двор: только вокруг штырей и крепежа, под модулем живёт батарея.
     s += _rect(-5.1, -1.3, 5.1, 1.3, "F.CrtYd", 0.05)
     holes = []
@@ -129,7 +135,7 @@ def vibro_motor():
     for i, (label, y) in enumerate(zip(("+", "-"), m["pad_y"])):
         s += (f'  (pad "{i + 1}" smd roundrect (at {m["pad_x"]:.3f} {y:.3f}) (size 1.4 1.2) '
               f'(layers "F.Cu" "F.Mask") (roundrect_rratio 0.25))\n')
-        s += _text("user", label, m["pad_x"], y + (-1.65 if i == 0 else 1.65), "F.SilkS", 0.8)
+        s += _text("user", label, m["pad_x"], y + (-1.65 if i == 0 else 1.65), "F.SilkS", 1.0)
     return s + ")\n"
 
 

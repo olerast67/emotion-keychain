@@ -23,6 +23,7 @@ VIA_COST = 12.0
 NARROW = 0.15  # мм: запасная ширина, если класс не проходит
 HOLE_CLEAR = 0.25  # от края отверстия до чужой меди (DRC требует 0.2)
 VIA_HOLE_R = 0.125  # радиус отверстия переходного (0.25 мм)
+HOLE_GAP = 0.5  # отверстия разных цепей край к краю — норма JLCPCB (build.HOLE_GAP)
 TURN_COST = 0.5
 
 
@@ -172,7 +173,13 @@ class Board:
                     continue
                 clr = max(clr_own, _cls(n)["clearance"], HOLE_CLEAR if kind == "h" else 0) + 0.01
                 self.mark(bad, kind, g, clr + half)
-                self.mark(vbad, kind, g, clr + via_r)
+                vclr = clr + via_r
+                if kind in ("c", "h"):
+                    # Отверстие чужого переходного или площадки: до отверстия нового — не ближе
+                    # HOLE_GAP край к краю. У площадки радиус отверстия не больше g[2] — с запасом.
+                    other_hole = VIA_HOLE_R if kind == "c" else g[2]
+                    vclr = max(vclr, HOLE_GAP + VIA_HOLE_R + other_hole - g[2] + 0.01)
+                self.mark(vbad, kind, g, vclr)
             track.append(bad)
             via |= vbad
         via |= self.edge_mask(EDGE + via_r)

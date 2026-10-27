@@ -262,7 +262,7 @@ def main():
             "oled": {"x": mod_x0, "y": mod_y0, **o}, "pins": pins, "screws": screws,
             "cell": {"x": bx - footprints.CELL["w"] / 2, "y": by - footprints.CELL["h"] / 2,
                      "w": footprints.CELL["w"], "h": footprints.CELL["h"]},
-            "k": {"module_t": case.MODULE_T, "glass_t": case.GLASS_T, "pin_top": case.PIN_TOP,
+            "k": {"module_t": case.MODULE_T, "glass_t": case.GLASS_T, "header_short": case.HEADER_SHORT,
                   "header_plastic": case.HEADER_PLASTIC, "under_cell": case.UNDER_CELL,
                   "tube_od": case.TUBE_OD, "nut_t": case.NUT_T},
             "variants": variants,

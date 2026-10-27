@@ -11,7 +11,7 @@ C16,3.600mm,-10.600mm,Bottom,90
 D1,23.600mm,-32.200mm,Bottom,180
 D2,16.400mm,-31.000mm,Bottom,180
 D3,7.300mm,-43.600mm,Bottom,90
-J1,15.000mm,-43.000mm,Bottom,0
+J1,15.000mm,-43.000mm,Bottom,180
 LED1,5.600mm,-40.400mm,Bottom,180
 Q1,23.600mm,-36.400mm,Bottom,0
 Q2,8.000mm,-15.400mm,Bottom,0
@@ -36,8 +36,8 @@ R16,10.400mm,-23.000mm,Bottom,90
 R18,13.400mm,-23.000mm,Bottom,90
 R20,7.600mm,-33.800mm,Bottom,180
 SW1,27.400mm,-25.400mm,Bottom,90
-U2,5.200mm,-37.200mm,Bottom,0
-U3,15.000mm,-35.800mm,Bottom,0
+U2,5.200mm,-37.200mm,Bottom,90
+U3,15.000mm,-35.800mm,Bottom,90
 U4,13.600mm,-15.200mm,Bottom,180
 U6,6.600mm,-10.400mm,Bottom,180
 C4,8.800mm,-9.600mm,Top,0

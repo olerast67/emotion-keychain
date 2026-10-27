@@ -82,14 +82,14 @@ MODULE_T = 1.2      # плата модуля
 GLASS_T = 1.4       # стекло с поляризатором на скотче
 MODULE_GAP = 0.5    # рамка экрана вокруг платы модуля: у продавцов размеры гуляют на ±0.2
 GLASS_GAP = 0.3     # шайбы не ближе к стеклу: нижние упираются в стекло уже на 1.9 мм от оси
-PIN_TOP = 1.8       # короткий конец штыря над платой модуля (3.0 − 1.2)
 MODULE_BACK = (1.1, 1.45)  # самая высокая деталь на обороте модуля: SOT-23 … конденсатор 0805
 MODULE_FREE_R = 3.3        # у отверстий модуля на обороте нет деталей: там обычно стоят стойки
 # Шлейф стекла загибается за нижний край платы модуля по центру. Ширину и вылет у
 # продавцов никто не пишет: берём с запасом.
 FPC_W, FPC_OUT = 13.0, 0.7
 
-# Гребёнка 2.54: пластик 2.5 под модулем, хвост 6 мм, короткий конец 3 мм.
+# Гребёнка 2.54: пластик 2.5 под модулем, хвост 6 мм, короткий конец 3 мм — он выходит над
+# платой модуля на 3 − MODULE_T (1.8 мм на плате 1.2).
 HEADER_PLASTIC, HEADER_TAIL, HEADER_SHORT = 2.5, 6.0, 3.0
 PIN_OUT_MIN = 0.5   # штырь выходит из платы для пайки не меньше
 LONG_HEADER = 15.0  # длинная гребёнка: 3 + 2.5 + 9.5
@@ -135,6 +135,7 @@ BTN_WING_CH = 0.6   # срез наружного угла крыла: карм�
 BTN_PLAY_Y = 0.1    # зазор толкателя в кармане по y на сторону
 BOARD_TOL = 0.2     # край платы после фрезеровки гуляет на ±0.2
 BTN_UNDER = 0.3     # крылья под платой при любом резе и самой маленькой плате
+BTN_HELD_Y = 0.8    # и полосой по y не короче: под платой крыло, а не его угол
 
 # Пищалка BZ1 на обороте звучит отверстием от платы, то есть в дно: в дне против неё отверстие.
 BUZZER_D = 3.0
@@ -535,7 +536,7 @@ def build(v):
         "стекло": (h + MODULE_T, h + MODULE_T + GLASS_T, glass, NEED["стекло"], {}),
         "детали оборота модуля": (h - MODULE_BACK[1], h, module_back, NEED["оборот модуля"], {}),
         "пластик гребёнки": (h - HEADER_PLASTIC, h, plastic, NEED["пластик гребёнки"], {}),
-        "штыри экрана": (-1.6 - 1.0, h + MODULE_T + PIN_TOP, pin_pads, NEED["штыри экрана"], {}),
+        "штыри экрана": (-1.6 - 1.0, h + HEADER_SHORT, pin_pads, NEED["штыри экрана"], {}),
         "шлейф стекла": (fpc_z[0], fpc_z[1], fpc, NEED["шлейф стекла"], {}),
         "ячейка": (UNDER_CELL, UNDER_CELL + cfg["cell_t"] + SWELL, cell, NEED["ячейка"], {}),
         "вилка USB-C": (plug_z[0] - plug_need, plug_z[1] + plug_need, plug, plug_need, {}),
@@ -621,7 +622,7 @@ def check(v, parts, solids, info):
         soft.append(f"рамка экрана ниже крышки на {gap:.2f} мм, нужно 0.1…0.3: {fix}")
     if parts["cover"]["z"] - (h + MODULE_T + GLASS_T) < 0.5 - 1e-9:
         soft.append("над стеклом меньше 0.5 мм: шайбы режьте из листа потолще")
-    if parts["cover"]["z"] - (h + MODULE_T + PIN_TOP) < 0.15 - 1e-9:
+    if parts["cover"]["z"] - (h + HEADER_SHORT) < 0.15 - 1e-9:
         soft.append("штыри над модулем ближе 0.15 мм к крышке: укоротите их над модулем")
     if max(hgt for _, hgt in b["back"].values()) > parts["frame_back"]["t"] - 0.5 + 1e-9:
         soft.append("деталь оборота ближе 0.5 мм к дну: рамку оборота режьте из листа потолще")
@@ -664,12 +665,18 @@ def check(v, parts, solids, info):
     sides = (rect(W / 2, -10, W + 10, info["btn_y"]), rect(W / 2, info["btn_y"], W + 10, H + 10))
     fb = material(parts["frame_back"])
     sw_body = rect(*b["sw_body"])
+
+    def under(rest, side):
+        """Полоса толкателя под платой с этой стороны кнопки: длина по y, мм."""
+        s = intersect(intersect(rest, held_zone), side)
+        return bbox(s)[3] - bbox(s)[1] if area(s) > 1e-3 else 0.0
+
     for k in (0.0, KERF_MAX):
         rest = plunger_at(btn, k)
-        held = all(area(intersect(intersect(rest, held_zone), side)) > 1e-3 for side in sides)
+        held = all(under(rest, side) >= BTN_HELD_Y - 1e-6 for side in sides)
         if not held:
             err.append(f"толкатель при резе {k:g} мм: крылья заходят под плату меньше {BTN_UNDER:g} мм "
-                       f"(край платы ±{BOARD_TOL:g}) — толкатель поднимется к плате")
+                       f"(край платы ±{BOARD_TOL:g}) полосой короче {BTN_HELD_Y:g} мм — толкатель поднимется к плате")
         lift = 0.0 if held else parts["frame_cell1"]["z"] - btn_top
         s_need = (info["x0"] + 1.5 * k) - (tip - SW_TRAVEL)
         if btn_top + lift > -BOARD_T + 1e-6 and \
@@ -796,9 +803,9 @@ def buy(v, n):
     cfg = VARIANTS[v]
     frames = ", ".join(f"{t:g}" for t in n["sheets"] if t != 2.0)
     screw = (f"Винты M2 × {n['screw']} нейлоновые с цилиндрической или полукруглой головкой, не потайные, и гайки M2, "
-             f"лучше тоже нейлоновые, — по 4 шт. Винт выйдет из гайки на {n['screw_out']:g} мм: после затяжки "
-             f"откусите, оставив около {SCREW_TRIM_OUT:g} мм. Нейлоновых не нашлось — подойдут стальные "
-             f"M2 × {n['screw_steel']}, но радио у антенны станет чуть слабее")
+             f"лучше тоже нейлоновые, — по 4 шт. Винт выйдет из гайки на {n['screw_out']:g} мм: после окончательной "
+             f"затяжки откусите, оставив около {SCREW_TRIM_OUT:g} мм. Нейлоновых M2 × {n['screw']} не нашлось — можно "
+             f"стальные M2 × {n['screw_steel']} с нейлоновыми гайками, но радио у антенны станет чуть слабее")
     if n["long_header"]:
         header = (f"Модуль экрана без впаянной гребёнки и длинная гребёнка 2.54 на 4 штыря, 15 мм и длиннее "
                   f"(штыри выйдут из платы на {n['long_header_out']:g} мм, лишнее откусить)")

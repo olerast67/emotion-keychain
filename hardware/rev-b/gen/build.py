@@ -1,12 +1,22 @@
-"""Плата rev B: расстановка, трассировка, проверка и файлы для заказа на JLCPCB.
+"""Плата rev B: расстановка, трассировка, проверка и файлы для заказа.
 
-    python3 hardware/rev-b/gen/build.py place   # расставить детали, без дорожек
-    python3 hardware/rev-b/gen/build.py route   # + трассировка Freerouting, заливка, DRC
-    python3 hardware/rev-b/gen/build.py fab     # Gerber, сверловка, BOM и CPL для JLCPCB, превью
-    python3 hardware/rev-b/gen/build.py all
+Плата в репозитории уже разведена и проверена, а файлы для заказа лежат в out/. Для заказа
+ничего запускать не нужно. Скрипты нужны, только чтобы изменить плату:
 
-Нужны KiCad 7 (pcbnew для Python и kicad-cli) и Java 21 с Freerouting 2.1:
-путь к freerouting.jar — в переменной FREEROUTING_JAR.
+    python3 hardware/rev-b/gen/build.py place --force  # расставить детали заново, БЕЗ дорожек
+    python3 hardware/rev-b/gen/build.py route   # переходные, шины питания, Freerouting, доводка, DRC
+    python3 hardware/rev-b/gen/build.py finish  # доводка разведённой платы: паста, шёлк, отверстия
+    python3 hardware/rev-b/gen/build.py fab     # DRC, Gerber, BOM и CPL, файлы PCBWay, панель, превью
+    python3 hardware/rev-b/gen/build.py all --force
+
+place заменяет разведённую плату платой без дорожек, поэтому без --force отказывается, если
+в плате уже есть дорожки. route сначала проверяет Java и Freerouting и только потом трогает
+плату. fab сам прогоняет DRC и не пишет файлы для заказа, если есть ошибки, несоединённые
+площадки или в плате нет дорожек. Вернуть плату и файлы из репозитория:
+git checkout -- hardware/rev-b/keychain-rev-b.kicad_pcb hardware/rev-b/Keychain.pretty hardware/rev-b/out
+
+Нужны KiCad 7 (pcbnew для Python и kicad-cli); для route — Java 21 и Freerouting 2.1
+(путь к freerouting.jar — в FREEROUTING_JAR); для панели в fab — KiKit 1.5 (см. panel.py).
 """
 import csv
 import json
@@ -30,6 +40,7 @@ REV = os.path.normpath(os.path.join(HERE, ".."))
 NAME = "keychain-rev-b"
 PCB = os.path.join(REV, NAME + ".kicad_pcb")
 PRO = os.path.join(REV, NAME + ".kicad_pro")
+DRU = os.path.join(REV, NAME + ".kicad_dru")
 OUT = os.path.join(REV, "out")
 WORK = os.path.join(REV, "out", "work")
 LIB = os.path.join(REV, "Keychain.pretty")
@@ -40,6 +51,15 @@ KICAD_FP = os.environ.get("KICAD7_FOOTPRINT_DIR", "/usr/share/kicad/footprints")
 # датчики; ниже — модуль экрана на высоте батареи.
 W, H, R = netlist.BOARD_W, netlist.BOARD_H, 2.0
 MM = pcbnew.FromMM
+
+# Отверстия разных цепей — не ближе 0.5 мм край к краю: норма JLCPCB (той же цепи — 0.254 мм).
+# В общих правилах проекта такой нормы нет, она — своим правилом в .kicad_dru.
+HOLE_GAP = 0.5
+DRU_TEXT = """(version 1)
+(rule "JLCPCB hole to hole, different nets"
+  (constraint hole_to_hole (min {gap}mm))
+  (condition "A.Net != B.Net"))
+""".format(gap=HOLE_GAP)
 
 
 def V(x, y):
@@ -100,6 +120,13 @@ def write_project():
     }
     with open(PRO, "w") as f:
         json.dump(pro, f, indent=2, ensure_ascii=False)
+    write_dru()
+
+
+def write_dru(path=DRU):
+    """Свои правила DRC рядом с проектом: KiCad читает их вместе с .kicad_pro."""
+    with open(path, "w") as f:
+        f.write(DRU_TEXT)
 
 
 # ---------------------------------------------------------------- геометрия
@@ -219,29 +246,222 @@ def has_copper_zones(board):
     return any(not z.GetIsRuleArea() for z in board.Zones())
 
 
+SILK_LINE = footprints.SILK_LINE  # мм: линия знаков на шёлке, минимум JLCPCB 0.153
+
+
 def add_texts(board):
-    def text(s, x, y, layer, size=0.8, mirrored=False, angle=0):
+    """Надписи на шёлке из netlist.SILK_*: высота SILK_H, линия SILK_LINE."""
+    def text(s, x, y, layer, width, mirrored=False):
         t = pcbnew.PCB_TEXT(board)
         t.SetText(s)
         t.SetPosition(V(x, y))
         t.SetLayer(layer)
-        t.SetTextSize(V(size, size))
-        t.SetTextThickness(MM(size * 0.16))
+        t.SetTextSize(V(width, netlist.SILK_H))
+        t.SetTextThickness(MM(SILK_LINE))
         t.SetMirrored(mirrored)
-        if angle:
-            t.SetTextAngleDegrees(angle)
         board.Add(t)
 
-    bs = pcbnew.B_SilkS
-    for s, x, y in netlist.SILK_BACK:
-        text(s, x, y, bs, 0.8, mirrored=True)
-    for s, x, y in netlist.SILK_FRONT:
-        text(s, x, y, pcbnew.F_SilkS, 0.8)
+    for layer, items in ((pcbnew.B_SilkS, netlist.SILK_BACK), (pcbnew.F_SilkS, netlist.SILK_FRONT)):
+        for s, x, y, *w in items:
+            text(s, x, y, layer, w[0] if w else netlist.SILK_H, mirrored=layer == pcbnew.B_SilkS)
+
+
+def sync_texts(board):
+    """Надписи платы — заново из netlist.SILK_*, а надписи своих посадочных мест (Keychain) —
+    по библиотеке: размер, линия, место. Медь и детали не трогаются."""
+    for d in list(board.GetDrawings()):
+        if isinstance(d, pcbnew.PCB_TEXT) and d.GetLayer() in (pcbnew.F_SilkS, pcbnew.B_SilkS):
+            board.Delete(d)
+    add_texts(board)
+    for fp in board.GetFootprints():
+        fpid = fp.GetFPID()
+        if str(fpid.GetLibNickname()) != "Keychain":
+            continue
+        lib = pcbnew.FootprintLoad(LIB, str(fpid.GetLibItemName()))
+        want = {(g.GetText(), g.GetLayer()): g for g in lib.GraphicalItems()
+                if isinstance(g, pcbnew.FP_TEXT) and g.GetType() == pcbnew.FP_TEXT.TEXT_is_DIVERS}
+        flip = fp.IsFlipped()
+        for g in fp.GraphicalItems():
+            if not isinstance(g, pcbnew.FP_TEXT) or g.GetType() != pcbnew.FP_TEXT.TEXT_is_DIVERS:
+                continue
+            layer = pcbnew.FlipLayer(g.GetLayer()) if flip else g.GetLayer()
+            src = want.get((g.GetText(), layer))
+            if src is None:
+                continue
+            g.SetTextSize(src.GetTextSize())
+            g.SetTextThickness(src.GetTextThickness())
+            p = src.GetPos0()
+            g.SetPos0(pcbnew.VECTOR2I(p.x, -p.y) if flip else p)
+            g.SetDrawCoord()
+
+
+def strip_paste(board):
+    """Площадки деталей, которых завод не ставит (руками и DNP), — без пасты: трафарет не печатает
+    на них припой. У DNP-перемычек R17/R19 капля между площадками замкнула бы питание экрана."""
+    n = 0
+    for fp in board.GetFootprints():
+        if not fp.GetAttributes() & pcbnew.FP_EXCLUDE_FROM_POS_FILES:
+            continue
+        for pad in fp.Pads():
+            ls = pad.GetLayerSet()
+            if ls.Contains(pcbnew.F_Paste) or ls.Contains(pcbnew.B_Paste):
+                ls.RemoveLayer(pcbnew.F_Paste)
+                ls.RemoveLayer(pcbnew.B_Paste)
+                pad.SetLayerSet(ls)
+                n += 1
+    return n
+
+
+def paste_on_unplaced(board):
+    """Площадки с пастой у деталей, которых нет в CPL: [(ref, pad)]. Должно быть пусто."""
+    return [(fp.GetReference(), pad.GetNumber()) for fp in board.GetFootprints()
+            if fp.GetAttributes() & pcbnew.FP_EXCLUDE_FROM_POS_FILES for pad in fp.Pads()
+            if pad.IsOnLayer(pcbnew.F_Paste) or pad.IsOnLayer(pcbnew.B_Paste)]
+
+
+def clip_silk(board):
+    """Отрезки шёлка посадочных мест — только внутри контура платы (с полушириной линии):
+    за краем завод их всё равно срезает. Вышедший за край отрезок укорачивается, целиком
+    снаружи — удаляется. Так DRC, превью и сборочные чертежи показывают то, что выйдет."""
+    outline = pcbnew.SHAPE_POLY_SET()
+    board.GetBoardPolygonOutlines(outline)
+    inner = {}
+    cut = removed = 0
+    for fp in board.GetFootprints():
+        for g in list(fp.GraphicalItems()):
+            if not isinstance(g, pcbnew.FP_SHAPE) or g.GetLayer() not in (pcbnew.F_SilkS, pcbnew.B_SilkS) \
+                    or g.GetShape() != pcbnew.SHAPE_T_SEGMENT:
+                continue
+            w = g.GetWidth()
+            if w not in inner:
+                inner[w] = pcbnew.SHAPE_POLY_SET(outline)
+                inner[w].Inflate(-(w // 2 + MM(0.02)), 16)
+            a, b = pcbnew.VECTOR2I(g.GetStart()), pcbnew.VECTOR2I(g.GetEnd())
+            n = max(2, int(math.hypot(b.x - a.x, b.y - a.y) / MM(0.01)))
+            pts = [pcbnew.VECTOR2I(int(a.x + (b.x - a.x) * i / n), int(a.y + (b.y - a.y) * i / n)) for i in range(n + 1)]
+            ok = [inner[w].Contains(p) for p in pts]
+            if all(ok):
+                continue
+            runs, start = [], None
+            for i, v in enumerate(ok + [False]):
+                if v and start is None:
+                    start = i
+                elif not v and start is not None:
+                    runs.append((start, i - 1))
+                    start = None
+            runs = [r for r in runs if r[1] - r[0] >= 10]  # короче 0.1 мм — не линия
+            if not runs:
+                fp.Delete(g)
+                removed += 1
+                continue
+            i0, i1 = max(runs, key=lambda r: r[1] - r[0])
+            g.SetStart(pts[i0])
+            g.SetEnd(pts[i1])
+            g.SetLocalCoord()
+            cut += 1
+    return cut, removed
+
+
+def mask_openings(board, side):
+    """Окна маски стороны side (F или B) — площадки с их отступом маски, координаты платы."""
+    layer = pcbnew.F_Mask if side == "F" else pcbnew.B_Mask
+    out = pcbnew.SHAPE_POLY_SET()
+    for fp in board.GetFootprints():
+        for pad in fp.Pads():
+            if not pad.IsOnLayer(layer):
+                continue
+            p = pcbnew.SHAPE_POLY_SET(pad.GetEffectivePolygon())
+            p.Inflate(pad.GetSolderMaskExpansion(), 16)
+            out.BooleanAdd(p, pcbnew.SHAPE_POLY_SET.PM_FAST)
+    return out
+
+
+def trim_silk_polys(board, clearance=0.02):
+    """Закрашенные метки на шёлке (треугольники первого вывода) отступают от окон маски: завод
+    срезает шёлк над площадками, а DRC так не ругается на обрезанную метку (U6 рядом с R8)."""
+    opens = {s: mask_openings(board, s) for s in "FB"}
+    n = 0
+    for fp in board.GetFootprints():
+        a = fp.GetOrientation().AsRadians()
+        ca, sa = math.cos(a), math.sin(a)
+        pos = fp.GetPosition()
+        for g in fp.GraphicalItems():
+            if not isinstance(g, pcbnew.FP_SHAPE) or g.GetShape() != pcbnew.SHAPE_T_POLY \
+                    or g.GetLayer() not in (pcbnew.F_SilkS, pcbnew.B_SilkS):
+                continue
+            # Многоугольник посадочного места хранится в его координатах: в плату — поворот и сдвиг.
+            local = g.GetPolyShape()
+            if local.OutlineCount() != 1:
+                continue
+            o = local.Outline(0)
+            pts = [o.CPoint(i) for i in range(o.PointCount())]
+            board_poly = pcbnew.SHAPE_POLY_SET()
+            board_poly.NewOutline()
+            for p in pts:
+                board_poly.Append(int(pos.x + p.x * ca + p.y * sa), int(pos.y - p.x * sa + p.y * ca))
+            hole = pcbnew.SHAPE_POLY_SET(opens["F" if g.GetLayer() == pcbnew.F_SilkS else "B"])
+            hole.Inflate(MM(clearance) + g.GetWidth() // 2, 16)
+            test = pcbnew.SHAPE_POLY_SET(board_poly)
+            test.BooleanIntersection(hole, pcbnew.SHAPE_POLY_SET.PM_FAST)
+            if not test.OutlineCount():
+                continue
+            board_poly.BooleanSubtract(hole, pcbnew.SHAPE_POLY_SET.PM_FAST)
+            if board_poly.OutlineCount() != 1:
+                continue
+            ob = board_poly.Outline(0)
+            res = pcbnew.SHAPE_POLY_SET()
+            res.NewOutline()
+            for i in range(ob.PointCount()):
+                q = ob.CPoint(i)
+                dx, dy = q.x - pos.x, q.y - pos.y
+                res.Append(int(dx * ca - dy * sa), int(dx * sa + dy * ca))
+            g.SetPolyShape(res)
+            n += 1
+    return n
+
+
+def silk_check(board, clearance=0.15):
+    """Надписи на шёлке ближе clearance к окну маски или к краю платы: [(надпись, сторона, x, y)].
+    Норма JLCPCB: шёлк не ближе 0.15 мм к площадкам."""
+    outline = pcbnew.SHAPE_POLY_SET()
+    board.GetBoardPolygonOutlines(outline)
+    inner = pcbnew.SHAPE_POLY_SET(outline)
+    inner.Inflate(-MM(clearance), 16)
+    opens = {s: mask_openings(board, s) for s in "FB"}
+    texts = [d for d in board.GetDrawings() if isinstance(d, pcbnew.PCB_TEXT)]
+    texts += [g for fp in board.GetFootprints() for g in fp.GraphicalItems()
+              if isinstance(g, pcbnew.FP_TEXT) and g.IsVisible()]
+    bad = []
+    for t in texts:
+        if t.GetLayer() not in (pcbnew.F_SilkS, pcbnew.B_SilkS):
+            continue
+        side = "F" if t.GetLayer() == pcbnew.F_SilkS else "B"
+        shp = t.GetEffectiveTextShape()
+        bb = shp.BBox()
+        corners = [pcbnew.VECTOR2I(x, y) for x in (bb.GetX(), bb.GetRight()) for y in (bb.GetY(), bb.GetBottom())]
+        if shp.Collide(opens[side], MM(clearance)) or not all(inner.Contains(c) for c in corners):
+            p = t.GetPosition()
+            bad.append((t.GetText(), side, round(pcbnew.ToMM(p.x), 2), round(pcbnew.ToMM(p.y), 2)))
+    return bad
 
 
 # ---------------------------------------------------------------- расстановка
 
-def place():
+def board_tracks(path=PCB):
+    """Сколько дорожек и переходных в файле платы; 0 — если файла нет."""
+    if not os.path.exists(path):
+        return 0
+    return len(pcbnew.LoadBoard(path).GetTracks())
+
+
+def place(force=False):
+    n = board_tracks()
+    if n and not force:
+        sys.exit(f"{os.path.relpath(PCB, REV)}: в плате {n} дорожек и переходных — это разведённая плата.\n"
+                 "place заменит её платой без дорожек. Если так и надо (меняете расстановку и потом\n"
+                 "разводите заново через route), запустите: build.py place --force\n"
+                 "Вернуть плату из репозитория: git checkout -- hardware/rev-b/keychain-rev-b.kicad_pcb "
+                 "hardware/rev-b/Keychain.pretty hardware/rev-b/out")
     os.makedirs(WORK, exist_ok=True)
     footprints.write(LIB)
     board = pcbnew.BOARD()
@@ -294,6 +514,9 @@ def place():
     add_keepouts(board)
     net("GND")  # заливки земли добавляются после трассировки (route)
     add_texts(board)
+    strip_paste(board)
+    clip_silk(board)
+    trim_silk_polys(board)
     # Сначала файл проекта с классами цепей и нормами, потом плата без своих настроек:
     # при загрузке KiCad возьмёт правила из проекта.
     write_project()
@@ -323,7 +546,7 @@ def fill(board):
 def freerouting_jar():
     jar = os.environ.get("FREEROUTING_JAR")
     if not jar or not os.path.exists(jar):
-        sys.exit("укажи путь к freerouting.jar (2.1.x) в FREEROUTING_JAR")
+        sys.exit("route: укажи путь к freerouting.jar (2.1.x) в FREEROUTING_JAR; плата не тронута")
     return jar
 
 
@@ -402,7 +625,8 @@ class Space:
                 c = fp.GetCourtyard(layer)
                 if c.OutlineCount():
                     self.no_via.append(c)
-        self.holes = [(pad.GetPosition(), pad.GetDrillSize().x / 2) for pad, _, _ in self.pads if pad.GetDrillSize().x > 0]
+        self.holes = [(pad.GetPosition(), pad.GetDrillSize().x / 2, pad.GetNetname())
+                      for pad, _, _ in self.pads if pad.GetDrillSize().x > 0]
         # уже проложенная медь: (начало, конец, полуширина, слой — None у переходных, цепь)
         self.copper = []
         for t in board.GetTracks():
@@ -425,12 +649,18 @@ class Space:
         for q, qp in near_pads:
             if qp.Collide(c, MM(r + (0.05 if q.GetNetname() == net else net_clr(net, q.GetNetname()) + 0.02))):
                 return False
-        if any(math.hypot(c.x - h.x, c.y - h.y) < MM(r + 0.25) + hr for h, hr in self.holes):
+        # Отверстия площадок: медь не ближе 0.25 мм, а отверстие чужой цепи — не ближе HOLE_GAP.
+        hole_r = PLANE_VIA[1] / 2
+        if any(math.hypot(c.x - h.x, c.y - h.y) < MM(max(r + 0.25, hole_r + (HOLE_GAP if hn != net else 0.25))) + hr
+               for h, hr, hn in self.holes):
             return False
         for a0, b0, hw, ly, n in near_cu:
             gap = 0.1 if n == net else net_clr(net, n) + 0.02
             if ly is None and n == net:
                 gap = r + 0.1  # свои переходные не лепим вплотную
+            elif ly is None:
+                # чужое переходное: отверстия не ближе HOLE_GAP край к краю (у всех переходных 0.25 мм)
+                gap = max(gap, HOLE_GAP + 2 * hole_r - r - pcbnew.ToMM(hw) + 0.01)
             if dist_seg(c, a0, b0) < MM(r + gap) + hw:
                 return False
         return True
@@ -694,6 +924,10 @@ def dsn_prepare(dsn, spill=()):
 def route():
     """Сначала земля и питание — переходными в свои слои, потом Freerouting: шины питания
     в слое питания, сигналы по внешним слоям; потом заливки земли, сшивка и проверка."""
+    # Java и Freerouting — до того, как плата тронута: без них route ничего не меняет.
+    if not shutil.which("java"):
+        sys.exit("route: нужна Java 21 (java в PATH); плата не тронута")
+    freerouting_jar()
     board = pcbnew.LoadBoard(PCB)
     strip_tracks(board)
     planes_exist = has_copper_zones(board)  # прогон повторный: заливки остаются, в DSN не идут
@@ -774,8 +1008,133 @@ def route():
         if orphans:
             print("не подключены:", fixroute.connect_pads(board, orphans, fix_track, fix_via) or "—")
             fill(board)
+    finish(board)
     pcbnew.SaveBoard(PCB, board)
     return drc(board)
+
+
+def finish(board):
+    """Доводка разведённой платы, без перетрассировки: паста, шёлк, надписи, отверстия разных
+    цепей. Повторный прогон ничего не меняет."""
+    print("площадок без пасты (детали не ставит завод):", strip_paste(board))
+    print("отрезков шёлка у края: укорочено %d, удалено %d" % clip_silk(board))
+    sync_texts(board)
+    print("меток шёлка у окон маски обрезано:", trim_silk_polys(board))
+    spread_vias(board)
+    fill(board)
+    bad = silk_check(board)
+    if bad:
+        print("надписи ближе 0.15 мм к окнам маски или краю:", bad)
+
+
+def hole_pairs(board, gap=HOLE_GAP):
+    """Пары отверстий разных цепей ближе gap край к краю: [(зазор мм, A, B)]."""
+    holes = [t for t in board.GetTracks() if isinstance(t, pcbnew.PCB_VIA)]
+    holes += [pad for fp in board.GetFootprints() for pad in fp.Pads() if pad.GetDrillSize().x > 0]
+    out = []
+    for i, a in enumerate(holes):
+        for b in holes[i + 1:]:
+            if a.GetNetname() != b.GetNetname():
+                g = hole_gap(a, b)
+                if g < gap:
+                    out.append((g, a, b))
+    return sorted(out, key=lambda x: x[0])
+
+
+def hole_r(item):
+    """Радиус отверстия переходного или площадки (у овального — по меньшей стороне)."""
+    if isinstance(item, pcbnew.PCB_VIA):
+        return item.GetDrillValue() / 2
+    d = item.GetDrillSize()
+    return min(d.x, d.y) / 2
+
+
+def hole_gap(a, b):
+    """Зазор между отверстиями a и b край к краю, мм."""
+    pa, pb = a.GetPosition(), b.GetPosition()
+    return pcbnew.ToMM(int(math.hypot(pa.x - pb.x, pa.y - pb.y) - hole_r(a) - hole_r(b)))
+
+
+def move_via(board, via, pos):
+    """Переходное — в pos, концы дорожек его цепи, что сходились в нём, — вместе с ним."""
+    old = pcbnew.VECTOR2I(via.GetPosition())
+    for t in board.GetTracks():
+        if isinstance(t, pcbnew.PCB_VIA) or t.GetNetCode() != via.GetNetCode():
+            continue
+        if t.GetStart() == old:
+            t.SetStart(pos)
+        if t.GetEnd() == old:
+            t.SetEnd(pos)
+    via.SetPosition(pos)
+
+
+def parse_drc(text):
+    """Нарушения из отчёта DRC: [(тип, важность)] и число несоединённых."""
+    items = re.findall(r"^\[(\w+)\]:.*\n(?:.*\n)*?.*Severity: (\w+)", text, re.M)
+    m = re.search(r"\*\* Found (\d+) unconnected pads", text)
+    return items, int(m.group(1)) if m else 0
+
+
+def spread_vias(board, gap=HOLE_GAP, margin=0.012):
+    """Переходные разных цепей ближе gap (край к краю) раздвигаются минимальным сдвигом: одно
+    из пары уходит от другого вместе с концами своих дорожек. Каждый сдвиг проверяется
+    перезаливкой и DRC (зазоры, соединения, переходное не в площадке); не прошёл — откат."""
+    def state():
+        fill(board)
+        rpt = os.path.join(WORK, "spread.rpt")
+        pcbnew.WriteDRCReport(board, rpt, pcbnew.EDA_UNITS_MILLIMETRES, True)
+        items, unconnected = parse_drc(open(rpt).read())
+        other = sum(1 for k, sev in items if sev == "error" and k != "hole_near_hole")
+        return other, unconnected
+
+    def in_pad(via):
+        r = via.GetWidth() // 2
+        return any(pad.GetAttribute() == pcbnew.PAD_ATTRIB_SMD and pad.IsOnLayer(lay) and
+                   pad.GetEffectivePolygon().Collide(via.GetPosition(), r)
+                   for fp in board.GetFootprints() for pad in fp.Pads() for lay in (pcbnew.F_Cu, pcbnew.B_Cu))
+
+    os.makedirs(WORK, exist_ok=True)
+    pairs = hole_pairs(board, gap)
+    if not pairs:
+        return 0
+    base = state()
+    moved = 0
+    for g, a, b in pairs:
+        g = hole_gap(a, b)
+        if g >= gap:
+            continue  # пару уже развёл сдвиг соседней
+        done = False
+        for extra in (margin, 2 * margin, 4 * margin):
+            for phi in (0, 30, -30, 60, -60):
+                for via, other in ((a, b), (b, a)):
+                    if not isinstance(via, pcbnew.PCB_VIA):
+                        continue
+                    p, q = via.GetPosition(), other.GetPosition()
+                    d = math.hypot(p.x - q.x, p.y - q.y)
+                    ux, uy = (p.x - q.x) / d, (p.y - q.y) / d
+                    t = math.radians(phi)
+                    vx, vy = ux * math.cos(t) - uy * math.sin(t), ux * math.sin(t) + uy * math.cos(t)
+                    step = MM(gap - g + extra) / math.cos(t)
+                    old = pcbnew.VECTOR2I(p)
+                    move_via(board, via, pcbnew.VECTOR2I(int(p.x + vx * step), int(p.y + vy * step)))
+                    other_err, unconnected = state()
+                    mine = [x for x in hole_pairs(board, gap) if via in (x[1], x[2])]
+                    if other_err <= base[0] and unconnected <= base[1] and not mine and not in_pad(via):
+                        print("переходное %s (%.3f, %.3f) сдвинуто на %.3f мм: отверстие до %s было %.3f мм" % (
+                            via.GetNetname(), pcbnew.ToMM(old.x), pcbnew.ToMM(old.y), pcbnew.ToMM(int(step)),
+                            other.GetNetname(), g))
+                        moved += 1
+                        done = True
+                        break
+                    move_via(board, via, old)
+                if done:
+                    break
+            if done:
+                break
+        if not done:
+            print("не удалось развести отверстия: %s и %s, %.3f мм" % (a.GetNetname(), b.GetNetname(), g))
+    state()
+    return moved
 
 
 def import_ses(board, path):
@@ -854,13 +1213,23 @@ def via_size(netname):
     return netlist.NETCLASSES["Default"]["via"]
 
 
-def drc(board):
-    report = os.path.join(WORK, "drc.rpt")
+DRC_REPORT = os.path.join(OUT, NAME + "-drc.rpt")  # отчёт в репозитории, его пишет и fab
+
+
+def drc(board, report=DRC_REPORT):
+    """DRC платы в отчёт report: ({вид: число}, ошибок, текст). Ошибки — всё с важностью error,
+    в том числе несоединённые площадки."""
+    os.makedirs(os.path.dirname(report), exist_ok=True)
     pcbnew.WriteDRCReport(board, report, pcbnew.EDA_UNITS_MILLIMETRES, True)
     text = open(report).read()
+    # В шапке — имя файла платы без пути: отчёт лежит в репозитории.
+    text = text.replace(board.GetFileName(), os.path.basename(board.GetFileName()))
+    with open(report, "w") as f:
+        f.write(text)
     found = {k: int(v) for v, k in re.findall(r"\*\* Found (\d+) (DRC violations|unconnected pads|Footprint errors)", text)}
-    errors = len(re.findall(r"; error", text))
-    warnings = len(re.findall(r"; warning", text))
+    errors = len(re.findall(r"Severity: error", text))
+    warnings = len(re.findall(r"Severity: warning", text))
+    found["warnings"] = warnings
     print(f"DRC: {found}, ошибок {errors}, предупреждений {warnings} → {os.path.relpath(report, REV)}")
     return found, errors, text
 
@@ -879,23 +1248,58 @@ def render(tag="place"):
         to_png(svg, svg[:-4] + ".png")
 
 
-def to_png(svg, png, width=1400):
-    """SVG → PNG через cairosvg (pip install cairosvg) или rsvg-convert; без них превью только в SVG."""
-    tool = shutil.which("cairosvg") or os.environ.get("CAIROSVG")
-    if tool:
-        subprocess.run([tool, svg, "-o", png, "--output-width", str(width), "-b", "white"], check=True)
-    elif shutil.which("rsvg-convert"):
-        subprocess.run(["rsvg-convert", "-w", str(width), "-b", "white", "-o", png, svg], check=True)
+def png_tool():
+    """Чем переводить SVG в PNG: cairosvg (pip install cairosvg, или путь в CAIROSVG) или rsvg-convert."""
+    return shutil.which("cairosvg") or os.environ.get("CAIROSVG") or shutil.which("rsvg-convert")
 
+
+def to_png(svg, png, width=1400):
+    """SVG → PNG. Без конвертера — False, и старый PNG удаляется, чтобы не выдать его за новый."""
+    tool = png_tool()
+    if not tool:
+        if os.path.exists(png):
+            os.remove(png)
+        return False
+    if os.path.basename(tool) == "rsvg-convert":
+        subprocess.run([tool, "-w", str(width), "-b", "white", "-o", png, svg], check=True)
+    else:
+        subprocess.run([tool, svg, "-o", png, "--output-width", str(width), "-b", "white"], check=True)
+    return True
+
+
+USAGE = "build.py place [--force] | route | finish | fab [--no-panel] | panel | all --force"
 
 if __name__ == "__main__":
-    stage = sys.argv[1] if len(sys.argv) > 1 else "all"
+    args = sys.argv[1:]
+    force = "--force" in args
+    no_panel = "--no-panel" in args
+    args = [a for a in args if a not in ("--force", "--no-panel")]
+    stage = args[0] if args else "all"
+    if stage not in ("place", "route", "finish", "fab", "panel", "all") or len(args) > 1:
+        sys.exit(USAGE)
     if stage in ("place", "all"):
-        place()
+        place(force)
         render("place")
     if stage in ("route", "all"):
-        route()
+        found, errors, _ = route()
         render("route")
+        if errors or found.get("unconnected pads"):
+            sys.exit(f"route: после доводки DRC — ошибок {errors}, несоединённых {found.get('unconnected pads')}; "
+                     "fab такую плату не примет")
+    if stage == "finish":
+        write_dru()
+        footprints.write(LIB)
+        b = pcbnew.LoadBoard(PCB)
+        if not b.GetTracks():
+            sys.exit("finish — для разведённой платы, а в этой нет дорожек")
+        finish(b)
+        pcbnew.SaveBoard(PCB, b)
+        found, errors, _ = drc(b)
+        if errors:
+            sys.exit(f"finish: DRC — ошибок {errors}")
     if stage in ("fab", "all"):
         import fab
-        fab.run()
+        fab.run(panel=not no_panel)
+    if stage == "panel":
+        import fab
+        fab.run_panel()
