@@ -102,6 +102,7 @@ jobs:
           cp firmware/.pio/build/keychain/firmware.hex out/keychain-revb.hex
           cp firmware/.pio/build/keychain/firmware.uf2 out/keychain-revb.uf2
           cp firmware/.pio/build/keychain/firmware.zip out/keychain-revb-dfu.zip
+          cp firmware/.pio/build/keychain/firmware-factory.hex out/keychain-revb-factory.hex
           cp firmware/bootloader/*.hex out/
           ls -l out
 

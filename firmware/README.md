@@ -266,6 +266,13 @@ pyocd flash -t nrf52840 bootloader/emotion_keychain_revb_bootloader-0.11.0-keych
 
 `--recover` и стирание всей памяти снимают защиту отладки: на новых ревизиях nRF52840 она включена с завода.
 
+**Сразу с прошивкой брелока.** Вместо загрузчика можно записать `firmware-factory.hex` — сборка кладёт его рядом с `firmware.uf2` (в CI — `keychain-revb-factory.hex`). В нём загрузчик, SoftDevice, приложение и отметка загрузчику «приложение рабочее» (0xFF000 = 1, как `flash-skip-crc` в его Makefile), так что брелок после программатора сразу показывает лицо. Этот же файл отдают на завод, если сборщик прошивает платы сам (PCBWay — «Firmware loading»): тогда J3 вам не нужен вовсе. Команды те же, с другим файлом:
+
+```sh
+nrfjprog -f nrf52 --recover
+nrfjprog -f nrf52 --program firmware-factory.hex --verify --reset
+```
+
 После этого брелок, подключённый по USB, показывается диском **KEYCHAIN**. Загрузчик сразу ставит 3.3 В на REG0, поэтому экран и датчики работают уже на этом шаге.
 
 ## Прошивка по USB
@@ -282,7 +289,7 @@ cd firmware
 pio run -e keychain -t upload && pio device monitor
 ```
 
-Сборка кладёт в `.pio/build/keychain/` файлы `firmware.hex`, `firmware.zip` (DFU по USB) и `firmware.uf2`. CI собирает их на каждый push — архив `keychain-firmware` в разделе Actions, вместе с загрузчиком.
+Сборка кладёт в `.pio/build/keychain/` файлы `firmware.hex`, `firmware.zip` (DFU по USB), `firmware.uf2` и `firmware-factory.hex` (всё для программатора). CI собирает их на каждый push — архив `keychain-firmware` в разделе Actions, вместе с загрузчиком.
 
 ## Консоль
 
