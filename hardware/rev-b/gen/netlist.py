@@ -253,22 +253,22 @@ SIGNAL_LAYERS = ("F.Cu", "B.Cu")
 POWER_LAYER = "In2.Cu"
 ALL_SIGNAL_LAYERS = ("F.Cu", "In2.Cu", "B.Cu")
 NETCLASSES = {
-    "Default": {"track": 0.15, "clearance": 0.15, "via": (0.55, 0.3), "nets": [], "layers": ALL_SIGNAL_LAYERS},
+    "Default": {"track": 0.15, "clearance": 0.15, "via": (0.55, 0.25), "nets": [], "layers": ALL_SIGNAL_LAYERS},
     # Питание от USB, батареи и всей системы — шинами 0.4 мм в слое питания: ток заряда
     # 100 мА, мотор и экран вместе до 150 мА; 0.4 мм во внутреннем слое держит ~0.7 А.
-    "Power": {"track": 0.4, "clearance": 0.2, "via": (0.6, 0.3), "nets": ["VBUS", "VBAT", "VSYS"],
+    "Power": {"track": 0.4, "clearance": 0.2, "via": (0.55, 0.25), "nets": ["VBUS", "VBAT", "VSYS"],
               "layers": (POWER_LAYER,)},
     # 3.3 В от модуля: десятки миллиампер, шина 0.3 мм там же.
-    "Rail": {"track": 0.3, "clearance": 0.15, "via": (0.55, 0.3), "nets": ["VDD"], "layers": (POWER_LAYER,)},
+    "Rail": {"track": 0.3, "clearance": 0.15, "via": (0.55, 0.25), "nets": ["VDD"], "layers": (POWER_LAYER,)},
     # Питание экрана и мотора после ключей — по сигнальным слоям, но шире сигналов. Микрофону
     # (~1 мА) хватает обычной дорожки, он в классе Default.
-    "Supply": {"track": 0.3, "clearance": 0.15, "via": (0.55, 0.3),
+    "Supply": {"track": 0.3, "clearance": 0.15, "via": (0.55, 0.25),
                "nets": ["DISP_VCC", "OLED_1", "OLED_2", "VIB_N"], "layers": ALL_SIGNAL_LAYERS},
     # USB 2.0 Full Speed парой; 0.18 мм проходит между штырями экрана по двое.
-    "USB": {"track": 0.18, "clearance": 0.15, "via": (0.55, 0.3), "nets": ["USB_DP", "USB_DN"],
+    "USB": {"track": 0.18, "clearance": 0.15, "via": (0.55, 0.25), "nets": ["USB_DP", "USB_DN"],
             "layers": SIGNAL_LAYERS},
     # Земля сплошным слоем L2 и заливками; в задачу роутера не входит.
-    "Ground": {"track": 0.4, "clearance": 0.15, "via": (0.55, 0.3), "nets": ["GND"], "layers": ()},
+    "Ground": {"track": 0.4, "clearance": 0.15, "via": (0.55, 0.25), "nets": ["GND"], "layers": ()},
 }
 
 # Сплошной слой земли: каждая SMD-площадка земли получает своё переходное в него

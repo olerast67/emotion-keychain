@@ -70,11 +70,11 @@ def write_project():
         })
     patterns = [{"netclass": name, "pattern": net}
                 for name, c in netlist.NETCLASSES.items() for net in c["nets"]]
-    # Нормы JLCPCB для 4 слоёв со стандартной ценой: дорожка/зазор от 0.09 мм,
-    # отверстие переходного от 0.3 мм. Берём с запасом.
+    # Нормы JLCPCB и PCBWay для 4 слоёв: дорожка/зазор от 0.09–0.1 мм, отверстие переходного
+    # от 0.2 мм, поясок от 0.15 мм (PCBWay). Переходные 0.55/0.25 проходят у обоих.
     rules = {
-        "min_clearance": 0.1, "min_track_width": 0.1, "min_via_diameter": 0.5, "min_via_annular_width": 0.1,
-        "min_through_hole_diameter": 0.3, "min_hole_clearance": 0.2, "min_hole_to_hole": 0.25,
+        "min_clearance": 0.1, "min_track_width": 0.1, "min_via_diameter": 0.5, "min_via_annular_width": 0.15,
+        "min_through_hole_diameter": 0.25, "min_hole_clearance": 0.2, "min_hole_to_hole": 0.25,
         "min_copper_edge_clearance": 0.3, "min_silk_clearance": 0.0, "min_text_height": 0.6,
         "min_text_thickness": 0.1, "solder_mask_clearance": 0.0, "solder_mask_min_width": 0.0,
         "min_microvia_diameter": 0.2, "min_microvia_drill": 0.1, "min_resolved_spokes": 1,
@@ -329,7 +329,7 @@ def strip_tracks(board):
         board.Remove(t)
 
 
-PLANE_VIA = (0.55, 0.3)
+PLANE_VIA = (0.55, 0.25)
 STUB = 0.3   # отвод от площадки к переходному
 CLEAR = 0.15
 
