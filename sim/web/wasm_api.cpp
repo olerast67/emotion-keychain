@@ -216,7 +216,7 @@ EXPORT(fe_meet_mentor) void fe_meet_mentor(uint32_t now) {
 }
 EXPORT(fe_duel) void fe_duel(int won, uint32_t now) {
   const Identity& p = next_peer(now);
-  g_bh.duel(p.code, won != 0, now, p.hash, now);
+  g_bh.duel(p.code, won != 0, now, p.hash, now, g_progress.implant);
 }
 EXPORT(fe_peer_arch) const char* fe_peer_arch() { return archetype_name(g_peer.archetype); }
 EXPORT(fe_peer_level) int fe_peer_level() { return g_friends.level(g_peer.hash); }
