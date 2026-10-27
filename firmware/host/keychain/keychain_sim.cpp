@@ -1179,7 +1179,7 @@ void sc_day() {
   double mah = 0;
   for (Mode& m : modes) mah += m.ua / 1000.0 * m.hours_per_day;
   say("        за сутки: %.1f мА·ч → %.1f дня на 150 мА·ч (до отсечки 3.35 В — ~142 мА·ч)", mah, 142.0 / mah);
-  CHECK(mah > 1 && mah < 25, "расход за обычный день %.1f мА·ч (оценка в docs/power.md ~14)", mah);
+  CHECK(mah > 1 && mah < 25, "расход за обычный день %.1f мА·ч (в docs/power.md ≈12.9)", mah);
 }
 
 void sc_charge_temp() {

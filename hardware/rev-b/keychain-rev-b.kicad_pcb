@@ -170,7 +170,7 @@
   (footprint "Keychain:OLED_SSD1306_0.96in_I2C_Module" (layer "F.Cu")
     (tstamp 28c46aef-aa9f-4822-b46a-27b4a42cd275)
     (at 15 19.5)
-    (descr "Модуль OLED 0.96 дюйма SSD1306 128x64 I2C, 4 штыря 2.54 мм, крепёж M2 по углам. Стоит над батареей на стойках 5 мм")
+    (descr "Модуль OLED 0.96 дюйма SSD1306 128x64 I2C, 4 штыря 2.54 мм, крепёж M2 по углам. Стоит над батареей на ушках рамок корпуса, 6/7/8 мм")
     (attr through_hole exclude_from_pos_files exclude_from_bom)
     (fp_text reference "J2" (at 0 -2.4) (layer "F.SilkS") hide
         (effects (font (size 0.8 0.8) (thickness 0.12)))
@@ -257,7 +257,7 @@
   (footprint "Keychain:LiPo_Pads_20x25mm" (layer "F.Cu")
     (tstamp 55572ae3-1790-4ceb-825f-a6985d6176d1)
     (at 15 33.5)
-    (descr "Площадки под провода ячейки Li-Po 402025/502025, контур ячейки на слое Fab")
+    (descr "Площадки под провода ячейки Li-Po 402025/502025/602025, контур ячейки на слое Fab")
     (attr smd exclude_from_pos_files exclude_from_bom)
     (fp_text reference "BT1" (at 12.4 -7) (layer "F.SilkS") hide
         (effects (font (size 0.8 0.8) (thickness 0.12)))

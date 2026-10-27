@@ -7,7 +7,7 @@ const { chromium } = require("playwright");
 
 const [html, outDir] = process.argv.slice(2);
 const THREE_DIR = process.env.THREE_DIR;
-const SHOTS = [["case-3d", "assembled", 900, 1200], ["case-exploded", "exploded", 1300, 1050]];
+const SHOTS = [["case-3d", "assembled", 1000, 1340], ["case-exploded", "exploded", 1560, 1260]];
 
 (async () => {
   const browser = await chromium.launch({ args: ["--ignore-gpu-blocklist"] });

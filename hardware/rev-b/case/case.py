@@ -13,8 +13,8 @@ M и L — в out/m/ и out/l/:
   крышка 2 мм             H+3.2 … H+5.2  прозрачная; винты, отверстие микрофона
   шайбы 2 мм              H+1.2 … H+3.2  между платой модуля экрана и крышкой
   рамка экрана 3 мм       H … H+3        стенки вокруг модуля, держатель трубки микрофона
-  рамка ячейки, верх      3 … H          3, 4 или 5 мм; ушки под модулем вместо стоек
-  рамка ячейки, низ 3 мм  0 … 3          окно под вилку USB-C
+  верхняя рамка ячейки    3 … H          3, 4 или 5 мм; ушки под модулем вместо стоек
+  нижняя рамка ячейки 3   0 … 3          окно под вилку USB-C
   плата 1.6 мм            −1.6 … 0
   рамка оборота 4 мм      −5.6 … −1.6    ушки под винтами, толкатель кнопки
   дно 2 мм                −7.6 … −5.6    прозрачное, вырез под вилку USB-C
@@ -231,7 +231,8 @@ def fab_points(fp):
     """Концы линий слоя Fab детали: по ним — шток кнопки и лицо гнезда USB-C."""
     pts = []
     for g in fp.GraphicalItems():
-        if isinstance(g, pcbnew.FP_SHAPE) and g.GetLayerName().endswith("Fab") and g.GetShape() == pcbnew.SHAPE_T_SEGMENT:
+        if (isinstance(g, pcbnew.FP_SHAPE) and g.GetLayerName().endswith("Fab")
+                and g.GetShape() == pcbnew.SHAPE_T_SEGMENT):
             for p in (g.GetStart(), g.GetEnd()):
                 pts.append((pcbnew.ToMM(p.x), pcbnew.ToMM(p.y)))
     return pts
@@ -413,8 +414,8 @@ def build(v):
             keep.append(inflated(tube, GAP))
         solid = union(ears, arm) if guide else ears
         cut = union(minus(inner_body, solid), *keep)
-        where = "низ" if i == 0 else "верх"
-        add(key, minus(outer, closed(cut, a)), [guide_hole] if guide else [], f"рамка ячейки, {where}", COLOR)
+        where = "нижняя" if i == 0 else "верхняя"
+        add(key, minus(outer, closed(cut, a)), [guide_hole] if guide else [], f"{where} рамка ячейки", COLOR)
 
     # Рамка оборота: ушки под винтами вместо шайб, карман и щель толкателя, окно USB-C.
     sw_crt = bbox(b["back"]["SW1"][0])
@@ -437,16 +438,17 @@ def build(v):
     # Твёрдые тела вокруг: (z0, z1, форма, зазор, кому можно ближе).
     top = Z["cover"] + T["cover"]
     guide = NEED["держатель трубки"]
+    module_back = minus(module, *[circle(x, y, MODULE_FREE_R) for x, y in mod_holes])
+    plug_need = NEED["вилка USB-C"]
     solids = {
         "плата модуля": (h, h + MODULE_T, module, NEED["плата модуля"], {}),
         "стекло": (h + MODULE_T, h + MODULE_T + GLASS_T, glass, NEED["стекло"], {}),
-        "детали оборота модуля": (h - MODULE_BACK[1], h, minus(module, *[circle(x, y, MODULE_FREE_R) for x, y in mod_holes]),
-                                  NEED["оборот модуля"], {}),
+        "детали оборота модуля": (h - MODULE_BACK[1], h, module_back, NEED["оборот модуля"], {}),
         "пластик гребёнки": (h - HEADER_PLASTIC, h, plastic, NEED["пластик гребёнки"], {}),
         "штыри экрана": (-1.6 - 1.0, h + MODULE_T + PIN_TOP, pin_pads, NEED["штыри экрана"], {}),
         "шлейф стекла": (fpc_z[0], fpc_z[1], fpc, NEED["шлейф стекла"], {}),
         "ячейка": (UNDER_CELL, UNDER_CELL + cfg["cell_t"] + SWELL, cell, NEED["ячейка"], {}),
-        "вилка USB-C": (plug_z[0] - NEED["вилка USB-C"], plug_z[1] + NEED["вилка USB-C"], plug, NEED["вилка USB-C"], {}),
+        "вилка USB-C": (plug_z[0] - plug_need, plug_z[1] + plug_need, plug, plug_need, {}),
         "трубка микрофона": (0.0, Z["cover"], tube, NEED["трубка"],
                              {"frame_screen": guide, "frame_cell2": guide, "frame_cell3": guide}),
         "винты": (Z["bottom"] - NUT_T, top, union(*[circle(x, y, SHAFT_D / 2) for x, y in screws]), NEED["винты"], {}),
@@ -511,6 +513,8 @@ def check(v, parts, solids, info):
         err.append(f"рамка экрана ниже крышки на {gap:.2f} мм, нужно 0.1…0.3")
     if parts["cover"]["z"] - (h + MODULE_T + GLASS_T) < 0.5:
         err.append("над стеклом меньше 0.5 мм")
+    if parts["cover"]["z"] - (h + MODULE_T + PIN_TOP) < 0.15:
+        err.append("штыри над модулем ближе 0.15 мм к крышке")
     if max(hgt for _, hgt in info["board"]["back"].values()) > SHEET_T["frame_back"] - 0.5:
         err.append("деталь оборота ближе 0.5 мм к дну")
 
@@ -592,7 +596,6 @@ def check(v, parts, solids, info):
 
 def numbers(v, parts, info):
     """Размеры версии, которые нужны README и просмотру."""
-    cfg = VARIANTS[v]
     h = info["h"]
     top, low = info["top"], parts["bottom"]["z"]
     need = top - low + NUT_T
@@ -605,7 +608,8 @@ def numbers(v, parts, info):
     press = [(BTN_OUT + k) - (BTN_REST + 1.5 * k) - SW_TRAVEL for k in (0.0, KERF_MAX)]
     return {
         "standoff": h, "thickness": round(top - low, 2), "screw": screw, "screw_need": round(need, 2),
-        "screw_out": round(screw - need, 2), "below_module": round(below, 2), "std_header_margin": round(std - below, 2),
+        "screw_out": round(screw - need, 2), "below_module": round(below, 2),
+        "std_header_margin": round(std - below, 2),
         "long_header": std - below < 0.3, "std_header_out": round(std - h - 1.6, 2),
         "long_header_out": round(LONG_HEADER - HEADER_SHORT - h - 1.6, 1),
         "free": [round(f, 2) for f in free], "cell_max": [round(c_, 2) for c_ in cell_max],
@@ -677,7 +681,8 @@ def write_dxf(path, items):
                 lines += ["0", "LINE", "8", "CUT", "10", f"{x0 + dx:.4f}", "20", f"{-(y0 + dy):.4f}",
                           "11", f"{x1 + dx:.4f}", "21", f"{-(y1 + dy):.4f}"]
         for x, y, dia in circles:
-            lines += ["0", "CIRCLE", "8", "CUT", "10", f"{x + dx:.4f}", "20", f"{-(y + dy):.4f}", "40", f"{dia / 2:.4f}"]
+            lines += ["0", "CIRCLE", "8", "CUT", "10", f"{x + dx:.4f}", "20", f"{-(y + dy):.4f}",
+                      "40", f"{dia / 2:.4f}"]
     lines += ["0", "ENDSEC", "0", "EOF"]
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
@@ -705,8 +710,8 @@ def write_variant(v, parts, nums):
     for old in glob.glob(os.path.join(out, "case-acrylic-*")):
         os.remove(old)
     cfg = VARIANTS[v]
-    model = {"board": {"w": W, "h": H, "t": 1.6}, "variant": {"id": v, **{k: cfg[k] for k in ("cell", "mah", "days", "cell_t", "mid")},
-                                                               **nums}, "layers": []}
+    variant = {"id": v, **{k: cfg[k] for k in ("cell", "mah", "days", "cell_t", "mid")}, **nums}
+    model = {"board": {"w": W, "h": H, "t": 1.6}, "variant": variant, "layers": []}
     by_t = {}
     for key, p in parts.items():
         model["layers"].append({"id": key, "name": p["name"], "z": round(p["z"], 3), "t": p["t"], "color": p["color"],
