@@ -690,7 +690,7 @@ void poll_battery(uint32_t now) {
     out_line("Ячейка почти пуста — выключаюсь");
     cfg.empty_off = 1;
     powering_off = true;
-    bh.power_off(now);
+    bh.power_off(now, true);
   }
 }
 

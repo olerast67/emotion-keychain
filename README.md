@@ -153,7 +153,7 @@ sim/web/build.sh    # нужны clang с целью wasm32 и wasm-ld (паке
 
 ### На своей плате
 
-Прошивка платы rev B — в [firmware/README.md](firmware/README.md#плата-rev-b).
+Прошивка платы rev B — в [firmware/README.md](firmware/README.md#плата-rev-b), откуда брать файлы — в [«Где взять файлы»](firmware/README.md#где-взять-файлы).
 
 - **Готовые файлы** — в [`firmware/release/`](firmware/release/README.md): `keychain-revb-factory.hex` для программатора или завода, `keychain-revb.uf2` для диска KEYCHAIN, `keychain-revb-dfu.zip` для adafruit-nrfutil. Версия и коммит — в README той же папки.
 - **Своя сборка:** `cd firmware && pio run -e keychain` → `firmware/.pio/build/keychain/firmware-factory.hex`, `firmware.uf2` и `firmware.zip`. Когда GitHub Actions снова запускается, те же файлы лежат в артефактах CI.
@@ -207,6 +207,7 @@ tools/           вспомогательные скрипты
 - [x] Прошивка платы rev B: датчики, голос, вибро, встречи, сон, заряд по температуре, загрузчик UF2
 - [x] Симуляция платы целиком: настоящая прошивка на моделях микросхем, две платы и эфир
 - [ ] Заказ, сборка и запуск rev B
+- [ ] Перед продажей: свои USB VID/PID и Company ID, радио, батарея, мемные эмоции ([список](docs/selling.md)); [памятка владельцу](docs/user-guide.md) готова
 - [ ] Замеры тока и тест разряда на живой плате
 - [ ] Настоящие датчики: пороги тапов, шагов, звука и света по записям с рюкзака
 - [ ] Механика: падение, рывок за ушко, брызги, неделя носки

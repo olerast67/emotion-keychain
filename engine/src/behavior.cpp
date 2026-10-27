@@ -1187,9 +1187,11 @@ void Behavior::set_eco(int level) {
   eng_->options().frame_ms = level == 0 ? eco_frame_ms_ : (eco_frame_ms_ > slow ? eco_frame_ms_ : slow);
 }
 
-void Behavior::power_off(uint32_t now) {
+void Behavior::power_off(uint32_t now, bool low_battery) {
   off_ = true;
-  queue_scene(Scene::shutdown, SceneParams{}, Expr::sleeping, now, "выключается");
+  SceneParams p;
+  p.value = low_battery ? 1 : 0;
+  queue_scene(Scene::shutdown, p, Expr::sleeping, now, low_battery ? "выключается: ячейка пуста" : "выключается");
 }
 
 void Behavior::banner(const char* big, const char* sub, BannerIcon icon, Expr after, uint32_t now, const char* why) {

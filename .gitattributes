@@ -1,0 +1,3 @@
+# Файлы прошивки — как есть, без перевода строк: иначе не сойдутся контрольные суммы
+firmware/release/* -text
+firmware/bootloader/*.hex -text

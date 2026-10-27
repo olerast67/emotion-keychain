@@ -172,7 +172,8 @@ class Behavior {
   void set_battery_percent(int pct) { battery_pct_ = pct < -1 ? -1 : pct > 100 ? 100 : pct; }
   bool eco() const { return eco_; }
   // Выключение: «LOW BATTERY → GOODNIGHT» и сон; прошивка гасит всё по eng.scene_ends_ms().
-  void power_off(uint32_t now_ms);
+  // low_battery — выключение из-за пустой ячейки: сцена сначала показывает батарейку.
+  void power_off(uint32_t now_ms, bool low_battery = false);
 
   // Календарь: Новый год, Хэллоуин, день рождения хозяина и пасхалки — день π, 4 мая,
   // 1 апреля, 12 апреля, день полотенца, день программиста, пятница 13-е, 29 февраля.

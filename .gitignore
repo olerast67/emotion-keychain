@@ -3,6 +3,8 @@
 /build-*/
 /sim/web/dist/
 .pio/
+# Клон исходников загрузчика для пересборки (firmware/bootloader/README.md)
+/firmware/bootloader/Adafruit_nRF52_Bootloader/
 *.o
 *.wasm
 

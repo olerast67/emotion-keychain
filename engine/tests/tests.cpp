@@ -1830,6 +1830,20 @@ static void test_battery_care() {
   run_log(bh, eng, 800000, 820000, off, 50);
   CHECK(off.has(Scene::shutdown) && eng.expression() == Expr::sleeping, "выключился и спит: %s",
         expression(eng.expression()).id);
+  {
+    // Батарейка «LOW BATTERY» — только при пустой ячейке, кнопкой — сразу «спокойной ночи».
+    for (int low = 0; low < 2; ++low) {
+      FaceEngine e2;
+      Behavior b2;
+      e2.init(5, 0);
+      b2.init(&e2, 5, 0);
+      b2.power_off(1000, low != 0);
+      SceneLog l2;
+      run_log(b2, e2, 1000, 1200, l2, 50);
+      CHECK(e2.scene() == Scene::shutdown && e2.scene_params().value == low, "выключение %s: батарейка %d",
+            low ? "от пустой ячейки" : "кнопкой", e2.scene_params().value);
+    }
+  }
   bh.on_event(Event::charge_stop, 820000);
   bh.on_event(Event::button, 821000);
   run_log(bh, eng, 821000, 830000, off, 50);
