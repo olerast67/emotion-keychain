@@ -5,14 +5,20 @@
 
     python3 hardware/rev-b/gen/build.py place --force  # расставить детали заново, БЕЗ дорожек
     python3 hardware/rev-b/gen/build.py route   # переходные, шины питания, Freerouting, доводка, DRC
-    python3 hardware/rev-b/gen/build.py finish  # доводка разведённой платы: паста, шёлк, отверстия
+    python3 hardware/rev-b/gen/build.py finish  # доводка разведённой платы — только проверка
+    python3 hardware/rev-b/gen/build.py finish --force  # то же с записью: паста, шёлк, отверстия
     python3 hardware/rev-b/gen/build.py fab     # DRC, Gerber, BOM и CPL, файлы PCBWay, панель, превью
+    python3 hardware/rev-b/gen/build.py panel   # DRC платы, потом только панель
     python3 hardware/rev-b/gen/build.py all --force
 
-place заменяет разведённую плату платой без дорожек, поэтому без --force отказывается, если
-в плате уже есть дорожки. route сначала проверяет Java и Freerouting и только потом трогает
-плату. fab сам прогоняет DRC и не пишет файлы для заказа, если есть ошибки, несоединённые
-площадки или в плате нет дорожек. Вернуть плату и файлы из репозитория:
+place и route заменяют разведённую плату (place — платой без дорожек, route — новой разводкой),
+поэтому без --force отказываются, если в плате уже есть дорожки. finish без --force только
+доводит плату в памяти, гоняет DRC и говорит, изменилась бы она. route и finish --force
+записывают плату только после чистого DRC; не прошла — плата не тронута, результат для разбора —
+в out/work. route сначала проверяет Java и Freerouting и только потом трогает плату. Отчёты DRC
+этих шагов — в out/work; в out/ отчёт пишет только fab. fab сам прогоняет DRC и не пишет файлы
+для заказа, если есть ошибки, несоединённые площадки или в плате нет дорожек. Вернуть плату и
+файлы из репозитория:
 git checkout -- hardware/rev-b/keychain-rev-b.kicad_pcb hardware/rev-b/Keychain.pretty hardware/rev-b/out
 
 Нужны KiCad 7 (pcbnew для Python и kicad-cli); для route — Java 21 и Freerouting 2.1
@@ -249,30 +255,62 @@ def has_copper_zones(board):
 SILK_LINE = footprints.SILK_LINE  # мм: линия знаков на шёлке, минимум JLCPCB 0.153
 
 
-def add_texts(board):
-    """Надписи на шёлке из netlist.SILK_*: высота SILK_H, линия SILK_LINE."""
-    def text(s, x, y, layer, width, mirrored=False):
-        t = pcbnew.PCB_TEXT(board)
-        t.SetText(s)
-        t.SetPosition(V(x, y))
-        t.SetLayer(layer)
-        t.SetTextSize(V(width, netlist.SILK_H))
-        t.SetTextThickness(MM(SILK_LINE))
-        t.SetMirrored(mirrored)
-        board.Add(t)
-
+def silk_texts():
+    """Надписи платы из netlist.SILK_*: [(текст, x, y, слой, ширина знака)]."""
+    out = []
     for layer, items in ((pcbnew.B_SilkS, netlist.SILK_BACK), (pcbnew.F_SilkS, netlist.SILK_FRONT)):
         for s, x, y, *w in items:
-            text(s, x, y, layer, w[0] if w else netlist.SILK_H, mirrored=layer == pcbnew.B_SilkS)
+            out.append((s, x, y, layer, w[0] if w else netlist.SILK_H))
+    return out
+
+
+def new_text(board, s, x, y, layer, width):
+    """Надпись на шёлке (ещё не на плате): высота SILK_H, линия SILK_LINE; на обороте — зеркально."""
+    t = pcbnew.PCB_TEXT(board)
+    t.SetText(s)
+    t.SetPosition(V(x, y))
+    t.SetLayer(layer)
+    t.SetTextSize(V(width, netlist.SILK_H))
+    t.SetTextThickness(MM(SILK_LINE))
+    t.SetMirrored(layer == pcbnew.B_SilkS)
+    return t
+
+
+def add_text(board, *spec):
+    board.Add(new_text(board, *spec))
+
+
+def text_key(t):
+    """Чем надпись платы отличается от другой: текст, место, слой, размер, линия, зеркальность."""
+    p, size = t.GetPosition(), t.GetTextSize()
+    q = lambda v: round(pcbnew.ToMM(v), 4)
+    return (t.GetText(), q(p.x), q(p.y), t.GetLayer(), q(size.x), q(size.y), q(t.GetTextThickness()),
+            t.IsMirrored(), round(t.GetTextAngle().AsDegrees(), 3))
+
+
+def add_texts(board):
+    """Надписи на шёлке из netlist.SILK_*."""
+    for spec in silk_texts():
+        add_text(board, *spec)
 
 
 def sync_texts(board):
-    """Надписи платы — заново из netlist.SILK_*, а надписи своих посадочных мест (Keychain) —
-    по библиотеке: размер, линия, место. Медь и детали не трогаются."""
+    """Надписи платы — по netlist.SILK_*, а надписи своих посадочных мест (Keychain) — по
+    библиотеке: размер, линия, место. Медь и детали не трогаются. Надпись, которая уже такая,
+    как надо, остаётся как есть (со своим идентификатором): повторный прогон файл не меняет."""
+    want = {}
+    for spec in silk_texts():  # ключ — у настоящей надписи, с округлениями KiCad
+        want.setdefault(text_key(new_text(board, *spec)), []).append(spec)
     for d in list(board.GetDrawings()):
         if isinstance(d, pcbnew.PCB_TEXT) and d.GetLayer() in (pcbnew.F_SilkS, pcbnew.B_SilkS):
-            board.Delete(d)
-    add_texts(board)
+            specs = want.get(text_key(d))
+            if specs:
+                specs.pop()
+            else:
+                board.Delete(d)
+    for specs in want.values():
+        for spec in specs:
+            add_text(board, *spec)
     for fp in board.GetFootprints():
         fpid = fp.GetFPID()
         if str(fpid.GetLibNickname()) != "Keychain":
@@ -454,14 +492,16 @@ def board_tracks(path=PCB):
     return len(pcbnew.LoadBoard(path).GetTracks())
 
 
+RESTORE = ("Вернуть плату из репозитория: git checkout -- hardware/rev-b/keychain-rev-b.kicad_pcb "
+           "hardware/rev-b/Keychain.pretty hardware/rev-b/out")
+
+
 def place(force=False):
     n = board_tracks()
     if n and not force:
         sys.exit(f"{os.path.relpath(PCB, REV)}: в плате {n} дорожек и переходных — это разведённая плата.\n"
                  "place заменит её платой без дорожек. Если так и надо (меняете расстановку и потом\n"
-                 "разводите заново через route), запустите: build.py place --force\n"
-                 "Вернуть плату из репозитория: git checkout -- hardware/rev-b/keychain-rev-b.kicad_pcb "
-                 "hardware/rev-b/Keychain.pretty hardware/rev-b/out")
+                 "разводите заново через route), запустите: build.py place --force\n" + RESTORE)
     os.makedirs(WORK, exist_ok=True)
     footprints.write(LIB)
     board = pcbnew.BOARD()
@@ -921,9 +961,15 @@ def dsn_prepare(dsn, spill=()):
         f.write(text)
 
 
-def route():
+def route(force=False):
     """Сначала земля и питание — переходными в свои слои, потом Freerouting: шины питания
-    в слое питания, сигналы по внешним слоям; потом заливки земли, сшивка и проверка."""
+    в слое питания, сигналы по внешним слоям; потом заливки земли, сшивка и проверка.
+    Плата записывается, только если DRC чистый (save_if_clean)."""
+    n = board_tracks()
+    if n and not force:
+        sys.exit(f"{os.path.relpath(PCB, REV)}: в плате {n} дорожек и переходных — это разведённая плата.\n"
+                 "route снимет все дорожки и разведёт её заново (Freerouting от прогона к прогону разводит\n"
+                 "по-разному). Если так и надо, запустите: build.py route --force; плата не тронута")
     # Java и Freerouting — до того, как плата тронута: без них route ничего не меняет.
     if not shutil.which("java"):
         sys.exit("route: нужна Java 21 (java в PATH); плата не тронута")
@@ -1009,8 +1055,25 @@ def route():
             print("не подключены:", fixroute.connect_pads(board, orphans, fix_track, fix_via) or "—")
             fill(board)
     finish(board)
+    return save_if_clean(board, "route")
+
+
+def save_if_clean(board, stage):
+    """DRC платы в памяти (отчёт — в out/work). Чистая — записывается в PCB. Нет — PCB не
+    трогается, а результат с отчётом остаётся в out/work для разбора, и выход с ошибкой."""
+    found, errors, _ = drc(board)
+    unconnected = found.get("unconnected pads", 0)
+    if errors or unconnected:
+        draft = os.path.join(WORK, f"{NAME}-{stage}-failed")
+        pcbnew.SaveBoard(draft + ".kicad_pcb", board, True)  # True: проект исходной платы не трогать
+        shutil.copyfile(PRO, draft + ".kicad_pro")
+        shutil.copyfile(DRU, draft + ".kicad_dru")
+        sys.exit(f"{stage}: DRC — ошибок {errors}, несоединённых {unconnected}; {os.path.relpath(PCB, REV)} "
+                 f"не тронута, fab такую плату и не принял бы.\nРезультат для разбора: "
+                 f"{os.path.relpath(draft, REV)}.kicad_pcb, отчёт: {os.path.relpath(DRC_DRAFT, REV)}")
     pcbnew.SaveBoard(PCB, board)
-    return drc(board)
+    print(f"{stage}: DRC чистый, плата записана → {os.path.relpath(PCB, REV)}")
+    return found
 
 
 def finish(board):
@@ -1213,10 +1276,12 @@ def via_size(netname):
     return netlist.NETCLASSES["Default"]["via"]
 
 
-DRC_REPORT = os.path.join(OUT, NAME + "-drc.rpt")  # отчёт в репозитории, его пишет и fab
+# Отчёт DRC шагов route и finish — черновик в out/work. Отчёт в репозитории
+# (out/keychain-rev-b-drc.rpt) пишет только fab.check_board и только для платы, которая прошла.
+DRC_DRAFT = os.path.join(WORK, NAME + "-drc.rpt")
 
 
-def drc(board, report=DRC_REPORT):
+def drc(board, report=DRC_DRAFT):
     """DRC платы в отчёт report: ({вид: число}, ошибок, текст). Ошибки — всё с важностью error,
     в том числе несоединённые площадки."""
     os.makedirs(os.path.dirname(report), exist_ok=True)
@@ -1267,7 +1332,38 @@ def to_png(svg, png, width=1400):
     return True
 
 
-USAGE = "build.py place [--force] | route | finish | fab [--no-panel] | panel | all --force"
+USAGE = "build.py place [--force] | route [--force] | finish [--force] | fab [--no-panel] | panel | all --force"
+
+
+def finish_stage(force):
+    """build.py finish: доводка разведённой платы. Без --force — только проверка: плата и
+    библиотека не пишутся, доводка — в памяти, DRC и сравнение — в out/work. С --force — запись
+    после чистого DRC."""
+    global LIB
+    b = pcbnew.LoadBoard(PCB)
+    if not b.GetTracks():
+        sys.exit("finish — для разведённой платы, а в этой нет дорожек")
+    os.makedirs(WORK, exist_ok=True)
+    if force:
+        write_dru()
+    else:
+        LIB = os.path.join(WORK, "Keychain.pretty")  # библиотека из footprints.py — в черновик
+    footprints.write(LIB)
+    finish(b)
+    if force:
+        return save_if_clean(b, "finish")
+    found, errors, _ = drc(b)
+    draft = os.path.join(WORK, NAME + "-finish.kicad_pcb")
+    pcbnew.SaveBoard(draft, b, True)
+    with open(draft, "rb") as f1, open(PCB, "rb") as f2:
+        same = f1.read() == f2.read()
+    print("finish без --force: плата не записана; " + (
+        "доводка её не меняет" if same else
+        f"доводка её меняет — результат: {os.path.relpath(draft, REV)}; записать: build.py finish --force"))
+    if errors or found.get("unconnected pads"):
+        sys.exit(f"finish: DRC после доводки — ошибок {errors}, несоединённых {found.get('unconnected pads', 0)}")
+    return found
+
 
 if __name__ == "__main__":
     args = sys.argv[1:]
@@ -1281,25 +1377,15 @@ if __name__ == "__main__":
         place(force)
         render("place")
     if stage in ("route", "all"):
-        found, errors, _ = route()
+        route(force)  # не прошла DRC — выход, плата не тронута
         render("route")
-        if errors or found.get("unconnected pads"):
-            sys.exit(f"route: после доводки DRC — ошибок {errors}, несоединённых {found.get('unconnected pads')}; "
-                     "fab такую плату не примет")
     if stage == "finish":
-        write_dru()
-        footprints.write(LIB)
-        b = pcbnew.LoadBoard(PCB)
-        if not b.GetTracks():
-            sys.exit("finish — для разведённой платы, а в этой нет дорожек")
-        finish(b)
-        pcbnew.SaveBoard(PCB, b)
-        found, errors, _ = drc(b)
-        if errors:
-            sys.exit(f"finish: DRC — ошибок {errors}")
+        finish_stage(force)
     if stage in ("fab", "all"):
         import fab
         fab.run(panel=not no_panel)
     if stage == "panel":
         import fab
+        os.makedirs(fab.WORK, exist_ok=True)
+        fab.check_board(publish=False)  # плохая плата — отказ раньше, чем тронута out/panel
         fab.run_panel()

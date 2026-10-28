@@ -501,51 +501,7 @@
     "netclass_patterns": [
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-CHG_IO"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-BUZ_B"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-BUZ_A"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-SENS_SDA"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-SWDCLK"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-PDM_CLK"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-DISP_G"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-SWDIO"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-PROG"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-BUZ_A_IO"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-ACC_INT1"
-      },
-      {
-        "netclass": "Board_0-Default",
-        "pattern": "Board_0-DISP_SDA"
+        "pattern": "Board_0-ALS_INT"
       },
       {
         "netclass": "Board_0-Default",
@@ -553,7 +509,39 @@
       },
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-SENS_SCL"
+        "pattern": "Board_0-DISP_G"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-CHG_LED"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-PROG"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-ACC_INT2"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-BUZ_B_IO"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-DISP_SCL"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-SWDCLK"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-DISP_EN"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-CC2"
       },
       {
         "netclass": "Board_0-Default",
@@ -569,23 +557,23 @@
       },
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-PDM_DATA"
+        "pattern": "Board_0-SENS_SDA"
       },
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-ALS_INT"
+        "pattern": "Board_0-BUZ_B"
       },
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-DISP_EN"
+        "pattern": "Board_0-DISP_SDA"
       },
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-BUZ_B_IO"
+        "pattern": "Board_0-BUZ_A_IO"
       },
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-ACC_INT2"
+        "pattern": "Board_0-SWDIO"
       },
       {
         "netclass": "Board_0-Default",
@@ -593,15 +581,15 @@
       },
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-VIB_EN"
+        "pattern": "Board_0-PDM_CLK"
       },
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-CHG_LED"
+        "pattern": "Board_0-SENS_SCL"
       },
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-CC2"
+        "pattern": "Board_0-CHG_IO"
       },
       {
         "netclass": "Board_0-Default",
@@ -609,7 +597,19 @@
       },
       {
         "netclass": "Board_0-Default",
-        "pattern": "Board_0-DISP_SCL"
+        "pattern": "Board_0-PDM_DATA"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-VIB_EN"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-ACC_INT1"
+      },
+      {
+        "netclass": "Board_0-Default",
+        "pattern": "Board_0-BUZ_A"
       },
       {
         "netclass": "Board_0-Power",
@@ -657,7 +657,23 @@
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-BUZ_A_IO"
+        "pattern": "Board_1-BUZ_B_IO"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-SWDCLK"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-CC1"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-PROG"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-PDM_CLK"
       },
       {
         "netclass": "Board_1-Default",
@@ -665,15 +681,43 @@
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-ACC_INT1"
+        "pattern": "Board_1-DISP_SDA"
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-BUZ_B_IO"
+        "pattern": "Board_1-BUZ_A_IO"
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-PDM_DATA"
+        "pattern": "Board_1-SENS_SDA"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-ALS_INT"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-MIC_PWR"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-DISP_EN"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-CHG_EN"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-BTN"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-BUZ_A"
+      },
+      {
+        "netclass": "Board_1-Default",
+        "pattern": "Board_1-CHG_LED"
       },
       {
         "netclass": "Board_1-Default",
@@ -685,27 +729,7 @@
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-BUZ_B"
-      },
-      {
-        "netclass": "Board_1-Default",
-        "pattern": "Board_1-SWDCLK"
-      },
-      {
-        "netclass": "Board_1-Default",
-        "pattern": "Board_1-ALS_INT"
-      },
-      {
-        "netclass": "Board_1-Default",
         "pattern": "Board_1-DISP_PD"
-      },
-      {
-        "netclass": "Board_1-Default",
-        "pattern": "Board_1-DISP_SDA"
-      },
-      {
-        "netclass": "Board_1-Default",
-        "pattern": "Board_1-CC1"
       },
       {
         "netclass": "Board_1-Default",
@@ -713,31 +737,7 @@
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-DISP_G"
-      },
-      {
-        "netclass": "Board_1-Default",
-        "pattern": "Board_1-PROG"
-      },
-      {
-        "netclass": "Board_1-Default",
-        "pattern": "Board_1-CHG_EN"
-      },
-      {
-        "netclass": "Board_1-Default",
-        "pattern": "Board_1-CHG_LED"
-      },
-      {
-        "netclass": "Board_1-Default",
-        "pattern": "Board_1-CHG_STAT"
-      },
-      {
-        "netclass": "Board_1-Default",
-        "pattern": "Board_1-CC2"
-      },
-      {
-        "netclass": "Board_1-Default",
-        "pattern": "Board_1-SENS_SCL"
+        "pattern": "Board_1-PDM_DATA"
       },
       {
         "netclass": "Board_1-Default",
@@ -745,27 +745,27 @@
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-DISP_EN"
+        "pattern": "Board_1-SENS_SCL"
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-MIC_PWR"
+        "pattern": "Board_1-DISP_G"
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-PDM_CLK"
+        "pattern": "Board_1-CHG_STAT"
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-BTN"
+        "pattern": "Board_1-ACC_INT1"
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-SENS_SDA"
+        "pattern": "Board_1-BUZ_B"
       },
       {
         "netclass": "Board_1-Default",
-        "pattern": "Board_1-BUZ_A"
+        "pattern": "Board_1-CC2"
       },
       {
         "netclass": "Board_1-Power",

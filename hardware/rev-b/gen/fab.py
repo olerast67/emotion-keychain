@@ -5,10 +5,13 @@
 
 Прежде чем что-то писать, fab проверяет плату сам: DRC без ошибок и без несоединённых
 площадок, дорожки есть, у деталей, которых завод не ставит, нет пасты. Не прошла — в out/
-ничего не меняется. Отчёт DRC — out/keychain-rev-b-drc.rpt (в репозитории).
+ничего не меняется. Отчёт DRC — out/keychain-rev-b-drc.rpt (в репозитории): его пишет только
+check_board и только для платы, которая прошла.
 
-Панель собирает gen/panel.py через KiKit 1.5. Если KiKit не установлен в том же Python,
-fab запускает panel.py интерпретатором из KIKIT_PYTHON (см. panel.py). Без панели
+Панель собирает gen/panel.py через KiKit 1.5 — в черновик out/work/panel-new, и раньше, чем
+пишутся файлы одной платы: не собралась — ни out/, ни out/panel не тронуты. Собралась — пишутся
+файлы одной платы, и черновик целиком заменяет out/panel. Если KiKit не установлен в том же
+Python, fab запускает panel.py интерпретатором из KIKIT_PYTHON (см. panel.py). Без панели
 (--no-panel) старые файлы панели удаляются: они бы уже не совпадали с платой.
 """
 import csv
@@ -31,29 +34,53 @@ DRC_REPORT = os.path.join(OUT, NAME + "-drc.rpt")
 PANEL_DIR = os.path.join(OUT, "panel")
 PANEL_NAME = NAME + "-panel"
 PANEL_PCB = os.path.join(PANEL_DIR, PANEL_NAME + ".kicad_pcb")
+PANEL_STAGE = os.path.join(WORK, "panel-new")  # черновик панели: в out/panel — только целиком
 
 LAYERS = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS",
           "F.Mask", "B.Mask", "Edge.Cuts"]
 
 # CPL для JLCPCB: угол = угол KiCad (у оборота — отражённый, 180° − θ) плюс поправка корпуса.
 # Нулевой поворот у JLCPCB — как посадочное место детали в их библиотеке (EasyEDA), а оно не
-# всегда повёрнуто как в KiCad. По имени места EasyEDA угол виден: суффикс -BL/-BR — первый
-# вывод внизу слева/справа. Открытые таблицы расходятся (проверено в октябре 2026):
-#   корпус                          KiBot  JLCKicadTools /       Fabrication-  pcb-kit (по
-#                                          kicad-jlcpcb-tools    Toolkit       предпросмотру JLC)
-#   SOT-23 (3 вывода, -BR)          180    −90 (с 09.2024)       180           180
-#   SOT-23-5, SOT-23-6 (-BL)        180    −90                   180           −90, не проверено
-#   USB_C_..._HRO_TYPE-C-31-M-12    180    180                   нет           —
+# всегда повёрнуто как в KiCad. Суффикс имени места EasyEDA -BL/-BR — первый вывод внизу
+# слева/справа; у SOT-23-5 в библиотеке JLCPCB встречаются оба. Открытые таблицы расходятся
+# (сверено в октябре 2026):
+#   корпус                          KiBot  JLCKicadTools /       Fabrication-  pcb-kit main
+#                                          kicad-jlcpcb-tools    Toolkit       (пересказ*)
+#   SOT-23 (3 вывода)               180    −90 (с 09.2024)       180           180
+#   SOT-23-5                        180    −90                   180           −90
+#   SOT-23-6                        180    −90                   180           −90
+#   USB_C_..._HRO_TYPE-C-31-M-12    180    180                   нет           180
 #   SW_SPST_B3                      90     90                    90            —
-# Здесь: SOT-23 — 180 (Q1–Q4): так его показал предпросмотр JLCPCB (pcb-kit PR 14,
-# kicad-jlcpcb-tools PR 881), и место EasyEDA у AO3400A/AO3401A — «-BR». SOT-23-5/6 (U2, U3) —
-# −90: место «-BL», первый вывод KiCad (вверху слева) попадает туда поворотом на 90°, как у SOIC
-# (270 во всех таблицах). USB-C J1 — 180: обе таблицы, где он есть. SW1 (B3U-3100P) и U1
-# (MDBT50Q) идут через Global Sourcing: посадочное место им рисует сама JLCPCB, и запись
-# ^SW_SPST_B3 (она для B3U из каталога) к ним не относится — угол как в KiCad. Остальные корпуса
-# (SOD-123/323, светодиод 0603, LGA, LTR-303) — без поправки. Всё это подсказка, а не гарантия:
-# в предпросмотре JLCPCB каждую полярную деталь сверяют со сборочным чертежом (README, «Заказ на
-# JLCPCB») и при надобности поворачивают там.
+# * Репозиторий pcb-kit отсюда не открывается: его таблица и PR 14/15 — по пересказу чужих проверок.
+# По пересказу PR 15 (проверка свежими заказами в предпросмотре JLCPCB): HRO TYPE-C-31-M-12
+# (C165948) — 0, SOT-23-5 по умолчанию — 180, SOT-23-6 — −90, и C7519 (наш U3) лёг на площадки.
+# Здесь взято:
+#   SOT-23 — 180 (Q1–Q4): так его показал предпросмотр JLCPCB (pcb-kit PR 14, kicad-jlcpcb-tools
+#     PR 881), место EasyEDA у AO3400A/AO3401A — «-BR»;
+#   SOT-23-6 — −90 (U3, USBLC6-2SC6, C7519): с этим согласны JLCKicadTools и pcb-kit;
+#   SOT-23-5 — −90 (U2, MCP73832T, C38066) — ЛУЧШАЯ ДОГАДКА, не проверено: −90 верно, если место
+#     C38066 в EasyEDA — «-BL»; если «-BR», нужно 180 (KiBot, Fabrication-Toolkit, PR 15). Имя
+#     места C38066 мы не видели;
+#   USB-C J1 (C165948) — 180: обе давние таблицы, но на нашем заказе не проверено, а единственное
+#     сообщение с предпросмотра (PR 15) говорит 0 — то есть разворот на 180°.
+# U2 и J1 поэтому — первые кандидаты на поворот в предпросмотре. SW1 (B3U-3100P) и U1 (MDBT50Q)
+# идут через Global Sourcing: посадочное место им рисует сама JLCPCB, и запись ^SW_SPST_B3 (она
+# для B3U из каталога) к ним не относится — угол как в KiCad. Остальные корпуса (SOD-123/323,
+# светодиод 0603, LGA, LTR-303) — без поправки. Всё это подсказка, а не гарантия: в предпросмотре
+# JLCPCB каждую полярную деталь сверяют со сборочным чертежом (README, «Заказ на JLCPCB») и при
+# надобности поворачивают там, а точную поправку потом вписывают в JLC_PART_ROTATION.
+
+# Поправки по номеру LCSC — точные, после первого предпросмотра JLCPCB. Стоят раньше правил по
+# корпусу: если номер детали здесь есть, поправка корпуса из JLC_ROTATION к ней не применяется.
+# Поправка = угол, при котором деталь в предпросмотре легла верно, − угол этой детали в нашем
+# CPL + поправка, которую ей давала JLC_ROTATION (0, если не давала). У копий на панели (_1, _2)
+# поправка одна и та же. Потом — build.py fab: CPL одной платы и панели пересчитаются.
+JLC_PART_ROTATION = {
+    # "C38066": -90,   # U2 MCP73832T-2ACI/OT, SOT-23-5 — вписать после предпросмотра
+    # "C165948": 180,  # J1 HRO TYPE-C-31-M-12 — вписать после предпросмотра
+}
+
+# Поправки по имени посадочного места KiCad (регулярное выражение по колонке Package).
 JLC_ROTATION = [
     (r"^SOT-23$", 180),
     (r"^SOT-23-[56]$", -90),
@@ -116,14 +143,19 @@ def kicad(*args):
 
 # ---------------------------------------------------------------- проверка платы
 
-def check_board(pcb=PCB, report=DRC_REPORT):
+def draft_report(report=DRC_REPORT):
+    """Черновик отчёта DRC в out/work: его пишет check_board, в out/ он попадает копией."""
+    return os.path.join(WORK, os.path.basename(report))
+
+
+def check_board(pcb=PCB, report=DRC_REPORT, publish=True):
     """DRC платы и отказ, если плату нельзя отдавать на завод. Отчёт пишется в out/work, а в
-    report (он в репозитории) копируется, только если плата прошла. Возвращает сводку."""
+    report (он в репозитории) копируется, только если плата прошла и publish. Возвращает сводку."""
     import pcbnew
     import build
     board = pcbnew.LoadBoard(pcb)
     tracks = len(board.GetTracks())
-    draft = os.path.join(WORK, os.path.basename(report))
+    draft = draft_report(report)
     found, errors, text = build.drc(board, draft)
     unplaced = build.paste_on_unplaced(board)
     problems = []
@@ -136,13 +168,14 @@ def check_board(pcb=PCB, report=DRC_REPORT):
     if unplaced:
         problems.append(f"паста на площадках деталей, которых завод не ставит: {unplaced} (build.py finish)")
     if problems:
-        sys.exit(f"fab: {os.path.relpath(pcb, REV)} не годится для заказа, файлы в out/ не тронуты:\n  - "
+        sys.exit(f"fab: {os.path.relpath(pcb, REV)} не годится для заказа, файлы в out/ и out/panel не тронуты:\n  - "
                  + "\n  - ".join(problems) + f"\nОтчёт: {os.path.relpath(draft, REV)}\n"
                  "Вернуть плату и файлы из репозитория: git checkout -- hardware/rev-b/keychain-rev-b.kicad_pcb "
                  "hardware/rev-b/Keychain.pretty hardware/rev-b/out")
-    shutil.copyfile(draft, report)
+    if publish:
+        shutil.copyfile(draft, report)
     print(f"DRC {os.path.basename(pcb)}: ошибок 0, несоединённых 0, предупреждений {found.get('warnings', 0)}, "
-          f"дорожек и переходных {tracks} → {os.path.relpath(report, REV)}")
+          f"дорожек и переходных {tracks} → {os.path.relpath(report if publish else draft, REV)}")
     return found
 
 
@@ -267,15 +300,20 @@ def positions(t=BOARD):
     return rows
 
 
-def jlc_rotation(row):
-    """Угол для CPL JLCPCB: у оборота угол отражается (180° − θ), потом поправка корпуса —
-    так считают kicad-jlcpcb-tools (fabrication.py) и KiBot (mirror_bottom); таблица своя."""
+def jlc_correction(row, lcsc=""):
+    """Поправка JLCPCB для детали: по номеру LCSC (JLC_PART_ROTATION), иначе по корпусу."""
+    if lcsc in JLC_PART_ROTATION:
+        return JLC_PART_ROTATION[lcsc]
+    return sum(delta for pattern, delta in JLC_ROTATION if re.search(pattern, row["Package"]))
+
+
+def jlc_rotation(row, lcsc=""):
+    """Угол для CPL JLCPCB: у оборота угол отражается (180° − θ), потом поправка детали —
+    так считают kicad-jlcpcb-tools (fabrication.py) и KiBot (mirror_bottom); таблицы свои."""
     rot = float(row["Rot"])
     if row["Side"].lower() != "top":
         rot = 180 - rot
-    for pattern, delta in JLC_ROTATION:
-        if re.search(pattern, row["Package"]):
-            rot += delta
+    rot += jlc_correction(row, lcsc)
     return round(rot % 360, 3) % 360
 
 
@@ -288,7 +326,7 @@ def cpl(rows, t=BOARD):
         for row, p in rows:
             bottom = row["Side"].lower() != "top"
             w.writerow([row["Ref"], f'{float(row["PosX"]):.3f}mm', f'{float(row["PosY"]):.3f}mm',
-                        "Bottom" if bottom else "Top", f"{jlc_rotation(row):g}"])
+                        "Bottom" if bottom else "Top", f"{jlc_rotation(row, p['lcsc']):g}"])
     return path
 
 
@@ -416,24 +454,46 @@ def kikit_python():
     return None
 
 
-def run_panel():
-    """Панель монтажа: gen/panel.py — в этом процессе, если KiKit здесь есть, иначе в KIKIT_PYTHON."""
+def run_panel(commit=True):
+    """Панель монтажа в черновик PANEL_STAGE: gen/panel.py — в этом процессе, если KiKit здесь
+    есть, иначе в KIKIT_PYTHON. Не собралась — выход с ошибкой, out/panel не тронута. commit —
+    сразу заменить out/panel черновиком (иначе это делает вызывающий, commit_panel())."""
     exe = kikit_python()
     if exe is None:
         sys.exit("панель: нужен KiKit 1.5 рядом с pcbnew KiCad 7 — см. gen/panel.py, или KIKIT_PYTHON=путь к его python;\n"
                  "без панели: build.py fab --no-panel (файлы панели в out/panel тогда удаляются)")
     if exe == sys.executable:
         import panel
-        panel.main()
-    else:
-        subprocess.run([exe, os.path.join(HERE, "panel.py")], check=True)
+        panel.stage()
+    elif subprocess.run([exe, os.path.join(HERE, "panel.py"), "--stage"]).returncode:
+        sys.exit("панель не собрана (ошибка выше); out/ и out/panel не тронуты")
+    if commit:
+        commit_panel()
+
+
+def commit_panel():
+    """Черновик панели целиком — в out/panel; прежняя out/panel удаляется только после этого."""
+    if not os.path.isfile(os.path.join(PANEL_STAGE, PANEL_NAME + ".kicad_pcb")):
+        sys.exit(f"панель: нет черновика {os.path.relpath(PANEL_STAGE, REV)}; out/panel не тронута")
+    old = os.path.join(WORK, "panel-old")
+    if os.path.isdir(old):
+        shutil.rmtree(old)
+    if os.path.isdir(PANEL_DIR):
+        os.replace(PANEL_DIR, old)
+    os.replace(PANEL_STAGE, PANEL_DIR)
+    shutil.rmtree(old, ignore_errors=True)
+    print(f"панель: {os.path.relpath(PANEL_DIR, REV)} обновлена")
 
 
 def run(panel=True):
     if panel and kikit_python() is None:
         run_panel()  # выйдет с объяснением раньше, чем что-то записано
     os.makedirs(WORK, exist_ok=True)
-    check_board()
+    check_board(publish=False)  # отчёт — в out/ только вместе с остальными файлами, ниже
+    if panel:
+        run_panel(commit=False)  # не собралась — выход, а out/ и out/panel ещё не тронуты
+    shutil.copyfile(draft_report(), DRC_REPORT)
+    print("отчёт DRC:", os.path.relpath(DRC_REPORT, REV))
     outputs(BOARD)
     print("ручной монтаж:", os.path.relpath(hand_assembly(), REV))
     try:
@@ -445,7 +505,7 @@ def run(panel=True):
     except ImportError:
         print("превью пропущены: нужен Pillow (pip install pillow)")
     if panel:
-        run_panel()
+        commit_panel()
     elif os.path.isdir(PANEL_DIR):
         shutil.rmtree(PANEL_DIR)
         print("панель не собрана (--no-panel): out/panel удалена — она уже не совпадала бы с платой")
