@@ -58,10 +58,11 @@
 
 ### Из браузера, без установки
 
-1. Возьмите готовый файл своей платы из [`release/`](release/README.md): `stand-esp32c5.bin`, `stand-esp32dev.bin`, `stand-esp32c3.bin` или `stand-esp32s3.bin`. Свою сборку даёт PlatformIO (ниже): файл `.pio/build/<среда>/firmware.factory.bin`. Те же файлы CI кладёт в архив **stand-firmware** в разделе Actions на GitHub, но только когда Actions работают ([почему сейчас нет](#где-взять-файлы)).
-2. Откройте в Chrome или Edge на компьютере прошивальщик [olerast.com/flash](https://olerast.com/flash), подключите плату и выберите её порт.
-3. Прошейте файл своей платы с адреса `0x0`.
-4. Откройте консоль на 115200: там появятся сообщения и можно вводить команды.
+1. Откройте в Chrome или Edge на компьютере [страницу прошивки брелока](https://olerast.com/projects/emotion-keychain/flash). Файлы последнего релиза там уже выбраны.
+2. Подключите плату, выберите её тип (ESP32-C5, ESP32, ESP32-C3 или ESP32-S3) и нажмите «Прошить».
+3. Откройте консоль на 115200: там появятся сообщения и можно вводить команды.
+
+Своя сборка из PlatformIO (ниже) даёт файл `.pio/build/<среда>/firmware.factory.bin`. Его шьют на [olerast.com/flash](https://olerast.com/flash) своим файлом с адреса `0x0`. Готовые файлы каждой версии лежат в [релизах на GitHub](https://github.com/olerast67/emotion-keychain/releases/latest) и в [`release/`](release/README.md).
 
 Запасной вариант — прошивальщик Espressif [espressif.github.io/esptool-js](https://espressif.github.io/esptool-js/): **Connect** → файл с адреса `0x0` → **Program** → **Disconnect** → в разделе **Console** скорость 115200 и **Start**.
 

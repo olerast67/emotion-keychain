@@ -175,7 +175,7 @@ sim/web/build.sh    # нужны clang с целью wasm32 и wasm-ld (паке
 
 ### На живом экране
 
-ESP32-C5, обычная ESP32, C3 или S3 и модуль SSD1306 на четырёх проводах. Прошивка ставится из браузера через [olerast.com/flash](https://olerast.com/flash) или через PlatformIO:
+ESP32-C5, обычная ESP32, C3 или S3 и модуль SSD1306 на четырёх проводах. Прошивка ставится из браузера на [странице прошивки брелока](https://olerast.com/projects/emotion-keychain/flash) или через PlatformIO:
 
 ```sh
 cd firmware && pio run -e esp32c5 -t upload && pio device monitor

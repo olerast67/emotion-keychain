@@ -24,12 +24,12 @@
     "ru": [
       "Открыть симулятор в браузере и потыкать персонажа | https://olerast67.github.io/emotion-keychain/?lang=ru",
       "Собрать стенд: любая плата ESP32 (C5, обычная, C3 или S3) и экран SSD1306 на четырёх проводах",
-      "Прошить стенд из браузера готовым файлом с адреса 0x0 | https://olerast.com/flash"
+      "Прошить стенд из браузера: файлы уже выбраны, нужно только подключить плату | https://olerast.com/projects/emotion-keychain/flash"
     ],
     "en": [
       "Open the simulator in the browser and poke the character | https://olerast67.github.io/emotion-keychain/",
       "Build the stand: any ESP32 board (C5, classic, C3 or S3) and an SSD1306 screen on four wires",
-      "Flash the stand from the browser with the prebuilt file at address 0x0 | https://olerast.com/flash"
+      "Flash the stand from the browser: files are preselected, just connect the board | https://olerast.com/projects/emotion-keychain/flash"
     ]
   },
   "limits": {
@@ -87,7 +87,7 @@
     },
     {
       "type": "other",
-      "url": "https://olerast.com/flash",
+      "url": "https://olerast.com/projects/emotion-keychain/flash",
       "label": {
         "ru": "Прошить стенд ESP32",
         "en": "Flash the ESP32 stand"

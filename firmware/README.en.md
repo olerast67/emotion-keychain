@@ -58,10 +58,11 @@ The engine is the same as in the simulators, unchanged.
 
 ### From the browser, nothing to install
 
-1. Take the ready-made file for your board from [`release/`](release/README.en.md): `stand-esp32c5.bin`, `stand-esp32dev.bin`, `stand-esp32c3.bin` or `stand-esp32s3.bin`. Your own build comes from PlatformIO (below): the file `.pio/build/<env>/firmware.factory.bin`. CI puts the same files into the **stand-firmware** artifact in the Actions tab on GitHub, but only when Actions are running ([why they aren't right now](#where-to-get-the-files)).
-2. Open the web flasher [olerast.com/flash](https://olerast.com/flash) in desktop Chrome or Edge, connect the board and pick its port.
-3. Flash your board's file at address `0x0`.
-4. Open the console at 115200: messages appear there and you can type commands.
+1. Open the [keychain flashing page](https://olerast.com/projects/emotion-keychain/flash) in desktop Chrome or Edge. The files of the latest release are already selected.
+2. Connect the board, pick its type (ESP32-C5, ESP32, ESP32-C3 or ESP32-S3) and press «Прошить» ("Flash").
+3. Open the console at 115200: messages appear there and you can type commands.
+
+Your own PlatformIO build (below) produces `.pio/build/<env>/firmware.factory.bin`. Flash it on [olerast.com/flash](https://olerast.com/flash) as your own file at address `0x0`. Prebuilt files for every version are in the [GitHub releases](https://github.com/olerast67/emotion-keychain/releases/latest) and in [`release/`](release/README.en.md).
 
 Fallback: Espressif's flasher [espressif.github.io/esptool-js](https://espressif.github.io/esptool-js/): **Connect** → file at address `0x0` → **Program** → **Disconnect** → in the **Console** section set 115200 baud and press **Start**.
 
