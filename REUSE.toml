@@ -1,0 +1,78 @@
+# Licence map for the whole repository (REUSE specification 3.3, https://reuse.software).
+# When several [[annotations]] match a file, the last matching one wins, so the list goes
+# from the broadest rule to the most specific one. Full licence texts are in LICENSES/.
+version = 1
+
+# Code: engine/, firmware/, sim/, tools/, CMake, scripts, CI and everything not listed below.
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 olerast67 and contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Hardware: KiCad files, footprints, generators, Gerber, BOM/CPL, panel, case files.
+[[annotations]]
+path = "hardware/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 olerast67 and contributors"
+SPDX-License-Identifier = "CERN-OHL-W-2.0"
+
+# Documentation and images: docs/, README and other Markdown files, pictures and GIFs.
+[[annotations]]
+path = [
+  "docs/**",
+  "**/*.md",
+  "**/*.png",
+  "**/*.gif",
+  "**/*.jpg",
+  "**/*.jpeg",
+  "**/*.webp",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 olerast67 and contributors"
+SPDX-License-Identifier = "CC-BY-4.0"
+
+# Third-party binaries. The bootloader hex is the Adafruit nRF52 bootloader (MIT; includes
+# TinyUSB, Microsoft UF2, nrfx and Nordic nRF5 SDK 11 code) built for this board, merged
+# with the Nordic SoftDevice S140 6.1.1 and MBR under Nordic's own licence.
+# See THIRD_PARTY_NOTICES.md.
+[[annotations]]
+path = "firmware/bootloader/*.hex"
+precedence = "override"
+SPDX-FileCopyrightText = [
+  "2018-2024 Adafruit Industries and contributors",
+  "2007-2019 Nordic Semiconductor ASA",
+]
+SPDX-License-Identifier = "MIT AND BSD-3-Clause AND LicenseRef-Nordic-5-Clause"
+
+# Ready-made rev B firmware (hex, uf2, DFU zip): this project's code (Apache-2.0) linked with
+# the Adafruit nRF52 Arduino core (LGPL-2.1-or-later), Adafruit libraries (MIT), FreeRTOS (MIT),
+# littlefs and nrfx (BSD-3-Clause), CMSIS (Apache-2.0), nrf_cc310 (Arm object code licence),
+# the bootloader and the SoftDevice S140 (Nordic licence). See THIRD_PARTY_NOTICES.md.
+[[annotations]]
+path = [
+  "firmware/release/keychain-revb-factory.hex",
+  "firmware/release/keychain-revb.uf2",
+  "firmware/release/keychain-revb-dfu.zip",
+]
+precedence = "override"
+SPDX-FileCopyrightText = [
+  "2026 olerast67 and contributors",
+  "2015 Arduino LLC, 2016 Sandeep Mistry, 2017-2024 Adafruit Industries",
+  "2007-2020 Nordic Semiconductor ASA",
+  "Amazon.com, Inc. or its affiliates (FreeRTOS)",
+  "Arm Limited (CMSIS, littlefs, nrf_cc310)",
+]
+SPDX-License-Identifier = "Apache-2.0 AND LGPL-2.1-or-later AND MIT AND BSD-3-Clause AND LicenseRef-Nordic-5-Clause AND LicenseRef-Arm-Object-Code-1.0"
+
+# Ready-made ESP32 stand firmware: this project's code (Apache-2.0) linked with Arduino-ESP32
+# (LGPL-2.1-or-later) and ESP-IDF (Apache-2.0, with components under MIT and BSD-3-Clause).
+# See THIRD_PARTY_NOTICES.md.
+[[annotations]]
+path = "firmware/release/stand-*.bin"
+precedence = "override"
+SPDX-FileCopyrightText = [
+  "2026 olerast67 and contributors",
+  "2015-2025 Espressif Systems (Shanghai) Co., Ltd.",
+]
+SPDX-License-Identifier = "Apache-2.0 AND LGPL-2.1-or-later AND MIT AND BSD-3-Clause"

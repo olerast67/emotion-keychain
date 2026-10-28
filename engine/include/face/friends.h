@@ -6,12 +6,15 @@
 
 #include <stdint.h>
 
+#include "face/lang.h"
+
 namespace face {
 
 // Уровни: 0 — новый знакомый, дальше BUDDY, FRIENDS, BEST FRIENDS и BFF.
 constexpr int kFriendLevels = 5;
 const char* friend_level_tag(int level);   // для экрана
-const char* friend_level_name(int level);  // по-русски
+const char* friend_level_name(int level);  // на языке lang(), по умолчанию по-русски
+const char* friend_level_name(int level, Lang l);
 // Сколько дней встреч нужно для уровня.
 uint16_t friend_level_days(int level);
 

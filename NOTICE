@@ -1,0 +1,22 @@
+Emotion keychain
+Copyright 2026 olerast67 and contributors
+
+This product includes software developed as part of the Emotion keychain
+project (https://github.com/olerast67/emotion-keychain).
+
+The source code (engine/, firmware/, sim/, tools/, build scripts) is licensed
+under the Apache License, Version 2.0 (see LICENSE). The hardware design files
+in hardware/ are licensed under the CERN Open Hardware Licence Version 2 -
+Weakly Reciprocal (see hardware/LICENSE). Documentation and images are
+licensed under Creative Commons Attribution 4.0 International (see
+LICENSES/CC-BY-4.0.txt). REUSE.toml lists which licence applies to which path.
+
+When you redistribute this project or a work based on it, please keep this
+NOTICE file and credit "Emotion keychain by olerast67 and contributors" with
+a link to the repository above.
+
+The project name, logo, character art style and the OLERAST brand are not
+licensed under any of these licences; see TRADEMARKS.md.
+
+Binaries built from this project also contain third-party components under
+their own licences; see THIRD_PARTY_NOTICES.md.

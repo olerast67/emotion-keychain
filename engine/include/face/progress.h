@@ -17,10 +17,13 @@ struct Implant {
   const char* tag;   // для экрана, латиницей: «EMPATHY.MOD»
   const char* name;  // по-русски, для Serial и документации
   uint32_t xp;       // сколько опыта нужно
+  const char* name_en = "";  // по-английски
 };
 
 int implant_count();
 const Implant& implant(int i);
+const char* implant_name(int i);  // на языке lang(), по умолчанию по-русски
+const char* implant_name(int i, Lang l);
 // К какому импланту относится эмоция (0 — база, открыта сразу).
 int implant_of(Expr e);
 
@@ -89,8 +92,15 @@ struct Achievement {
   const char* name;  // по-русски
   const char* how;   // за что
   uint16_t xp;
+  const char* name_en = "";  // по-английски
+  const char* how_en = "";
 };
 const Achievement& achievement(Ach a);
+// Название и за что — на языке lang() (по умолчанию по-русски) или на заданном.
+const char* achievement_name(Ach a);
+const char* achievement_name(Ach a, Lang l);
+const char* achievement_how(Ach a);
+const char* achievement_how(Ach a, Lang l);
 
 // Эмоция открыта, если её имплант уже установлен, или она в списке дополнительных
 // (выигранные в дуэли, а потом и секретные), или открыто всё. Дополнительные хранятся

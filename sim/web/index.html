@@ -1,4 +1,4 @@
-<title>Симулятор брелока-компаньона</title>
+<title>Companion keychain simulator</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -153,26 +153,36 @@
   .checks small { display: block; color: var(--muted); font-size: 12.5px; }
   .foot { font-size: 13px; color: var(--muted); max-width: 80ch; }
   @media (prefers-reduced-motion: reduce) { .fill { transition: none; } }
+  header { flex-wrap: nowrap; align-items: flex-start; justify-content: space-between; }
+  .head-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; flex: 1 1 0; min-width: 0; }
+  header .lang { flex: none; }
+  .seg.lang button { font-size: 13px; padding: 4px 12px; }
 </style>
 
 <div class="wrap">
   <header>
-    <h1>Брелок-компаньон</h1>
-    <p>Симулятор лица: тот же движок, что пойдёт в прошивку, собранный в WebAssembly. Экран 128×64, белый OLED 0.96″.</p>
+    <div class="head-text">
+      <h1 data-i18n="title">Companion keychain</h1>
+      <p data-i18n="subtitle">Face simulator: the same engine that goes into the firmware, compiled to WebAssembly. 128×64 screen, white 0.96″ OLED.</p>
+    </div>
+    <div class="seg lang" role="group" data-i18n-aria="aLang" aria-label="Language">
+      <button data-lang="en" lang="en" aria-pressed="true">EN</button>
+      <button data-lang="ru" lang="ru" aria-pressed="false">RU</button>
+    </div>
   </header>
 
   <main class="bench">
-    <section class="device" aria-label="Экран брелока">
+    <section class="device" data-i18n-aria="aDevice" aria-label="Keychain screen">
       <div class="module">
         <div class="pins" aria-hidden="true"><span>GND</span><span>VCC</span><span>SCL</span><span>SDA</span></div>
-        <div class="glass"><canvas id="oled" width="1024" height="512" aria-label="Экран 128 на 64 пикселя. Нажмите, чтобы тапнуть по брелоку."></canvas></div>
+        <div class="glass"><canvas id="oled" width="1024" height="512" data-i18n-aria="aCanvas" aria-label="128 by 64 pixel screen. Click to tap the keychain."></canvas></div>
         <div class="holes-bottom" aria-hidden="true"><i></i><i></i></div>
         <div class="silk-note" aria-hidden="true">SSD1306 128x64 I2C 0x3C</div>
       </div>
-      <p class="hint">Нажмите на экран — это тап по брелоку. Два быстрых нажатия — двойной тап, много подряд — он начнёт злиться.</p>
+      <p class="hint" data-i18n="hint">Click the screen to tap the keychain. Two quick clicks are a double tap; many in a row and it starts getting angry.</p>
     </section>
 
-    <section class="readout" aria-label="Что происходит">
+    <section class="readout" data-i18n-aria="aReadout" aria-label="What is happening">
       <div class="now" aria-live="polite">
         <div class="now-top"><h2 id="nowName">…</h2><span class="mono" id="nowId"></span><span class="cat-chip" id="nowCat"></span></div>
         <p id="nowWhen"></p>
@@ -180,49 +190,49 @@
       </div>
 
       <div class="stats">
-        <div class="stat"><b id="stFps">0</b><span>кадров/с на экран</span></div>
-        <div class="stat"><b id="stBytes">0</b><span>байт/с по I2C</span></div>
-        <div class="stat"><b id="stBus">0%</b><span>занятость шины 400 кГц</span></div>
-        <div class="stat"><b id="stLit">0%</b><span>горящих пикселей</span></div>
+        <div class="stat"><b id="stFps">0</b><span data-i18n="stFps">frames/s to the screen</span></div>
+        <div class="stat"><b id="stBytes">0</b><span data-i18n="stBytes">bytes/s over I2C</span></div>
+        <div class="stat"><b id="stBus">0%</b><span data-i18n="stBus">400 kHz bus load</span></div>
+        <div class="stat"><b id="stLit">0%</b><span data-i18n="stLit">pixels lit</span></div>
       </div>
 
       <div class="mood">
-        <h3>Настроение</h3>
-        <div class="bar"><span>Радость</span><div class="track"><div class="fill" id="m0"></div></div></div>
-        <div class="bar"><span>Бодрость</span><div class="track"><div class="fill" id="m2"></div></div></div>
-        <div class="bar"><span>Скука</span><div class="track"><div class="fill" id="m3"></div></div></div>
-        <div class="bar"><span>Раздражение</span><div class="track"><div class="fill" id="m4"></div></div></div>
-        <div class="bar"><span>Привязанность</span><div class="track"><div class="fill" id="m5"></div></div></div>
+        <h3 data-i18n="mood">Mood</h3>
+        <div class="bar"><span data-i18n="m0">Joy</span><div class="track"><div class="fill" id="m0"></div></div></div>
+        <div class="bar"><span data-i18n="m2">Energy</span><div class="track"><div class="fill" id="m2"></div></div></div>
+        <div class="bar"><span data-i18n="m3">Boredom</span><div class="track"><div class="fill" id="m3"></div></div></div>
+        <div class="bar"><span data-i18n="m4">Irritation</span><div class="track"><div class="fill" id="m4"></div></div></div>
+        <div class="bar"><span data-i18n="m5">Attachment</span><div class="track"><div class="fill" id="m5"></div></div></div>
       </div>
     </section>
 
-    <section class="panel" aria-label="Управление">
+    <section class="panel" data-i18n-aria="aPanel" aria-label="Controls">
       <div class="row">
-        <div class="seg" role="group" aria-label="Режим">
-          <button id="modeAuto" aria-pressed="true">Сам живёт</button>
-          <button id="modeManual" aria-pressed="false">Ручной</button>
+        <div class="seg" role="group" data-i18n-aria="aMode" aria-label="Mode">
+          <button id="modeAuto" aria-pressed="true" data-i18n="modeAuto">Lives on its own</button>
+          <button id="modeManual" aria-pressed="false" data-i18n="modeManual">Manual</button>
         </div>
-        <div class="seg" role="group" aria-label="Скорость времени">
+        <div class="seg" role="group" data-i18n-aria="aSpeed" aria-label="Time speed">
           <button data-speed="1" aria-pressed="true">×1</button>
           <button data-speed="4" aria-pressed="false">×4</button>
           <button data-speed="16" aria-pressed="false">×16</button>
         </div>
-        <label class="clock">Время суток <input id="clock" type="range" min="0" max="1439" step="1"><output id="clockOut">12:00</output></label>
-        <button class="chip event" id="sound" aria-pressed="false">Пищалка: выкл</button>
+        <label class="clock"><span data-i18n="clock">Time of day</span> <input id="clock" type="range" min="0" max="1439" step="1"><output id="clockOut">12:00</output></label>
+        <button class="chip event" id="sound" aria-pressed="false">Buzzer: off</button>
       </div>
 
       <div class="tabs" role="tablist">
-        <button role="tab" data-tab="events" aria-selected="true">Ситуации</button>
-        <button role="tab" data-tab="emotions" aria-selected="false">Эмоции <span id="exprCount"></span></button>
-        <button role="tab" data-tab="clips" aria-selected="false">Жесты</button>
-        <button role="tab" data-tab="persona" aria-selected="false">Характер и сцены</button>
-        <button role="tab" data-tab="settings" aria-selected="false">Настройки</button>
+        <button role="tab" data-tab="events" aria-selected="true" data-i18n="tabEvents">Situations</button>
+        <button role="tab" data-tab="emotions" aria-selected="false"><span data-i18n="tabEmotions">Emotions</span> <span id="exprCount"></span></button>
+        <button role="tab" data-tab="clips" aria-selected="false" data-i18n="tabClips">Gestures</button>
+        <button role="tab" data-tab="persona" aria-selected="false" data-i18n="tabPersona">Character and scenes</button>
+        <button role="tab" data-tab="settings" aria-selected="false" data-i18n="tabSettings">Settings</button>
       </div>
 
       <div data-pane="events" id="paneEvents"></div>
       <div data-pane="emotions" hidden>
         <div class="row" style="margin-bottom:12px">
-          <input id="search" class="search" type="search" placeholder="Найти: смех, сон, ленни, sad…" aria-label="Поиск эмоции">
+          <input id="search" class="search" type="search" data-i18n-ph="searchPh" placeholder="Search: laugh, sleep, lenny, sad…" data-i18n-aria="aSearch" aria-label="Search emotions">
           <span class="count" id="foundCount"></span>
         </div>
         <div id="paneEmotions"></div>
@@ -230,54 +240,54 @@
       <div data-pane="clips" hidden><div class="chips" id="paneClips"></div></div>
       <div data-pane="persona" hidden>
         <div class="row" style="margin-bottom:12px">
-          <div class="seg" role="group" aria-label="Тема">
-            <button data-theme-id="0" aria-pressed="true">Классика</button>
-            <button data-theme-id="1" aria-pressed="false">Киберпанк</button>
-            <button data-theme-id="2" aria-pressed="false">Ретро</button>
+          <div class="seg" role="group" data-i18n-aria="aTheme" aria-label="Theme">
+            <button data-theme-id="0" aria-pressed="true" data-i18n="themeClassic">Classic</button>
+            <button data-theme-id="1" aria-pressed="false" data-i18n="themeCyber">Cyberpunk</button>
+            <button data-theme-id="2" aria-pressed="false" data-i18n="themeRetro">Retro</button>
           </div>
-          <button class="chip event" id="newSerial">Другой брелок</button>
+          <button class="chip event" id="newSerial" data-i18n="newSerial">Another keychain</button>
           <span class="count" id="idText"></span>
         </div>
-        <label class="clock" style="margin-bottom:12px">Наклон <input id="tilt" type="range" min="-100" max="100" step="5" value="0"><output id="tiltOut">0</output></label>
+        <label class="clock" style="margin-bottom:12px"><span data-i18n="tilt">Tilt</span> <input id="tilt" type="range" min="-100" max="100" step="5" value="0"><output id="tiltOut">0</output></label>
         <div class="group">
-          <h3>Рост</h3>
+          <h3 data-i18n="growth">Growth</h3>
           <div class="row">
-            <div class="seg" role="group" aria-label="Рост">
-              <button id="growAll" aria-pressed="true">Всё открыто</button>
-              <button id="growNew" aria-pressed="false">С нуля</button>
+            <div class="seg" role="group" data-i18n-aria="aGrowth" aria-label="Growth">
+              <button id="growAll" aria-pressed="true" data-i18n="growAll">All unlocked</button>
+              <button id="growNew" aria-pressed="false" data-i18n="growNew">From scratch</button>
             </div>
-            <button class="chip event" id="newDay">Новый день</button>
-            <button class="chip event" id="addXp">+100 опыта</button>
+            <button class="chip event" id="newDay" data-i18n="newDay">New day</button>
+            <button class="chip event" id="addXp" data-i18n="addXp">+100 XP</button>
             <span class="count" id="growText"></span>
           </div>
         </div>
         <div class="group">
-          <h3>Достижения <span id="achCount"></span></h3>
+          <h3><span data-i18n="achievements">Achievements</span> <span id="achCount"></span></h3>
           <div class="chips" id="paneAch"></div>
         </div>
         <div class="group">
-          <h3>Календарь и пасхалки</h3>
+          <h3 data-i18n="calendar">Calendar and easter eggs</h3>
           <div class="row">
-            <label class="clock">Дата <input id="date" type="date"></label>
+            <label class="clock"><span data-i18n="date">Date</span> <input id="date" type="date"></label>
             <div class="chips" id="eggTimes"></div>
           </div>
         </div>
         <div class="group">
-          <h3>Сцены</h3>
+          <h3 data-i18n="scenes">Scenes</h3>
           <div class="chips" id="paneScenes"></div>
         </div>
       </div>
       <div data-pane="settings" hidden>
         <div class="checks">
-          <label><input type="checkbox" id="optDrift" checked><span>Дрейф против выгорания<small>Лицо сдвигается на 1 px раз в 20–40 секунд, чтобы пиксели не выгорали.</small></span></label>
-          <label><input type="checkbox" id="optIdle" checked><span>Моргание, взгляд и фирменные жесты<small>Без них лицо застывает — так видно, сколько кадров даёт сама эмоция.</small></span></label>
-          <label><input type="checkbox" id="optScan"><span>Ретро-режим через строку<small>Горит каждая вторая строка: ретро-вид, меньше выгорания и тока.</small></span></label>
-          <label><input type="checkbox" id="optFlip"><span>Экран вверх ногами<small>На устройстве это две команды контроллеру, без затрат.</small></span></label>
-          <label><input type="checkbox" id="optDirty"><span>Подсвечивать, что уходит по шине<small>Красные рамки — изменённые окна страниц: только они отправляются на экран.</small></span></label>
-          <label><input type="checkbox" id="optGrid" checked><span>Сетка пикселей<small>Зазоры между пикселями, как на настоящей панели.</small></span></label>
+          <label><input type="checkbox" id="optDrift" checked><span><span data-i18n="optDrift">Anti burn-in drift</span><small data-i18n="optDriftH">The face shifts by 1 px every 20–40 seconds so the pixels do not burn in.</small></span></label>
+          <label><input type="checkbox" id="optIdle" checked><span><span data-i18n="optIdle">Blinking, gaze and signature gestures</span><small data-i18n="optIdleH">Without them the face freezes, which shows how many frames the emotion itself needs.</small></span></label>
+          <label><input type="checkbox" id="optScan"><span><span data-i18n="optScan">Retro every-other-line mode</span><small data-i18n="optScanH">Only every second line is lit: a retro look, less burn-in and less current.</small></span></label>
+          <label><input type="checkbox" id="optFlip"><span><span data-i18n="optFlip">Upside-down screen</span><small data-i18n="optFlipH">On the device this is two commands to the controller, at no cost.</small></span></label>
+          <label><input type="checkbox" id="optDirty"><span><span data-i18n="optDirty">Highlight what goes over the bus</span><small data-i18n="optDirtyH">Red frames are the changed page windows: only they are sent to the screen.</small></span></label>
+          <label><input type="checkbox" id="optGrid" checked><span><span data-i18n="optGrid">Pixel grid</span><small data-i18n="optGridH">Gaps between the pixels, like on a real panel.</small></span></label>
         </div>
       </div>
-      <p class="foot">Когда лицо не меняется, движок не рисует и не шлёт ничего: экран держит картинку сам, а процессор спит до следующего моргания или события. Цифры слева — оценка нагрузки на шину для прошивки.</p>
+      <p class="foot" data-i18n="foot">When the face does not change, the engine draws and sends nothing: the screen holds the picture by itself and the processor sleeps until the next blink or event. The numbers on the left estimate the bus load for the firmware.</p>
     </section>
   </main>
 </div>
@@ -297,16 +307,98 @@
     set(k, v) { try { localStorage.setItem("fk." + k, JSON.stringify(v)); } catch {} },
   };
 
+  // ---- Тексты страницы на двух языках. Названия эмоций, событий, сцен и характеров даёт движок ----
+  const T = {
+    en: {
+      docTitle: "Companion keychain simulator", aLang: "Language",
+      title: "Companion keychain",
+      subtitle: "Face simulator: the same engine that goes into the firmware, compiled to WebAssembly. 128×64 screen, white 0.96″ OLED.",
+      aDevice: "Keychain screen", aCanvas: "128 by 64 pixel screen. Click to tap the keychain.",
+      hint: "Click the screen to tap the keychain. Two quick clicks are a double tap; many in a row and it starts getting angry.",
+      aReadout: "What is happening",
+      stFps: "frames/s to the screen", stBytes: "bytes/s over I2C", stBus: "400 kHz bus load", stLit: "pixels lit",
+      mood: "Mood", m0: "Joy", m2: "Energy", m3: "Boredom", m4: "Irritation", m5: "Attachment",
+      aPanel: "Controls", aMode: "Mode", modeAuto: "Lives on its own", modeManual: "Manual", aSpeed: "Time speed",
+      clock: "Time of day", soundOn: "Buzzer: on", soundOff: "Buzzer: off",
+      tabEvents: "Situations", tabEmotions: "Emotions", tabClips: "Gestures", tabPersona: "Character and scenes", tabSettings: "Settings",
+      searchPh: "Search: laugh, sleep, lenny, sad…", aSearch: "Search emotions", found: n => `found: ${n}`,
+      aTheme: "Theme", themeClassic: "Classic", themeCyber: "Cyberpunk", themeRetro: "Retro",
+      newSerial: "Another keychain", tilt: "Tilt", growth: "Growth", aGrowth: "Growth", growAll: "All unlocked", growNew: "From scratch",
+      newDay: "New day", addXp: "+100 XP", achievements: "Achievements", calendar: "Calendar and easter eggs", date: "Date", scenes: "Scenes",
+      optDrift: "Anti burn-in drift", optDriftH: "The face shifts by 1 px every 20–40 seconds so the pixels do not burn in.",
+      optIdle: "Blinking, gaze and signature gestures", optIdleH: "Without them the face freezes, which shows how many frames the emotion itself needs.",
+      optScan: "Retro every-other-line mode", optScanH: "Only every second line is lit: a retro look, less burn-in and less current.",
+      optFlip: "Upside-down screen", optFlipH: "On the device this is two commands to the controller, at no cost.",
+      optDirty: "Highlight what goes over the bus", optDirtyH: "Red frames are the changed page windows: only they are sent to the screen.",
+      optGrid: "Pixel grid", optGridH: "Gaps between the pixels, like on a real panel.",
+      foot: "When the face does not change, the engine draws and sends nothing: the screen holds the picture by itself and the processor sleeps until the next blink or event. The numbers on the left estimate the bus load for the firmware.",
+      gTouch: "Touch", gMotion: "Motion", gSound: "Sound", gLight: "Light", gTemp: "Temperature", gPower: "Power", gPeer: "Another keychain",
+      knock: "Secret knock", off: "Turn off", battery: "Battery",
+      peer: "neighbour: ", meetNew: "New acquaintance", meetOld: "Old acquaintance", meetAgain: "Same one again, next day",
+      meetMentor: "Older keychain", duelWin: "Duel: win", duelLose: "Duel: loss",
+      cyberEye: "golden cyber eye", when: "When: ", why: "Why: ",
+      grow: (d, s, u, n, i) => `day ${d} · streak ${s} · unlocked ${u}/${n} · implant ${i}`, eco: "eco mode",
+      clips: { blink: "Blink", wink: "Wink", nod: "Nod", headshake: "Shake head", startle: "Flinch", yawn: "Yawn",
+        double_take: "Double take", sneeze: "Sneeze", look_around: "Look around", hop: "Hop", shiver: "Shiver",
+        peek: "Peek from below", glitch: "Screen glitch", eye_roll: "Roll eyes", sigh: "Sigh", shake_off: "Shake off", boop: "Boop" },
+    },
+    ru: {
+      docTitle: "Симулятор брелока-компаньона", aLang: "Язык",
+      title: "Брелок-компаньон",
+      subtitle: "Симулятор лица: тот же движок, что пойдёт в прошивку, собранный в WebAssembly. Экран 128×64, белый OLED 0.96″.",
+      aDevice: "Экран брелока", aCanvas: "Экран 128 на 64 пикселя. Нажмите, чтобы тапнуть по брелоку.",
+      hint: "Нажмите на экран — это тап по брелоку. Два быстрых нажатия — двойной тап, много подряд — он начнёт злиться.",
+      aReadout: "Что происходит",
+      stFps: "кадров/с на экран", stBytes: "байт/с по I2C", stBus: "занятость шины 400 кГц", stLit: "горящих пикселей",
+      mood: "Настроение", m0: "Радость", m2: "Бодрость", m3: "Скука", m4: "Раздражение", m5: "Привязанность",
+      aPanel: "Управление", aMode: "Режим", modeAuto: "Сам живёт", modeManual: "Ручной", aSpeed: "Скорость времени",
+      clock: "Время суток", soundOn: "Пищалка: вкл", soundOff: "Пищалка: выкл",
+      tabEvents: "Ситуации", tabEmotions: "Эмоции", tabClips: "Жесты", tabPersona: "Характер и сцены", tabSettings: "Настройки",
+      searchPh: "Найти: смех, сон, ленни, sad…", aSearch: "Поиск эмоции", found: n => `найдено: ${n}`,
+      aTheme: "Тема", themeClassic: "Классика", themeCyber: "Киберпанк", themeRetro: "Ретро",
+      newSerial: "Другой брелок", tilt: "Наклон", growth: "Рост", aGrowth: "Рост", growAll: "Всё открыто", growNew: "С нуля",
+      newDay: "Новый день", addXp: "+100 опыта", achievements: "Достижения", calendar: "Календарь и пасхалки", date: "Дата", scenes: "Сцены",
+      optDrift: "Дрейф против выгорания", optDriftH: "Лицо сдвигается на 1 px раз в 20–40 секунд, чтобы пиксели не выгорали.",
+      optIdle: "Моргание, взгляд и фирменные жесты", optIdleH: "Без них лицо застывает — так видно, сколько кадров даёт сама эмоция.",
+      optScan: "Ретро-режим через строку", optScanH: "Горит каждая вторая строка: ретро-вид, меньше выгорания и тока.",
+      optFlip: "Экран вверх ногами", optFlipH: "На устройстве это две команды контроллеру, без затрат.",
+      optDirty: "Подсвечивать, что уходит по шине", optDirtyH: "Красные рамки — изменённые окна страниц: только они отправляются на экран.",
+      optGrid: "Сетка пикселей", optGridH: "Зазоры между пикселями, как на настоящей панели.",
+      foot: "Когда лицо не меняется, движок не рисует и не шлёт ничего: экран держит картинку сам, а процессор спит до следующего моргания или события. Цифры слева — оценка нагрузки на шину для прошивки.",
+      gTouch: "Касания", gMotion: "Движение", gSound: "Звук", gLight: "Свет", gTemp: "Температура", gPower: "Питание", gPeer: "Другой брелок",
+      knock: "Секретный стук", off: "Выключить", battery: "Заряд",
+      peer: "сосед: ", meetNew: "Новый знакомый", meetOld: "Старый знакомый", meetAgain: "Снова тот же, назавтра",
+      meetMentor: "Старший брелок", duelWin: "Дуэль — победа", duelLose: "Дуэль — проигрыш",
+      cyberEye: "золотой кибер-глаз", when: "Когда: ", why: "Почему: ",
+      grow: (d, s, u, n, i) => `день ${d} · серия ${s} · открыто ${u}/${n} · имплант ${i}`, eco: "экорежим",
+      clips: { blink: "Моргнуть", wink: "Подмигнуть", nod: "Кивнуть", headshake: "Мотнуть головой", startle: "Вздрогнуть",
+        yawn: "Зевнуть", double_take: "Двойной взгляд", sneeze: "Чихнуть", look_around: "Осмотреться", hop: "Подпрыгнуть",
+        shiver: "Задрожать", peek: "Выглянуть снизу", glitch: "Сбой экрана", eye_roll: "Закатить глаза", sigh: "Вздохнуть",
+        shake_off: "Отряхнуться", boop: "Тык" },
+    },
+  };
+  // Язык: ?lang=ru|en в адресе, затем сохранённый выбор, по умолчанию английский.
+  const LANGS = { ru: 0, en: 1 };
+  const urlLang = (() => { try { return new URLSearchParams(location.search).get("lang"); } catch { return null; } })();
+  let lang = urlLang in LANGS ? urlLang : store.get("lang", "en");
+  if (!(lang in LANGS)) lang = "en";
+  let L = T[lang];
+
   // ---- Время симуляции ----
   let speed = 1, sim = 0, last = performance.now(), due = 0;
   const now = () => Math.floor(sim);
   E.fe_init((Math.random() * 1e9) | 0, 0);
+  E.fe_set_lang(LANGS[lang]);
 
-  const exprs = [...Array(E.fe_expr_count()).keys()].map(i => ({
-    i, id: str(E.fe_expr_id(i)), name: str(E.fe_expr_name(i)), when: str(E.fe_expr_when(i)), cat: E.fe_expr_cat(i),
-  }));
-  const cats = [...Array(E.fe_cat_count()).keys()].map(c => str(E.fe_cat_name(c)));
-  const events = [...Array(E.fe_event_count()).keys()].map(i => ({ i, id: str(E.fe_event_id(i)), name: str(E.fe_event_name(i)) }));
+  let exprs = [], cats = [], events = [];
+  function loadNames() {
+    exprs = [...Array(E.fe_expr_count()).keys()].map(i => ({
+      i, id: str(E.fe_expr_id(i)), name: str(E.fe_expr_name(i)), when: str(E.fe_expr_when(i)), cat: E.fe_expr_cat(i),
+    }));
+    cats = [...Array(E.fe_cat_count()).keys()].map(c => str(E.fe_cat_name(c)));
+    events = [...Array(E.fe_event_count()).keys()].map(i => ({ i, id: str(E.fe_event_id(i)), name: str(E.fe_event_name(i)) }));
+  }
+  loadNames();
   const evIndex = Object.fromEntries(events.map(e => [e.id, e.i]));
   document.getElementById("exprCount").textContent = exprs.length;
 
@@ -383,10 +475,11 @@
     if (hz > 0 && soundOn) { osc.frequency.setValueAtTime(hz, t); amp.gain.setTargetAtTime(soft ? 0.025 : 0.06, t, 0.002); }
     else amp.gain.setTargetAtTime(0, t, 0.003);
   }
+  const soundLabel = () => { btnSound.textContent = soundOn ? L.soundOn : L.soundOff; };
   function setSound(v) {
     soundOn = v;
     if (v) audioStart();
-    btnSound.setAttribute("aria-pressed", v); btnSound.textContent = v ? "Пищалка: вкл" : "Пищалка: выкл";
+    btnSound.setAttribute("aria-pressed", v); soundLabel();
     if (!v) setTone(0, false);
   }
   btnSound.onclick = () => setSound(!soundOn);
@@ -424,94 +517,103 @@
 
   // ---- Ситуации ----
   const groups = [
-    ["Касания", ["tap", "double_tap", "button", "button_long", "*knock"]],
-    ["Движение", ["pick_up", "walk", "run", "still", "shake", "shake_hard", "free_fall", "impact", "upside_down", "upright"]],
-    ["Звук", ["speech", "music", "loud", "quiet"]],
-    ["Свет", ["dark", "light", "bright"]],
-    ["Температура", ["cold", "hot", "temp_ok"]],
-    ["Питание", ["charge_start", "charge_full", "charge_stop", "battery_low", "battery_critical", "*off"]],
+    ["gTouch", ["tap", "double_tap", "button", "button_long", "*knock"]],
+    ["gMotion", ["pick_up", "walk", "run", "still", "shake", "shake_hard", "free_fall", "impact", "upside_down", "upright"]],
+    ["gSound", ["speech", "music", "loud", "quiet"]],
+    ["gLight", ["dark", "light", "bright"]],
+    ["gTemp", ["cold", "hot", "temp_ok"]],
+    ["gPower", ["charge_start", "charge_full", "charge_stop", "battery_low", "battery_critical", "*off"]],
   ];
   // Особые кнопки: стук выстукивается по времени симуляции, «выключить» — сцена и сон до касания.
   const special = {
-    knock: ["Секретный стук", () => [0, 500, 750, 1000, 1500].forEach(a => setTimeout(() => { E.fe_event(evIndex.tap, now()); due = 0; }, a / speed))],
-    off: ["Выключить", () => E.fe_power_off(now())],
+    knock: () => [0, 500, 750, 1000, 1500].forEach(a => setTimeout(() => { E.fe_event(evIndex.tap, now()); due = 0; }, a / speed)),
+    off: () => E.fe_power_off(now()),
   };
   const paneEv = document.getElementById("paneEvents");
-  for (const [title, ids] of groups) {
-    const g = document.createElement("div"); g.className = "group";
-    g.innerHTML = `<h3>${title}</h3>`;
-    const chips = document.createElement("div"); chips.className = "chips";
-    for (const id of ids) {
-      const b = document.createElement("button"); b.className = "chip event";
-      if (id[0] === "*") {
-        const [title, fn] = special[id.slice(1)];
-        b.textContent = title; b.onclick = () => { fn(); due = 0; };
-        chips.append(b); continue;
+  let battery = 35, peerLine = "";
+  function buildEvents() {
+    paneEv.replaceChildren();
+    for (const [key, ids] of groups) {
+      const g = document.createElement("div"); g.className = "group";
+      const h = document.createElement("h3"); h.textContent = L[key]; g.append(h);
+      const chips = document.createElement("div"); chips.className = "chips";
+      for (const id of ids) {
+        const b = document.createElement("button"); b.className = "chip event";
+        if (id[0] === "*") {
+          const fn = special[id.slice(1)];
+          b.textContent = L[id.slice(1)]; b.onclick = () => { fn(); due = 0; };
+          chips.append(b); continue;
+        }
+        const e = events[evIndex[id]];
+        b.textContent = e.name;
+        b.onclick = () => {
+          if (id === "free_fall") { E.fe_event(e.i, now()); setTimeout(() => { E.fe_event(evIndex.impact, now()); due = 0; }, 450 / speed); }
+          else E.fe_event(e.i, now());
+          due = 0;
+        };
+        chips.append(b);
       }
-      const e = events[evIndex[id]];
-      b.textContent = e.name;
-      b.onclick = () => {
-        if (id === "free_fall") { E.fe_event(e.i, now()); setTimeout(() => { E.fe_event(evIndex.impact, now()); due = 0; }, 450 / speed); }
-        else E.fe_event(e.i, now());
-        due = 0;
-      };
-      chips.append(b);
+      if (key === "gPower") {
+        // Заряд в процентах: его покажет сцена зарядки.
+        const lab = document.createElement("label"); lab.className = "clock";
+        const sp = document.createElement("span"); sp.textContent = L.battery;
+        const inp = document.createElement("input"); inp.type = "range"; inp.min = 0; inp.max = 100; inp.step = 1; inp.value = battery;
+        const out = document.createElement("output");
+        lab.append(sp, " ", inp, out);
+        const apply = () => { battery = +inp.value; out.textContent = inp.value + "%"; E.fe_set_battery(battery); };
+        inp.oninput = apply; apply();
+        chips.append(lab);
+      }
+      g.append(chips); paneEv.append(g);
     }
-    if (title === "Питание") {
-      // Заряд в процентах: его покажет сцена зарядки.
-      const lab = document.createElement("label"); lab.className = "clock";
-      lab.innerHTML = 'Заряд <input type="range" min="0" max="100" step="1" value="35"><output>35%</output>';
-      const [inp, out] = [lab.querySelector("input"), lab.querySelector("output")];
-      const apply = () => { out.textContent = inp.value + "%"; E.fe_set_battery(+inp.value); };
-      inp.oninput = apply; apply();
-      chips.append(lab);
-    }
-    g.append(chips); paneEv.append(g);
-  }
-  // Другой брелок рядом: каждый раз новый сосед со своим характером. После дуэли — разговор шифром.
-  {
+    // Другой брелок рядом: каждый раз новый сосед со своим характером. После дуэли — разговор шифром.
     const g = document.createElement("div"); g.className = "group";
-    g.innerHTML = "<h3>Другой брелок</h3>";
+    const h = document.createElement("h3"); h.textContent = L.gPeer; g.append(h);
     const chips = document.createElement("div"); chips.className = "chips";
     const peerText = document.createElement("span"); peerText.className = "count";
-    const add = (title, fn) => {
-      const b = document.createElement("button"); b.className = "chip event"; b.textContent = title;
-      b.onclick = () => {
-        fn(now());
-        const lvl = E.fe_peer_level();
-        peerText.textContent = "сосед: " + str(E.fe_peer_arch()) + (lvl >= 0 ? " · " + str(E.fe_level_tag(lvl)) : "");
-        due = 0;
-      };
+    const showPeer = () => {
+      if (!peerLine) return;
+      const lvl = E.fe_peer_level();
+      peerText.textContent = L.peer + str(E.fe_peer_arch()) + (lvl >= 0 ? " · " + str(E.fe_level_tag(lvl)) : "");
+    };
+    const add = (key, fn) => {
+      const b = document.createElement("button"); b.className = "chip event"; b.textContent = L[key];
+      b.onclick = () => { fn(now()); peerLine = "1"; showPeer(); due = 0; };
       chips.append(b);
     };
-    add("Новый знакомый", t => E.fe_meet(1, t));
-    add("Старый знакомый", t => E.fe_meet(0, t));
-    add("Снова тот же, назавтра", t => E.fe_meet_again(t));
-    add("Старший брелок", t => E.fe_meet_mentor(t));
-    add("Дуэль — победа", t => E.fe_duel(1, t));
-    add("Дуэль — проигрыш", t => E.fe_duel(0, t));
+    add("meetNew", t => E.fe_meet(1, t));
+    add("meetOld", t => E.fe_meet(0, t));
+    add("meetAgain", t => E.fe_meet_again(t));
+    add("meetMentor", t => E.fe_meet_mentor(t));
+    add("duelWin", t => E.fe_duel(1, t));
+    add("duelLose", t => E.fe_duel(0, t));
+    showPeer();
     chips.append(peerText);
     g.append(chips); paneEv.append(g);
   }
 
   // ---- Эмоции ----
   const paneEm = document.getElementById("paneEmotions");
-  const chipByExpr = [];
-  cats.forEach((title, c) => {
-    const list = exprs.filter(x => x.cat === c);
-    if (!list.length) return;
-    const g = document.createElement("div"); g.className = "group"; g.dataset.cat = c;
-    g.innerHTML = `<h3>${title} · ${list.length}</h3>`;
-    const chips = document.createElement("div"); chips.className = "chips";
-    for (const x of list) {
-      const b = document.createElement("button"); b.className = "chip"; b.textContent = x.name;
-      b.title = x.id + " — " + x.when; b.setAttribute("aria-pressed", "false");
-      b.dataset.search = (x.name + " " + x.id + " " + x.when).toLowerCase();
-      b.onclick = () => { E.fe_set_expr(x.i, now(), -1); if (auto) E.fe_bh_hold_manual(now(), 12000); due = 0; };
-      chipByExpr[x.i] = b; chips.append(b);
-    }
-    g.append(chips); paneEm.append(g);
-  });
+  let chipByExpr = [];
+  function buildEmotions() {
+    paneEm.replaceChildren();
+    chipByExpr = [];
+    cats.forEach((title, c) => {
+      const list = exprs.filter(x => x.cat === c);
+      if (!list.length) return;
+      const g = document.createElement("div"); g.className = "group"; g.dataset.cat = c;
+      const h = document.createElement("h3"); h.textContent = `${title} · ${list.length}`; g.append(h);
+      const chips = document.createElement("div"); chips.className = "chips";
+      for (const x of list) {
+        const b = document.createElement("button"); b.className = "chip"; b.textContent = x.name;
+        b.title = x.id + " — " + x.when; b.setAttribute("aria-pressed", "false");
+        b.dataset.search = (x.name + " " + x.id + " " + x.when).toLowerCase();
+        b.onclick = () => { E.fe_set_expr(x.i, now(), -1); if (auto) E.fe_bh_hold_manual(now(), 12000); due = 0; };
+        chipByExpr[x.i] = b; chips.append(b);
+      }
+      g.append(chips); paneEm.append(g);
+    });
+  }
   const search = document.getElementById("search"), found = document.getElementById("foundCount");
   search.oninput = () => {
     const q = search.value.trim().toLowerCase(); let n = 0;
@@ -520,20 +622,19 @@
       g.querySelectorAll(".chip").forEach(b => { const ok = !q || b.dataset.search.includes(q); b.hidden = !ok; if (ok) { any = true; n++; } });
       g.hidden = !any;
     });
-    found.textContent = q ? `найдено: ${n}` : "";
+    found.textContent = q ? L.found(n) : "";
   };
 
   // ---- Жесты ----
-  const clipNames = { blink: "Моргнуть", wink: "Подмигнуть", nod: "Кивнуть", headshake: "Мотнуть головой", startle: "Вздрогнуть",
-    yawn: "Зевнуть", double_take: "Двойной взгляд", sneeze: "Чихнуть", look_around: "Осмотреться", hop: "Подпрыгнуть",
-    shiver: "Задрожать", peek: "Выглянуть снизу", glitch: "Сбой экрана", eye_roll: "Закатить глаза", sigh: "Вздохнуть",
-    shake_off: "Отряхнуться", boop: "Тык" };
   const paneClips = document.getElementById("paneClips");
-  for (let i = 0; i < E.fe_clip_count(); i++) {
-    const id = str(E.fe_clip_id(i));
-    const b = document.createElement("button"); b.className = "chip event"; b.textContent = clipNames[id] || id;
-    b.onclick = () => { E.fe_play_clip(i, now()); due = 0; };
-    paneClips.append(b);
+  function buildClips() {
+    paneClips.replaceChildren();
+    for (let i = 0; i < E.fe_clip_count(); i++) {
+      const id = str(E.fe_clip_id(i));
+      const b = document.createElement("button"); b.className = "chip event"; b.textContent = L.clips[id] || id;
+      b.onclick = () => { E.fe_play_clip(i, now()); due = 0; };
+      paneClips.append(b);
+    }
   }
 
   // ---- Характер и сцены ----
@@ -552,11 +653,16 @@
   growAll.onclick = () => setGrow(true); growNew.onclick = () => setGrow(false);
   document.getElementById("newDay").onclick = () => { E.fe_new_day(now()); due = 0; };
   document.getElementById("addXp").onclick = () => { E.fe_add_xp(100, now()); due = 0; };
-  const paneAch = document.getElementById("paneAch"), achChips = [];
-  for (let i = 0; i < E.fe_ach_count(); i++) {
-    const b = document.createElement("span"); b.className = "chip"; b.textContent = str(E.fe_ach_name(i));
-    b.title = str(E.fe_ach_tag(i)) + " — " + str(E.fe_ach_how(i)); b.setAttribute("aria-pressed", "false");
-    achChips.push(b); paneAch.append(b);
+  const paneAch = document.getElementById("paneAch");
+  let achChips = [];
+  function buildAch() {
+    paneAch.replaceChildren();
+    achChips = [];
+    for (let i = 0; i < E.fe_ach_count(); i++) {
+      const b = document.createElement("span"); b.className = "chip"; b.textContent = str(E.fe_ach_name(i));
+      b.title = str(E.fe_ach_tag(i)) + " — " + str(E.fe_ach_how(i)); b.setAttribute("aria-pressed", "false");
+      achChips.push(b); paneAch.append(b);
+    }
   }
   // ---- Календарь: дата для праздников и пасхалок, время-пасхалки ----
   const dateEl = document.getElementById("date");
@@ -568,9 +674,12 @@
     eggTimes.append(b);
   }
   const idText = document.getElementById("idText");
+  const showId = () => {
+    idText.textContent = `${str(E.fe_id_code())} · ${str(E.fe_id_arch())} · ${str(E.fe_id_rarity())}` + (E.fe_id_cyber() ? " · " + L.cyberEye : "");
+  };
   const applySerial = s => {
     E.fe_identity(s >>> 0, 0, now());
-    idText.textContent = `${str(E.fe_id_code())} · ${str(E.fe_id_arch())} · ${str(E.fe_id_rarity())}` + (E.fe_id_cyber() ? " · золотой кибер-глаз" : "");
+    showId();
     store.set("serial", s); due = 0;
   };
   document.getElementById("newSerial").onclick = () => applySerial(Math.floor(Math.random() * 4294967295));
@@ -578,10 +687,13 @@
   const tilt = document.getElementById("tilt"), tiltOut = document.getElementById("tiltOut");
   tilt.oninput = () => { E.fe_set_tilt(tilt.value / 100, 0); tiltOut.textContent = tilt.value; due = 0; };
   const paneScenes = document.getElementById("paneScenes");
-  for (let i = 0; i < E.fe_scene_count(); i++) {
-    const b = document.createElement("button"); b.className = "chip event"; b.textContent = str(E.fe_scene_name(i));
-    b.onclick = () => { E.fe_play_scene(i, now()); due = 0; };
-    paneScenes.append(b);
+  function buildScenes() {
+    paneScenes.replaceChildren();
+    for (let i = 0; i < E.fe_scene_count(); i++) {
+      const b = document.createElement("button"); b.className = "chip event"; b.textContent = str(E.fe_scene_name(i));
+      b.onclick = () => { E.fe_play_scene(i, now()); due = 0; };
+      paneScenes.append(b);
+    }
   }
 
   // ---- Настройки ----
@@ -606,13 +718,13 @@
     if (cur !== lastExpr) {
       const x = exprs[cur];
       el("nowName").textContent = x.name; el("nowId").textContent = x.id; el("nowCat").textContent = cats[x.cat];
-      el("nowWhen").textContent = "Когда: " + x.when;
+      el("nowWhen").textContent = L.when + x.when;
       if (chipByExpr[lastExpr]) chipByExpr[lastExpr].setAttribute("aria-pressed", "false");
       if (chipByExpr[cur]) chipByExpr[cur].setAttribute("aria-pressed", "true");
       lastExpr = cur;
     }
     const why = str(E.fe_bh_reason());
-    el("nowWhy").textContent = why ? "Почему: " + why : "";
+    el("nowWhy").textContent = why ? L.why + why : "";
     samples.push({ t: sim, f: E.fe_stats_frames(), b: E.fe_stats_bytes() });
     while (samples.length > 2 && sim - samples[0].t > 3000) samples.shift();
     const a = samples[0], z = samples[samples.length - 1], dt = (z.t - a.t) / 1000;
@@ -629,11 +741,39 @@
       else { f.style.left = "0"; f.style.width = (v * 100) + "%"; }
     };
     setBar(0, E.fe_mood(0), true); [2, 3, 4, 5].forEach(n => setBar(n, E.fe_mood(n), false));
-    el("growText").textContent = `день ${E.fe_days()} · серия ${E.fe_streak()} · открыто ${E.fe_unlocked()}/${exprs.length} · имплант ${E.fe_implant()}` + (E.fe_eco() ? " · экорежим" : "");
+    el("growText").textContent = L.grow(E.fe_days(), E.fe_streak(), E.fe_unlocked(), exprs.length, E.fe_implant()) + (E.fe_eco() ? " · " + L.eco : "");
     let got = 0;
     achChips.forEach((b, i) => { const on = E.fe_ach_earned(i) === 1; got += on; b.setAttribute("aria-pressed", on); });
     el("achCount").textContent = `${got}/${achChips.length}`;
   }
+
+  // ---- Язык: статичные подписи по data-i18n, остальное собирается заново из движка ----
+  const langBtns = document.querySelectorAll("[data-lang]");
+  function applyLang(l) {
+    lang = l; L = T[l];
+    E.fe_set_lang(LANGS[l]);
+    document.documentElement.lang = l;
+    document.title = L.docTitle;
+    document.querySelectorAll("[data-i18n]").forEach(n => { n.textContent = L[n.dataset.i18n]; });
+    document.querySelectorAll("[data-i18n-aria]").forEach(n => n.setAttribute("aria-label", L[n.dataset.i18nAria]));
+    document.querySelectorAll("[data-i18n-ph]").forEach(n => n.setAttribute("placeholder", L[n.dataset.i18nPh]));
+    langBtns.forEach(b => b.setAttribute("aria-pressed", b.dataset.lang === l));
+    loadNames();
+    buildEvents(); buildEmotions(); buildClips(); buildAch(); buildScenes();
+    soundLabel(); showId(); search.oninput();
+    lastExpr = -1; updateInfo();
+  }
+  langBtns.forEach(b => b.onclick = () => {
+    const l = b.dataset.lang;
+    store.set("lang", l);
+    // Если язык задан в адресе, меняем и его: перезагрузка страницы оставит выбор.
+    try {
+      const u = new URL(location.href);
+      if (u.searchParams.has("lang")) { u.searchParams.set("lang", l); history.replaceState(null, "", u); }
+    } catch {}
+    applyLang(l);
+  });
+  applyLang(lang);
 
   // ---- Главный цикл: как прошивка, просыпаемся только когда движок попросил ----
   let infoAt = 0;

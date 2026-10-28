@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "face/framebuffer.h"
+#include "face/lang.h"
 #include "face/params.h"
 
 namespace face {
@@ -69,7 +70,8 @@ struct SceneParams {
 enum class BannerIcon : uint8_t { Sparkles, Heart, Gift, Star, Rocket, Pi, Skull };
 
 const char* scene_id(Scene s);
-const char* scene_name(Scene s);  // по-русски
+const char* scene_name(Scene s);  // на языке lang(), по умолчанию по-русски
+const char* scene_name(Scene s, Lang l);
 bool scene_from_id(const char* id, Scene* out);
 uint16_t scene_duration_ms(Scene s);
 // Как часто сцене нужны новые кадры.

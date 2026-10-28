@@ -114,8 +114,11 @@ EXPORT(fe_set_option) void fe_set_option(int opt, int v) {
 
 EXPORT(fe_expr_count) int fe_expr_count() { return kExprCount; }
 EXPORT(fe_expr_id) const char* fe_expr_id(int i) { return expression((Expr)i).id; }
-EXPORT(fe_expr_name) const char* fe_expr_name(int i) { return expression((Expr)i).name; }
-EXPORT(fe_expr_when) const char* fe_expr_when(int i) { return expression((Expr)i).when; }
+// Язык названий и описаний ниже: 0 — русский, 1 — английский (как face::Lang).
+EXPORT(fe_set_lang) void fe_set_lang(int l) { set_lang(l == 1 ? Lang::En : Lang::Ru); }
+EXPORT(fe_lang) int fe_lang() { return (int)lang(); }
+EXPORT(fe_expr_name) const char* fe_expr_name(int i) { return expr_name((Expr)i); }
+EXPORT(fe_expr_when) const char* fe_expr_when(int i) { return expr_when((Expr)i); }
 EXPORT(fe_expr_cat) int fe_expr_cat(int i) { return (int)expression((Expr)i).cat; }
 EXPORT(fe_cat_count) int fe_cat_count() { return (int)Category::Count; }
 EXPORT(fe_cat_name) const char* fe_cat_name(int c) { return category_name((Category)c); }
@@ -129,7 +132,7 @@ EXPORT(fe_bh_next) uint32_t fe_bh_next() { return g_bh.next_update_ms(); }
 EXPORT(fe_bh_auto) void fe_bh_auto(int on) { g_bh.set_auto(on != 0); }
 EXPORT(fe_bh_hold_manual) void fe_bh_hold_manual(uint32_t now, uint32_t ms) { g_bh.hold_manual(now, ms); }
 EXPORT(fe_bh_set_clock) void fe_bh_set_clock(int minutes) { g_bh.set_clock((uint16_t)minutes); }
-EXPORT(fe_bh_reason) const char* fe_bh_reason() { return g_bh.last_reason(); }
+EXPORT(fe_bh_reason) const char* fe_bh_reason() { return reason_text(g_bh.last_reason()); }
 // 0 радость, 1 возбуждение, 2 бодрость, 3 скука, 4 раздражение, 5 привязанность
 EXPORT(fe_mood) float fe_mood(int i) {
   const Mood& m = g_bh.mood();
@@ -232,8 +235,9 @@ EXPORT(fe_streak) int fe_streak() { return g_progress.streak; }
 EXPORT(fe_days) int fe_days() { return g_progress.days; }
 EXPORT(fe_ach_count) int fe_ach_count() { return kAchCount; }
 EXPORT(fe_ach_tag) const char* fe_ach_tag(int i) { return achievement((Ach)i).tag; }
-EXPORT(fe_ach_name) const char* fe_ach_name(int i) { return achievement((Ach)i).name; }
-EXPORT(fe_ach_how) const char* fe_ach_how(int i) { return achievement((Ach)i).how; }
+EXPORT(fe_ach_name) const char* fe_ach_name(int i) { return achievement_name((Ach)i); }
+EXPORT(fe_ach_how) const char* fe_ach_how(int i) { return achievement_how((Ach)i); }
+EXPORT(fe_implant_name) const char* fe_implant_name(int i) { return implant_name(i); }
 EXPORT(fe_ach_earned) int fe_ach_earned(int i) { return g_progress.earned((Ach)i) ? 1 : 0; }
 EXPORT(fe_set_battery) void fe_set_battery(int pct) { g_bh.set_battery_percent(pct); }
 EXPORT(fe_power_off) void fe_power_off(uint32_t now) { g_bh.power_off(now); }

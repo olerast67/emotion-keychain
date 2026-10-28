@@ -47,6 +47,7 @@ enum class VoiceStyle : uint8_t {
 struct Temperament {
   const char* tag;   // латиницей для экрана, до 9 знаков
   const char* name;  // по-русски
+  const char* name_en = "";  // по-английски
   // Лицо: в покое, в хорошем настроении, от скуки.
   Expr rest, rest_happy, rest_bored;
   // Ответ на касание (вместо общего «тык») и на двойное касание.
@@ -75,7 +76,8 @@ const Temperament& temperament(Archetype a);
 // Архетип по хэшу брелока (identity.h) — так же, как его выводит сам брелок.
 Archetype archetype_from_hash(uint32_t hash);
 const char* archetype_id(Archetype a);
-const char* archetype_name(Archetype a);  // по-русски
+const char* archetype_name(Archetype a);  // на языке lang(), по умолчанию по-русски
+const char* archetype_name(Archetype a, Lang l);
 // Своя эмоция характера: он показывает её с первого дня, даже если её имплант ещё не стоит.
 bool temperament_innate(const Temperament& t, Expr e);
 

@@ -1,0 +1,25 @@
+SPDX-License-Identifier: CERN-OHL-W-2.0
+
+The hardware design files in this directory and below (KiCad schematic and
+layout, footprints, generator scripts, Gerber, drill, BOM and CPL files,
+panel files, the acrylic case generator and its SVG/DXF cut files, 3D model
+data) are
+
+    Copyright 2026 olerast67 and contributors
+
+and are licensed under the CERN Open Hardware Licence Version 2 - Weakly
+Reciprocal (CERN-OHL-W-2.0). The full licence text is in
+../LICENSES/CERN-OHL-W-2.0.txt and at https://ohwr.org/cern_ohl_w_v2.txt
+
+Source Location (sections 1.10, 3.3 and 4.1 of the licence):
+    https://github.com/olerast67/emotion-keychain/tree/main/hardware
+
+If you make and convey Products based on these files, the licence requires
+you to keep the Notices (this file included), make the Covered Source
+available, and show the Source Location on the Product or its documentation
+(section 4.1). If you modify the files, publish the modified Source and add
+your own Source Location (section 3.3).
+
+README files and images in this directory are documentation and are
+licensed under CC-BY-4.0 (see ../REUSE.toml). The project name, logo and
+character art are not licensed: see ../TRADEMARKS.md.

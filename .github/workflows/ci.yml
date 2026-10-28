@@ -21,10 +21,12 @@ jobs:
       - name: Тесты движка
         run: ctest --test-dir build --output-on-failure
 
-      - name: Каталог эмоций совпадает с кодом
+      - name: Каталог эмоций совпадает с кодом (RU и EN)
         run: |
           ./build/facegen catalog /tmp/emotions.md
           diff -u docs/emotions.md /tmp/emotions.md
+          ./build/facegen catalog --lang en /tmp/emotions.en.md
+          diff -u docs/emotions.en.md /tmp/emotions.en.md
 
       - name: Веб-симулятор
         run: sim/web/build.sh
@@ -110,3 +112,49 @@ jobs:
         with:
           name: keychain-firmware
           path: out/*
+
+  # Сайт на GitHub Pages: веб-симулятор в корне, прошивальщик стенда (ESP Web Tools) в flash/.
+  # Файлы берутся из сборок выше. Только push в main; Pages включается в настройках репозитория
+  # (Settings → Pages → Source: GitHub Actions). Pages у бесплатного аккаунта — только для
+  # публичного репозитория, поэтому для закрытого задание пропускается, а не падает.
+  pages:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.private
+    needs: [engine, firmware]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: face-simulator
+          path: artifacts/sim
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: stand-firmware
+          path: artifacts/stand
+
+      - name: Сайт
+        run: |
+          sim="$(find artifacts/sim -path '*dist/index.html' | head -n 1)"
+          python3 tools/build_pages.py --sim "$sim" --bins artifacts/stand --out site --version "$(git rev-parse --short HEAD)"
+          ls -lR site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

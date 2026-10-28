@@ -10,8 +10,12 @@
 // двойной тап, удержание 1.5 с — переключить «живой» ↔ «показ».
 // Команды Serial — `?` выводит список.
 //
-// Персонаж выводится из серийного номера чипа (identity.h), прогресс роста,
+// Персонаж выводится из серийного номера чипа (identity.h), прогресс роста, знакомые,
 // тема и день рождения хранятся во флеше (Preferences) и переживают перезагрузку.
+//
+// Встречи по Bluetooth — как у брелока rev B (docs/encounters.md): тот же пакет и та же логика
+// движка (encounter.h), радио — stand_radio.cpp. Два стенда на столе встречаются друг с другом
+// и с брелоком; команды meet, duel и chat по-прежнему играют встречу с выдуманным соседом.
 //
 // millis() переполняется раз в 49.7 суток: сроки сравниваются только через
 // time_reached, а часы и счёт дней идут по 64-битному времени работы.
@@ -24,12 +28,14 @@
 #include <string.h>
 
 #include "face/behavior.h"
+#include "face/encounter.h"
 #include "face/engine.h"
 #include "face/friends.h"
 #include "face/identity.h"
 #include "face/progress.h"
 #include "face/sound.h"
 #include "ssd1306.h"
+#include "stand_radio.h"
 
 #ifndef PIN_SDA
 #define PIN_SDA 21
@@ -102,6 +108,10 @@ Progress saved;  // что лежит во флеше
 Friends friends;
 Friends friends_saved;
 Identity last_peer;  // для «meet again»: тот же сосед, что в прошлый раз
+// Встречи по радио: готовность к дуэлям (как двойное нажатие у брелока) и невидимка — во флеше.
+Encounters enc;
+bool duel_ready = true;
+bool ghost = false;
 // «knock»: стенд сам выстукивает ритм «Shave and a haircut» по расписанию.
 uint32_t knock_at[5] = {};
 int knock_n = 0;
@@ -250,6 +260,9 @@ void load_settings(uint32_t now) {
   bday_m = prefs.getUChar("bday_m", 0);
   bday_d = prefs.getUChar("bday_d", 0);
   if (bday_m) bh.set_birthday(bday_m, bday_d);
+  duel_ready = prefs.getUChar("duels", 1) != 0;
+  ghost = prefs.getUChar("ghost", 0) != 0;
+  radio::set_ghost(ghost);
 }
 
 void apply_identity(uint64_t serial, uint32_t now) {
@@ -260,6 +273,10 @@ void apply_identity(uint64_t serial, uint32_t now) {
   voice.init(&temperament(me.archetype), me.hash);
   voice.set_enabled(sound_on);
   eng.set_quirks(me.quirks, now);
+  // Другой позывной — другой брелок в эфире: встречи начинаются заново.
+  enc.init(me.hash);
+  // Лимит встреч не тратят друзья — те, с кем виделись в разные дни (уровень ≥ 1), как у брелока.
+  enc.set_known([](uint32_t h, const void* f) { return ((const Friends*)f)->level(h) >= 1; }, &friends);
 }
 
 void print_me() {
@@ -286,6 +303,83 @@ void print_me() {
   Serial.printf("Серия %u дн. (рекорд %u), достижений %d/%d, секретных разговоров %u, знакомых в памяти %d\n",
                 progress.streak, progress.best_streak, progress.achievement_count(), kAchCount, progress.chats,
                 friends.count());
+  Serial.printf("Радио: %s; дуэли %s, невидимка %s\n", radio::ok() ? radio::stack() : "нет", duel_ready ? "вкл" : "выкл",
+                ghost ? "вкл" : "выкл");
+}
+
+// ---------------------------------------------------------------- встречи по радио
+
+const char* const kPaceName[] = {"обычный", "частый", "ночной", "выключен"};
+
+void print_radio(uint32_t now) {
+  if (!radio::ok()) {
+    Serial.println("Радио: Bluetooth не включился — встречи только командами meet, duel, chat");
+    return;
+  }
+  Serial.printf("Радио %s: режим %s%s, соседей рядом %d, услышано пакетов брелоков %u (потеряно %u)\n",
+                radio::stack(), kPaceName[(int)radio::pace()], ghost ? ", невидимка" : "", enc.nearby(now),
+                (unsigned)radio::heard(), (unsigned)radio::dropped());
+  Serial.printf("Дуэли %s%s; свободно %u КБ\n", duel_ready ? "вкл" : "выкл", enc.pending() ? ", ждём общую сцену" : "",
+                (unsigned)(radio::heap_free() / 1024));
+}
+
+// Пакеты из эфира — в логику встреч движка, её пакет — в эфир, общая сцена — характеру.
+// Как poll_radio брелока (keychain/main.cpp), только без вибро.
+void poll_radio(uint32_t now) {
+  uint8_t flags = 0;
+  if (duel_ready) flags |= kAdvDuelReady;
+  if (eng.options().theme == Theme::Cyber) flags |= kAdvCyber;
+  if (me.rarity == Rarity::Legendary) flags |= kAdvLegendary;
+  enc.set_self(progress.implant, flags, mood_byte(bh.mood().valence));
+
+  Advert a;
+  int rssi = 0;
+  // Невидимка не встречается: его не слышат, и сцена была бы только у него. В показе и ручном
+  // режиме стенд в эфире молчит и не слушает: сцену с соседом там некому играть.
+  const bool live = mode == Mode::Alive;
+  while (radio::take(&a, &rssi))
+    if (!ghost && live) enc.on_advert(a, rssi, now);
+
+  radio::Pace pace = radio::Pace::Normal;
+  // Ночью, во сне и в темноте эфир не слушается, а реклама — раз в 10 с: часто — только когда
+  // общая сцена уже объявлена и её надо довести до конца.
+  if (!live)
+    pace = radio::Pace::Off;
+  else if (enc.pending())
+    pace = radio::Pace::Busy;
+  else if (bh.brightness() != Brightness::Normal)
+    pace = radio::Pace::Night;
+  else if (enc.wants_busy(now))
+    pace = radio::Pace::Busy;
+  radio::set_pace(pace);
+  radio::set_advert(enc.advert(now));
+  radio::update(now);
+
+  Meeting m;
+  if (!enc.poll(now, &m)) return;
+  if (!live) return;  // режим сменили посреди отсчёта: сцена — только у соседа
+  const Identity peer = identity_from_hash(m.peer);
+  last_peer = peer;
+  eng.note_activity(now);
+  // Настоящий сосед играет свои реплики разговора сам.
+  bh.set_chat_both_sides(false);
+  if (m.kind == Rendezvous::Duel) {
+    Serial.printf("Дуэль с %s: %s (сигнал %d дБм)\n", peer.code, m.won ? "победа" : "поражение", m.rssi);
+    bh.duel(peer.code, m.won, now, m.peer, m.nonce, m.peer_level);
+  } else {
+    const bool is_new = friends.level(m.peer) < 0;
+    Serial.printf("Встреча с %s (%s), %s, уровень %u (сигнал %d дБм)\n", peer.code, archetype_name(peer.archetype),
+                  is_new ? "новый" : "знакомый", m.peer_level, m.rssi);
+    bh.meet(peer.code, is_new, now, m.peer, m.peer_level, m.nonce);
+  }
+  // Без force: встречу может подстроить кто угодно, запись — по общему правилу save_progress.
+  save_progress(now, false);
+  save_friends();
+}
+
+void new_day(uint32_t now) {
+  bh.new_day(now);
+  enc.new_day();
 }
 
 // ---------------------------------------------------------------- эмоции
@@ -380,14 +474,17 @@ void help() {
       "  ach          достижения; friends — знакомые брелоки и уровни дружбы\n"
       "  knock        секретный стук «Shave and a haircut» — брелок ответит\n"
       "  bat 47       заряд в процентах для сцены зарядки; off — выключиться (сон до кнопки)\n"
-      "  duel win     дуэль с другим брелоком: win или lose\n"
+      "  duel win     дуэль с выдуманным брелоком: win или lose\n"
+      "Встречи по Bluetooth (с другими стендами и брелоками, только в живом режиме):\n"
+      "  radio        состояние радио: режим, соседи, услышанные пакеты\n"
+      "  duels        дуэли с соседями вкл/выкл (сохраняется); ghost — невидимка в эфире\n"
       "  date 2026-12-31   дата для праздников; bday 05-14 — твой день рождения\n"
       "Звук:\n"
       "  snd          пищалка вкл/выкл (сохраняется)\n"
       "  say laugh    реплика: boop happy laugh sad angry surprise scared love sleepy\n"
       "               hello goodbye question idea error charge_start charge_full\n"
       "               battery_low level_up friend_hi duel win lose boot\n"
-      "  chat         секретный разговор шифром с соседом (слышны обе стороны)\n"
+      "  chat         секретный разговор шифром с выдуманным соседом (слышны обе стороны)\n"
       "  tilt 1 0     наклон: зрачки скатываются в сторону; jerk -1 0 — рывок\n"
       "  serial 42    посмотреть другой брелок; serial — вернуть свой\n"
       "  unlock all   открыть всё; reset yes — начать рост заново");
@@ -546,7 +643,7 @@ void command(char* s, uint32_t now) {
     if (*s == 'x')
       bh.add_xp((uint32_t)n, now);
     else if (*s == 'd')
-      bh.new_day(now);
+      new_day(now);
     else
       bh.add_steps((uint32_t)n, now);
     save_progress(now, true);
@@ -559,6 +656,7 @@ void command(char* s, uint32_t now) {
     const Identity peer = again ? last_peer : make_identity(now);
     last_peer = peer;
     const uint8_t level = mentor ? (uint8_t)(progress.implant + 3) : progress.implant;
+    bh.set_chat_both_sides(true);  // соседа нет: его реплики шёпота играет та же пищалка
     Serial.printf("Рядом %s (%s), уровень %u\n", peer.code, archetype_name(peer.archetype), level);
     bh.meet(peer.code, !(arg && !strcmp(arg, "old")), now, peer.hash, level, now);
     save_progress(now, true);
@@ -610,6 +708,7 @@ void command(char* s, uint32_t now) {
     if (mode != Mode::Alive) set_mode(Mode::Alive, now);
     // После дуэли — разговор шифром: на стенде соседа нет, его реплики играет та же пищалка.
     const Identity peer = make_identity(now ^ 0x55u);
+    bh.set_chat_both_sides(true);
     bh.duel(peer.code, !(arg && !strcmp(arg, "lose")), now, peer.hash, now);
     save_progress(now, true);
     return;
@@ -617,8 +716,23 @@ void command(char* s, uint32_t now) {
   if (!strcmp(s, "chat")) {
     if (mode != Mode::Alive) set_mode(Mode::Alive, now);
     const Identity peer = make_identity(now ^ 0xC4A7u);
+    bh.set_chat_both_sides(true);
     Serial.printf("Разговор с %s (%s)\n", peer.code, archetype_name(peer.archetype));
     bh.chat(peer.code, peer.hash, now, now);
+    return;
+  }
+  if (!strcmp(s, "radio")) return print_radio(now);
+  if (!strcmp(s, "duels")) {
+    duel_ready = arg ? !strcmp(arg, "on") : !duel_ready;
+    prefs.putUChar("duels", duel_ready ? 1 : 0);
+    Serial.println(duel_ready ? "Дуэли с соседами включены" : "Дуэли с соседами выключены");
+    return;
+  }
+  if (!strcmp(s, "ghost")) {
+    ghost = arg ? !strcmp(arg, "on") : !ghost;
+    radio::set_ghost(ghost);
+    prefs.putUChar("ghost", ghost ? 1 : 0);
+    Serial.println(ghost ? "Невидимка: только слушаю эфир" : "Снова виден другим брелокам");
     return;
   }
   if (!strcmp(s, "snd")) {
@@ -802,11 +916,18 @@ void setup() {
   chip_serial = ESP.getEfuseMac();
   apply_identity(chip_serial, now);
   if (progress.days == 0) bh.new_day(now);  // первый день вместе
+  // Bluetooth не включился (мало памяти, стек выключен в сборке) — стенд работает без встреч.
+  const bool radio_up = radio::begin();
   eng.play_scene(Scene::boot, now);
   voice.scene(Scene::boot, SceneParams{}, now);
 
   Serial.printf("\nБрелок с эмоциями — стенд. SDA %d, SCL %d, кнопка %d, BOOT %d, пищалка %d, I2C %d кГц\n", PIN_SDA,
                 PIN_SCL, PIN_BUTTON, PIN_BOOT, PIN_BUZZER, I2C_HZ / 1000);
+  if (radio_up)
+    Serial.printf("Радио: %s, встречи с другими стендами и брелоками%s; свободно %u КБ\n", radio::stack(),
+                  ghost ? " — невидимка, только слушаю" : "", (unsigned)(radio::heap_free() / 1024));
+  else
+    Serial.println("Радио: Bluetooth не включился — встречи только командами meet, duel, chat");
   if (!start_oled()) {
     Serial.println("Экран не найден.");
     scan_i2c();
@@ -839,12 +960,13 @@ void loop() {
   // Часов нет: «день вместе» — каждые сутки работы.
   if (uptime - day_t0 >= kDayMs) {
     day_t0 += kDayMs;
-    bh.new_day(now);
+    new_day(now);
   }
   save_progress(now, false);
   save_friends();
   // Поведение обновляется в любом режиме: без автоматики оно только ведёт настроение
   // и держит свои сроки свежими, а включённое снова — сразу в деле.
+  poll_radio(now);
   if (time_reached(now, bh.next_update_ms())) bh.update(now);
   if (mode == Mode::Showcase && time_reached(now, showcase_next)) {
     showcase_next = now + showcase_ms;
