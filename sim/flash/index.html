@@ -53,6 +53,7 @@
   .btn:hover { filter: brightness(1.08); }
   .note { color: var(--muted); font-size: 14px; margin: 0; }
   .warn { color: var(--warn); font-size: 14px; margin: 0; }
+  .card:not(.install) .note { margin-top: 12px; }
   ol { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
   .table-scroll { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 520px; }
@@ -85,7 +86,7 @@
       <p slot="unsupported" class="warn" data-i18n="unsupported">This browser cannot talk to USB devices. Use desktop Chrome or Edge.</p>
       <p slot="not-allowed" class="warn" data-i18n="notAllowed">Flashing only works over HTTPS or on localhost.</p>
     </esp-web-install-button>
-    <p class="note" data-i18n="detect">The board type is detected automatically; the matching firmware is written from address 0x0. Your growth and friends are kept unless you choose to erase the device.</p>
+    <p class="note" data-i18n="detect">The board type is detected automatically and the matching firmware is written from address 0x0.</p>
     <p class="note mono" id="version"></p>
   </section>
 
@@ -132,7 +133,7 @@
       hInstall: "Flash", install: "Connect and flash",
       unsupported: "This browser cannot talk to USB devices. Use desktop Chrome or Edge.",
       notAllowed: "Flashing only works over HTTPS or on localhost.",
-      detect: "The board type is detected automatically; the matching firmware is written from address 0x0. Your growth and friends are kept unless you choose to erase the device.",
+      detect: "The board type is detected automatically and the matching firmware is written from address 0x0.",
       hSteps: "How it works",
       s1: "Wire the screen (and, optionally, a TTP223 touch button and a passive buzzer) as shown below.",
       s2: "Plug the board in with a USB data cable (charge-only cables will not work).",
@@ -151,7 +152,7 @@
       hInstall: "Прошить", install: "Подключить и прошить",
       unsupported: "Этот браузер не умеет работать с USB-устройствами. Откройте страницу в Chrome или Edge на компьютере.",
       notAllowed: "Прошивка работает только по HTTPS или на localhost.",
-      detect: "Тип платы определяется сам, нужный файл пишется с адреса 0x0. Рост и знакомые сохраняются, если не выбрать стирание.",
+      detect: "Тип платы определяется сам, и нужный файл пишется с адреса 0x0.",
       hSteps: "Как это работает",
       s1: "Подключите экран (и, по желанию, сенсорную кнопку TTP223 и пассивную пищалку) по таблице ниже.",
       s2: "Подключите плату USB-кабелем с линиями данных (кабель «только для зарядки» не подойдёт).",
