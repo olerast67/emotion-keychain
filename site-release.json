@@ -1,0 +1,59 @@
+{
+  "$schema": "file:///D:/olerast_com/docs/site-release.schema.json",
+  "schemaVersion": 1,
+  "id": "emotion-keychain",
+  "kind": "testproject",
+  "name": { "ru": "Брелок с эмоциями", "en": "Emotion keychain" },
+  "status": "code",
+  "updated": "2026-10-28",
+  "build": "28.10.2026 · 65d3416",
+  "summary": {
+    "ru": "Брелок на рюкзак с OLED-экраном 128×64, на котором живёт персонаж: моргает, смеётся, злится, засыпает в темноте и отвечает на тапы, тряску, звук и свет.",
+    "en": "A backpack keychain with a 128×64 OLED screen and a living face: it blinks, laughs, gets angry, falls asleep in the dark and reacts to taps, shaking, sound and light."
+  },
+  "access": "online",
+  "source": "open",
+  "audience": {
+    "ru": "Для тех, кто хочет живой брелок на рюкзак или собрать такой сам. 139 эмоций, десять характеров, голос на пищалке и встречи брелоков по Bluetooth. Код, плата и корпус открыты, движок можно запустить в браузере или на плате ESP32 с экраном.",
+    "en": "For anyone who wants a living keychain on a backpack or wants to build one. 139 emotions, ten personalities, a piezo voice and Bluetooth encounters between keychains. Code, board and case are open; the engine runs in the browser or on an ESP32 board with a screen."
+  },
+  "try": {
+    "ru": [
+      "Открыть симулятор в браузере и потыкать персонажа | https://olerast67.github.io/emotion-keychain/?lang=ru",
+      "Собрать стенд: любая плата ESP32 (C5, обычная, C3 или S3) и экран SSD1306 на четырёх проводах",
+      "Прошить стенд из браузера готовым файлом с адреса 0x0 | https://olerast.com/flash"
+    ],
+    "en": [
+      "Open the simulator in the browser and poke the character | https://olerast67.github.io/emotion-keychain/",
+      "Build the stand: any ESP32 board (C5, classic, C3 or S3) and an SSD1306 screen on four wires",
+      "Flash the stand from the browser with the prebuilt file at address 0x0 | https://olerast.com/flash"
+    ]
+  },
+  "limits": {
+    "ru": [
+      "Плата брелока rev B разработана и проходит DRC, но не заказана и не проверена на живом железе.",
+      "Автономность 11, 15 и 18 дней для корпусов S, M, L посчитана по симуляции платы, это не замер.",
+      "Встречи по Bluetooth на стенде ESP32 собираются и проходят тесты на ПК, на живых платах не проверены.",
+      "Часов с батарейкой нет: праздники и пасхалки по времени работают, когда дата задана с компьютера.",
+      "Секретный стук на брелоке rev B пока не срабатывает, работает на стенде и в симуляторе.",
+      "Прошивка шьётся из браузера только в Chrome или Edge на компьютере."
+    ],
+    "en": [
+      "The rev B keychain board is designed and passes DRC, but it has not been ordered or tested on real hardware.",
+      "Battery life of 11, 15 and 18 days for the S, M and L cases is estimated from a board simulation, not measured.",
+      "Bluetooth encounters on the ESP32 stand build and pass host tests, but have not been tested on real boards.",
+      "There is no battery-backed clock: date-based holidays and easter eggs work once the date is set from a computer.",
+      "The secret knock does not work on the rev B keychain yet; it works on the stand and in the simulator.",
+      "Browser flashing works only in desktop Chrome or Edge."
+    ]
+  },
+  "checked": "2026-10-28",
+  "demo": "https://olerast67.github.io/emotion-keychain/?lang=ru",
+  "media": { "icon": "docs/img/render-face-512.png" },
+  "links": [
+    { "type": "demo", "url": "https://olerast67.github.io/emotion-keychain/?lang=ru", "label": { "ru": "Симулятор в браузере", "en": "Simulator in the browser" }, "main": true },
+    { "type": "other", "url": "https://olerast.com/flash", "label": { "ru": "Прошить стенд ESP32", "en": "Flash the ESP32 stand" } },
+    { "type": "github", "url": "https://github.com/olerast67/emotion-keychain" },
+    { "type": "docs", "url": "https://github.com/olerast67/emotion-keychain/blob/main/docs/user-guide.md", "label": { "ru": "Памятка владельцу", "en": "Owner's guide" } }
+  ]
+}
