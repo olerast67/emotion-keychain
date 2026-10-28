@@ -519,6 +519,10 @@ long wait_for(const std::function<bool()>& done, uint64_t ms, uint64_t step = 10
   return done() ? (long)(g_ms - t0) : -1;
 }
 
+// Начало пакета брелока в эфире (hex): длина и тип поля «данные сервиса, 128-битный UUID»,
+// UUID брелоков в порядке эфира и версия пакета 3 (engine/include/face/encounter.h).
+constexpr const char* kPkt = "1c21a64d27f4bc54eabfd44d1babb9454c5f03";
+
 void press(Board& b, uint64_t ms) {
   b.button = true;
   b.cmd("SET button 1");
@@ -583,7 +587,7 @@ void sc_first_boot() {
   CHECK(said(a, "Прошивка ", 3500), "команда ver — версия прошивки");
   CHECK(a.num("vis") == 1 && a.num("lit") > 200, "на экране лицо: горит %ld пикселей", a.num("lit"));
   CHECK(a.num("adv") == 1 && a.num("iv") == 1600, "реклама в эфире раз в 1 с");
-  CHECK(a.hex("data").find("ffff4b4302") != std::string::npos, "пакет: компания 0xFFFF, метка KC, версия 2");
+  CHECK(a.hex("data") .rfind(kPkt, 0) == 0 && a.hex("data").size() == 58, "пакет: данные сервиса с UUID брелоков, версия 3, без флагов");
   CHECK(a.num("hf") == 0, "кварц 64 МГц отпущен после старта микрофона");
   CHECK(a.num("mic") == 1 && a.num("acc") == 1, "микрофон и акселерометр работают");
   health(a, "старт");
@@ -865,10 +869,10 @@ void sc_attack() {
   Board& a = *boards[0];
   const long xp0 = a.num("xp");
   const uint64_t attack_t0 = g_ms;
-  // Свой позывной A — в его пакете (байты 5–8 данных производителя).
+  // Свой позывной A — в его пакете (4 байта сразу за UUID и версией).
   const std::string d = a.hex("data");
-  const size_t k = d.find("ffff4b4302");
-  const std::string hash_hex = k != std::string::npos ? d.substr(k + 10, 8) : "01020304";
+  const size_t k = d.find(kPkt);
+  const std::string hash_hex = k != std::string::npos ? d.substr(k + strlen(kPkt), 8) : "01020304";
   const std::string to_hex = hash_hex.substr(0, 4);
   uint64_t t = g_ms;
   // 1) Мусор: поля любой длины, обрезанные пакеты, нулевые длины.
@@ -888,7 +892,7 @@ void sc_attack() {
   // (поток объявлений вблизи — это уже сосед, его пакеты не отличить от настоящего).
   t = g_ms;
   char ann[128];
-  snprintf(ann, sizeof ann, "02010410ffffff4b430201000000%02x%02x%02x01%s", 0, 0x09, 128, to_hex.c_str());
+  snprintf(ann, sizeof ann, "%s01000000%02x%02x%02x01%s", kPkt, 0, 0x09, 128, to_hex.c_str());
   a.cmd("RX -40 %s", ann);
   run(3000);
   for (int i = 0; i < 200; ++i) {
@@ -903,7 +907,7 @@ void sc_attack() {
   for (int i = 0; i < 60; ++i) {
     char h[128];
     const uint32_t fake = 0xF0000000u + (uint32_t)i * 7919u;
-    snprintf(h, sizeof h, "02010410ffffff4b4302%02x%02x%02x%02x%02x%02x80000000", fake & 0xFF, fake >> 8 & 0xFF,
+    snprintf(h, sizeof h, "%s%02x%02x%02x%02x%02x%02x80000000", kPkt, fake & 0xFF, fake >> 8 & 0xFF,
              fake >> 16 & 0xFF, fake >> 24, 255, 0x01);
     a.cmd("RX -40 %s", h);
     run(300);
@@ -920,7 +924,7 @@ void sc_attack() {
   for (int i = 0; i < 40; ++i) {
     char h[128];
     const uint32_t fake = 0xF1000000u + (uint32_t)i * 7919u;
-    snprintf(h, sizeof h, "02010410ffffff4b4302%02x%02x%02x%02x%02x%02x80000000", fake & 0xFF, fake >> 8 & 0xFF,
+    snprintf(h, sizeof h, "%s%02x%02x%02x%02x%02x%02x80000000", kPkt, fake & 0xFF, fake >> 8 & 0xFF,
              fake >> 16 & 0xFF, fake >> 24, 9, 0x01);
     a.cmd("RX -40 %s", h);
     run(300);

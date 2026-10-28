@@ -39,16 +39,17 @@ bool queued(uint32_t hash) {
   return false;
 }
 
-// Данные производителя из пакета. Свой разбор, а не parseReportByType: тот при длине поля
-// больше остатка пакета (или нулевой) уходит за его конец, а пакет пишет кто угодно.
-int manufacturer_data(const ble_gap_evt_adv_report_t* r, uint8_t* out, int cap) {
+// Данные сервиса со 128-битным UUID из пакета (UUID сверяет adv_decode). Свой разбор, а не
+// parseReportByType: тот при длине поля больше остатка пакета (или нулевой) уходит за его
+// конец, а пакет пишет кто угодно.
+int service_data(const ble_gap_evt_adv_report_t* r, uint8_t* out, int cap) {
   const uint8_t* p = r->data.p_data;
   const int len = r->data.len;
   int i = 0;
   while (i < len) {
     const int field = p[i];
     if (!field || i + 1 + field > len) return 0;  // конец или испорченная длина
-    if (p[i + 1] == BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA) {
+    if (p[i + 1] == face::kAdvType) {
       const int n = field - 1 < cap ? field - 1 : cap;
       memcpy(out, p + i + 2, (size_t)n);
       return n;
@@ -60,7 +61,7 @@ int manufacturer_data(const ble_gap_evt_adv_report_t* r, uint8_t* out, int cap) 
 
 void on_report(ble_gap_evt_adv_report_t* r) {
   uint8_t buf[32];
-  const int n = manufacturer_data(r, buf, sizeof buf);
+  const int n = service_data(r, buf, sizeof buf);
   face::Advert a;
   // Совсем дальние пакеты не нужны ни для встречи, ни для отсчёта: не тратим на них очередь.
   if (r->rssi >= kRssiFloor && n && face::adv_decode(buf, n, &a) && !queued(a.hash)) {
@@ -91,8 +92,8 @@ void push_advert() {
   if (ghost_on || pace == Pace::Off) return;
   uint8_t data[face::kAdvLen];
   face::adv_encode(adv, data);
-  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAG_BR_EDR_NOT_SUPPORTED);
-  Bluefruit.Advertising.addManufacturerData(data, sizeof data);
+  // Без флагов: реклама без соединения, а поле с UUID занимает 29 байт из 31.
+  Bluefruit.Advertising.addData(face::kAdvType, data, sizeof data);
   Bluefruit.Advertising.setType(BLE_GAP_ADV_TYPE_NONCONNECTABLE_NONSCANNABLE_UNDIRECTED);
   const uint16_t iv = adv_interval();
   Bluefruit.Advertising.setInterval(iv, iv);

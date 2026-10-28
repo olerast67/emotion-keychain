@@ -1982,13 +1982,16 @@ static void test_encounter_packet() {
   a.to = 0xBEEF;
   uint8_t buf[kAdvLen];
   adv_encode(a, buf);
-  CHECK(buf[2] == 'K' && buf[3] == 'C' && buf[4] == kAdvVersion, "метка и версия в пакете");
+  CHECK(buf[0] == kAdvUuid[0] && buf[15] == kAdvUuid[15] && buf[16] == kAdvVersion, "UUID и версия в пакете");
   Advert b;
   CHECK(adv_decode(buf, kAdvLen, &b), "пакет читается");
   CHECK(b.hash == a.hash && b.level == 7 && b.flags == a.flags && b.mood == 200 && b.countdown == 12 && b.to == 0xBEEF,
         "все поля пакета доходят без потерь");
-  buf[2] = 'X';
-  CHECK(!adv_decode(buf, kAdvLen, &b), "чужой пакет без метки KC отбрасывается");
+  buf[16] = 2;
+  CHECK(!adv_decode(buf, kAdvLen, &b), "пакет старой версии отбрасывается");
+  buf[16] = kAdvVersion;
+  buf[7] ^= 1;
+  CHECK(!adv_decode(buf, kAdvLen, &b), "пакет с чужим UUID отбрасывается");
   CHECK(!adv_decode(buf, 5, &b), "короткий пакет отбрасывается");
   CHECK(mood_byte(-1.0f) == 0 && mood_byte(1.0f) == 255 && mood_byte(0.0f) == 128, "настроение в байт");
   CHECK(mood_byte(0.0f / 0.0f) == 0 && mood_byte(5.0f) == 255, "NaN и выход за пределы");
