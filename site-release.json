@@ -3,7 +3,10 @@
   "schemaVersion": 1,
   "id": "emotion-keychain",
   "kind": "testproject",
-  "name": { "ru": "Брелок с эмоциями", "en": "Emotion keychain" },
+  "name": {
+    "ru": "Брелок с эмоциями",
+    "en": "Emotion keychain"
+  },
   "status": "code",
   "updated": "2026-10-28",
   "build": "28.10.2026 · 65d3416",
@@ -47,13 +50,54 @@
       "Browser flashing works only in desktop Chrome or Edge."
     ]
   },
+  "checks": {
+    "ru": [
+      "Встречи двух стендов по Bluetooth: дуэль с противоположными исходами и разговор пищалками.",
+      "Читаемость всего каталога эмоций на настоящем экране с 30–50 см.",
+      "Голос на пищалке: различимы ли ноты и не режет ли уши.",
+      "Автояркость: экран тускнеет ночью и в темноте и возвращается днём."
+    ],
+    "en": [
+      "Bluetooth encounters between two stands: a duel with opposite outcomes and a buzzer chat.",
+      "Readability of the whole emotion catalog on a real screen from 30–50 cm.",
+      "The buzzer voice: are the notes distinct and not harsh.",
+      "Auto-brightness: the screen dims at night and in the dark and comes back in daylight."
+    ]
+  },
   "checked": "2026-10-28",
   "demo": "https://olerast67.github.io/emotion-keychain/?lang=ru",
-  "media": { "icon": "docs/img/render-face-512.png" },
+  "media": {
+    "icon": "docs/img/render-face-512.png"
+  },
   "links": [
-    { "type": "demo", "url": "https://olerast67.github.io/emotion-keychain/?lang=ru", "label": { "ru": "Симулятор в браузере", "en": "Simulator in the browser" }, "main": true },
-    { "type": "other", "url": "https://olerast.com/flash", "label": { "ru": "Прошить стенд ESP32", "en": "Flash the ESP32 stand" } },
-    { "type": "github", "url": "https://github.com/olerast67/emotion-keychain" },
-    { "type": "docs", "url": "https://github.com/olerast67/emotion-keychain/blob/main/docs/user-guide.md", "label": { "ru": "Памятка владельцу", "en": "Owner's guide" } }
+    {
+      "type": "demo",
+      "url": "https://olerast67.github.io/emotion-keychain/?lang=ru",
+      "label": {
+        "ru": "Симулятор в браузере",
+        "en": "Simulator in the browser"
+      },
+      "main": true
+    },
+    {
+      "type": "other",
+      "url": "https://olerast.com/flash",
+      "label": {
+        "ru": "Прошить стенд ESP32",
+        "en": "Flash the ESP32 stand"
+      }
+    },
+    {
+      "type": "github",
+      "url": "https://github.com/olerast67/emotion-keychain"
+    },
+    {
+      "type": "docs",
+      "url": "https://github.com/olerast67/emotion-keychain/blob/main/docs/user-guide.md",
+      "label": {
+        "ru": "Памятка владельцу",
+        "en": "Owner's guide"
+      }
+    }
   ]
 }
