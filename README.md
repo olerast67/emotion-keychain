@@ -15,7 +15,7 @@
 ![PCB](https://img.shields.io/badge/PCB-rev_B_%C2%B7_4_layers_%C2%B7_DRC_0-1d3f8f?logo=kicad&logoColor=white)
 [![License](https://img.shields.io/badge/license-PolyForm_Noncommercial-c7a35a)](LICENSE.md)
 
-[Владельцу](docs/user-guide.md) · [Движок](docs/engine.md) · [Эмоции](docs/emotions.md) · [Голос](docs/sound.md) · [Встречи](docs/encounters.md) · [Железо](docs/hardware.md) · [Плата](hardware/rev-b/README.md) · [Корпус](hardware/rev-b/case/README.md) · [Энергия](docs/power.md) · [План](docs/plan.md) · [Перед продажей](docs/selling.md)
+[Владельцу](docs/user-guide.md) · [Движок](docs/engine.md) · [Эмоции](docs/emotions.md) · [Голос](docs/sound.md) · [Встречи](docs/encounters.md) · [Железо](docs/hardware.md) · [Плата](hardware/rev-b/README.md) · [Корпус](hardware/rev-b/case/README.md) · [Энергия](docs/power.md) · [План](docs/plan.md)
 
 </div>
 
@@ -155,7 +155,7 @@ sim/web/build.sh    # нужны clang с целью wasm32 и wasm-ld (паке
 
 Прошивка платы rev B — в [firmware/README.md](firmware/README.md#плата-rev-b), откуда брать файлы — в [«Где взять файлы»](firmware/README.md#где-взять-файлы).
 
-- **Готовые файлы** — в [`firmware/release/`](firmware/release/README.md): `keychain-revb-factory.hex` для программатора или завода, `keychain-revb.uf2` для диска KEYCHAIN, `keychain-revb-dfu.zip` для adafruit-nrfutil. Версия и коммит — в README той же папки. Это файлы для прототипов: в них USB-номера Adafruit. Брелоки на продажу прошивают своей сборкой со своими номерами ([перед продажей](docs/selling.md#свои-usb-vid-и-pid)).
+- **Готовые файлы** — в [`firmware/release/`](firmware/release/README.md): `keychain-revb-factory.hex` для программатора или завода, `keychain-revb.uf2` для диска KEYCHAIN, `keychain-revb-dfu.zip` для adafruit-nrfutil. Версия и коммит — в README той же папки. Это файлы для прототипов: в них USB-номера Adafruit. Брелоки на продажу прошивают своей сборкой со своими номерами (раздел `[sale]` в `firmware/platformio.ini`).
 - **Своя сборка:** `cd firmware && pio run -e keychain` → `firmware/.pio/build/keychain/firmware-factory.hex`, `firmware.uf2` и `firmware.zip`. Когда GitHub Actions снова запускается, те же файлы лежат в артефактах CI.
 - **Старая прошивка не подходит.** Сборки до коммита `098681e` на этой плате не заряжают ячейку: в них нет CHG_EN на P0.24, а акселерометр ищется по адресу 0x18. Какая прошивка залита, видно по команде `ver` в консоли (старая отвечает «Не знаю такую команду»); приветствие при включении до терминала обычно не доходит.
 
@@ -207,7 +207,6 @@ tools/           вспомогательные скрипты
 - [x] Прошивка платы rev B: датчики, голос, вибро, встречи, сон, заряд по температуре, загрузчик UF2
 - [x] Симуляция платы целиком: настоящая прошивка на моделях микросхем, две платы и эфир
 - [ ] Заказ, сборка и запуск rev B
-- [ ] Перед продажей: свои USB VID/PID в своей сборке, радио, батарея, мемные эмоции, испытания первых брелоков, `factory yes` перед отправкой ([список](docs/selling.md)); [памятка владельцу](docs/user-guide.md) готова
 - [ ] Замеры тока и тест разряда на живой плате
 - [ ] Настоящие датчики: пороги тапов, шагов, звука и света по записям с рюкзака
 - [ ] Механика: падение, рывок за ушко, брызги, неделя носки
@@ -228,4 +227,4 @@ tools/           вспомогательные скрипты
 
 Код открыт по [PolyForm Noncommercial 1.0.0](LICENSE.md). Собрать брелок для себя, менять код, рисовать свои эмоции и делиться ими можно бесплатно.
 
-Файлы платы и корпуса в `hardware/` — на тех же некоммерческих условиях. Продавать устройства, наборы, платы или корпуса с этим кодом или по этим файлам можно только по коммерческой лицензии: процент с продаж или разовая оплата. Условия — в [COMMERCIAL.md](COMMERCIAL.md). Что ещё нужно до первой продажи — свои USB VID/PID, радио, батарея, мемные эмоции, памятка в коробку, испытания, — в [списке перед продажей](docs/selling.md).
+Файлы платы и корпуса в `hardware/` — на тех же некоммерческих условиях. Продавать устройства, наборы, платы или корпуса с этим кодом или по этим файлам можно только по коммерческой лицензии: процент с продаж или разовая оплата. Условия — в [COMMERCIAL.md](COMMERCIAL.md).

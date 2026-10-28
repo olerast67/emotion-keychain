@@ -8,7 +8,7 @@
 | A | Плата-носитель для XIAO nRF52840 Sense с экраном на стойках M2 | Ранний план, не делался; папки нет |
 | C | Следующая ревизия: исправления по первым платам ([план](../docs/plan.md)) | В плане; папки ещё нет |
 
-Как заказать и собрать — в [README платы rev B](rev-b/README.md). Готовая прошивка для прототипов — в [`firmware/release/`](../firmware/release/README.md); брелоки на продажу прошивают своей сборкой со своими номерами ([перед продажей](../docs/selling.md#свои-usb-vid-и-pid)). Компоненты, стек и решения — в [docs/hardware.md](../docs/hardware.md).
+Как заказать и собрать — в [README платы rev B](rev-b/README.md). Готовая прошивка для прототипов — в [`firmware/release/`](../firmware/release/README.md); брелоки на продажу прошивают своей сборкой со своими номерами (раздел `[sale]` в `firmware/platformio.ini`). Компоненты, стек и решения — в [docs/hardware.md](../docs/hardware.md).
 
 ## Правила для плат
 

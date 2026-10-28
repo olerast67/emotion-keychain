@@ -25,7 +25,7 @@
 ## Что в лицензию не входит
 
 - **Название, логотип и образ персонажа** брелока. Лицензия на код не даёт права выпускать устройство под этим именем или с этим персонажем на упаковке и в рекламе.
-- **Чужие права и требования к товару.** Лицензия не заменяет того, что продавец делает сам: свои USB VID/PID, требования к радио и батарее, проверка мемных эмоций, уведомления чужого открытого кода. Список — в [docs/selling.md](docs/selling.md).
+- **Чужие права и требования к товару.** Лицензия не заменяет того, что продавец делает сам: свои USB VID/PID, требования к радио и батарее, проверка мемных эмоций, уведомления чужого открытого кода.
 
 ---
 
@@ -35,4 +35,4 @@ This project is source-available under the [PolyForm Noncommercial License 1.0.0
 
 Selling devices, kits, boards or cases that contain this firmware, engine or emotion set or are made from these board and case files (modified or not), building them to order for money, or using the code in any other commercial product requires a commercial license. Two options are available: a royalty per unit sold, or a one-time license fee for a production run or a period of time. Terms are agreed individually; contact via [olerast.com](https://olerast.com).
 
-The agreement states what the commercial license covers (code, board and case files). It does not grant rights to the product name, logo or character, and it does not replace the seller's own obligations: own USB VID/PID, radio and battery compliance, review of meme-based faces, third-party open-source notices ([checklist, in Russian](docs/selling.md)).
+The agreement states what the commercial license covers (code, board and case files). It does not grant rights to the product name, logo or character, and it does not replace the seller's own obligations: own USB VID/PID, radio and battery compliance, review of meme-based faces, third-party open-source notices.
