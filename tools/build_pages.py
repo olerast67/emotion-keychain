@@ -3,7 +3,7 @@
 
     build_pages.py --sim sim/web/dist/index.html --out site/
 
-Прошивка стенда из браузера — на olerast.com/flash, здесь её нет."""
+Прошивка стенда из браузера — на olerast.com/projects/emotion-keychain/flash, здесь её нет."""
 import argparse
 import pathlib
 import shutil

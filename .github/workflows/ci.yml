@@ -136,7 +136,7 @@ jobs:
           name: keychain-firmware
           path: out/*
 
-  # Сайт на GitHub Pages: веб-симулятор (прошивка стенда из браузера — на olerast.com/flash).
+  # Сайт на GitHub Pages: веб-симулятор (прошивка стенда из браузера — на olerast.com/projects/emotion-keychain/flash).
   # Симулятор берётся из сборки выше. Только push в main; Pages включается в настройках репозитория
   # (Settings → Pages → Source: GitHub Actions). Pages у бесплатного аккаунта — только для
   # публичного репозитория, поэтому для закрытого задание пропускается, а не падает.
