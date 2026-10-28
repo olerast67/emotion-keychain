@@ -98,7 +98,7 @@ Friendship grows with the number of days the keychains have met. However many ti
 
 A new level brings a scene with a heart and the friend's call sign, and 15 × level experience. When the table is full, a new acquaintance pushes out the one with the weakest friendship, and on a tie, the one met longest ago. Nobody pushes out today's acquaintances or close friends (two days or more) met within the last month; if there's nobody to push out, the new acquaintance isn't recorded.
 
-**Gift from an elder.** A keychain whose implant is two or more levels higher gives the younger one an emotion once a day (no more than one gift per day from all keychains combined) from its next implant: the GIFT scene with the giver's call sign, then the new emotion with NEW. The neighbor's level is byte 9 of the packet.
+**Gift from an elder.** A keychain whose implant is two or more levels higher gives the younger one an emotion once a day (no more than one gift per day from all keychains combined) from its next implant: the GIFT scene with the giver's call sign, then the new emotion with NEW. The neighbor's level is byte 21 of the packet.
 
 **Whisper.** Old acquaintances sometimes talk in cipher, as after a duel. The decision is made by the shared key: `chat_key(…) % 4 == 0`, on average every fourth meeting. Both keychains have the same key without exchanging messages. But each keychain decides "is this an old acquaintance" from its own table of acquaintances. Usually the tables agree: the acquaintance is recorded for both in the same meeting. But if one keychain has forgotten the other (a reset, or a full table with nobody to push out), only the one that remembers will whisper.
 
