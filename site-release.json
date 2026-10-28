@@ -9,7 +9,7 @@
   },
   "status": "code",
   "updated": "2026-10-28",
-  "build": "28.10.2026 · 65d3416",
+  "build": "28.10.2026 · v0.1.0",
   "summary": {
     "ru": "Брелок на рюкзак с OLED-экраном 128×64, на котором живёт персонаж: моргает, смеётся, злится, засыпает в темноте и отвечает на тапы, тряску, звук и свет.",
     "en": "A backpack keychain with a 128×64 OLED screen and a living face: it blinks, laughs, gets angry, falls asleep in the dark and reacts to taps, shaking, sound and light."
@@ -64,6 +64,12 @@
       "Auto-brightness: the screen dims at night and in the dark and comes back in daylight."
     ]
   },
+  "versions": [
+    {
+      "platform": "Прошивка",
+      "version": "0.1.0"
+    }
+  ],
   "checked": "2026-10-28",
   "demo": "https://olerast67.github.io/emotion-keychain/?lang=ru",
   "media": {
