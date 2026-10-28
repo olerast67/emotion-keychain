@@ -18,6 +18,7 @@ void vib_on(bool on);
 
 namespace {
 uint32_t reset_cause = 0;
+float adc_cal_t = 0;  // температура кристалла при последней калибровке АЦП
 }
 
 void power_init() {
@@ -46,8 +47,30 @@ void power_init() {
   // опуститься ниже порога. Высокий уровень даёт светодиод заряда от VBUS, низкий — STAT.
   // Вход подключается только на время чтения (charging).
   nrf_gpio_cfg_default(board::kChgIo);
+  // Заряд выключен, пока прошивка не проверит температуру (charge_enable).
+  nrf_gpio_cfg_default(board::kChgEn);
   // У делителя VDDH/5 большое сопротивление: замеру нужно время выборки побольше.
   analogSampleTime(40);
+  // Смещение нуля АЦП — калибровкой по внутреннему эталону (несколько миллисекунд).
+  analogCalibrateOffset();
+  adc_cal_t = temperature_c();
+}
+
+void adc_follow_temperature(float t) {
+  if (fabsf(t - adc_cal_t) <= 10.0f) return;
+  analogCalibrateOffset();
+  adc_cal_t = t;
+}
+
+void charge_enable(bool on) {
+  // R3 задаёт ток заряда, только когда его нижний конец на земле: ножка в нуле — заряд,
+  // ножка отпущена — PROG висит, и MCP73832 не заряжает (питание от USB через D1 остаётся).
+  if (on) {
+    digitalWrite(board::kChgEn, LOW);
+    pinMode(board::kChgEn, OUTPUT);
+  } else {
+    nrf_gpio_cfg_default(board::kChgEn);
+  }
 }
 
 bool warm_reset() {
@@ -78,8 +101,8 @@ bool usb_present() {
 }
 
 bool charging() {
-  // Без USB статус зарядника висит в воздухе: вход подключаем только на время чтения,
-  // иначе плавающий уровень гоняет входной буфер ножки.
+  // Без USB зарядник молчит, а R20 держит ножку в нуле. Вход подключаем только на время
+  // чтения: остальное время ножка отключена и не тратит ток.
   if (!usb_present()) return false;
   pinMode(board::kChgIo, INPUT);
   delayMicroseconds(20);
@@ -90,6 +113,30 @@ bool charging() {
 
 float temperature_c() { return readCPUTemperature(); }
 
+void usb_crystal(bool on, bool wait) {
+  // USBD работает только от кварца 64 МГц. TinyUSB просит его при подключении, но не просит,
+  // если кварц в этот момент уже шёл (по запросу радио или микрофона), и тогда, когда тот
+  // запрос снят, USB остался бы на внутреннем генераторе. Запрос у SoftDevice один на всё
+  // приложение, и TinyUSB снимает его при отключении USB — здесь то же. Поэтому запрос — по
+  // уровню, без проверки «кварц уже идёт»: она не отличает свой запрос от работы радио. Заодно
+  // температура для разрешения заряда (только на USB) меряется при кварце, как требует
+  // документация.
+  uint8_t sd = 0;
+  sd_softdevice_is_enabled(&sd);
+  if (!sd) return;
+  if (!on) {
+    sd_clock_hfclk_release();
+    return;
+  }
+  sd_clock_hfclk_request();
+  if (!wait) return;
+  uint32_t running = 0;
+  for (int i = 0; i < 20 && !running; ++i) {  // кварц запускается за доли миллисекунды
+    sd_clock_hfclk_is_running(&running);
+    if (!running) delayMicroseconds(100);
+  }
+}
+
 void watchdog_start() {
   NRF_WDT->CONFIG = WDT_CONFIG_SLEEP_Run << WDT_CONFIG_SLEEP_Pos;  // считает и во сне; при отладке — пауза
   NRF_WDT->CRV = 8u * 32768u;
@@ -99,27 +146,56 @@ void watchdog_start() {
 
 void watchdog_feed() { NRF_WDT->RR[0] = WDT_RR_RR_Reload; }
 
-void i2c_recover(uint8_t sda, uint8_t scl) {
+bool i2c_recover(uint8_t sda, uint8_t scl) {
   // Датчик, сброшенный посреди чтения, может держать SDA в нуле: шина зависла бы навсегда.
-  // До девяти тактов SCL выпускают его, потом — стоп.
+  // До девяти тактов SCL выпускают его, потом — стоп. Обе линии — открытым стоком, как на
+  // шине I2C: «единицу» дают подтяжки, и ножка никогда не спорит с ведомым, держащим ноль.
+  // Ножка-выход читает не линию, а свой регистр (так в ядре), поэтому линию всегда читаем
+  // на второй ножке, которая сейчас вход.
   pinMode(sda, INPUT_PULLUP);
   pinMode(scl, INPUT_PULLUP);
   delayMicroseconds(10);
-  if (digitalRead(sda) == HIGH) return;
-  pinMode(scl, OUTPUT);
-  for (int i = 0; i < 9 && digitalRead(sda) == LOW; ++i) {
-    digitalWrite(scl, LOW);
-    delayMicroseconds(5);
+  if (digitalRead(sda) == LOW || digitalRead(scl) == LOW) {
     digitalWrite(scl, HIGH);
+    pinMode(scl, OUTPUT_S0D1);
+    for (int i = 0; i < 9 && digitalRead(sda) == LOW; ++i) {
+      digitalWrite(scl, LOW);
+      delayMicroseconds(5);
+      digitalWrite(scl, HIGH);
+      delayMicroseconds(5);
+    }
+    digitalWrite(sda, LOW);
+    pinMode(sda, OUTPUT_S0D1);
     delayMicroseconds(5);
+    digitalWrite(sda, HIGH);  // стоп: SDA вверх при высоком SCL
+    delayMicroseconds(5);
+    pinMode(sda, INPUT_PULLUP);
+    pinMode(scl, INPUT_PULLUP);
+    delayMicroseconds(10);
   }
-  pinMode(sda, OUTPUT);
-  digitalWrite(sda, LOW);
-  delayMicroseconds(5);
-  digitalWrite(sda, HIGH);  // стоп: SDA вверх при высоком SCL
-  delayMicroseconds(5);
+  bool free = digitalRead(sda) == HIGH && digitalRead(scl) == HIGH;
+  // Линии не замкнуты между собой: в покое перемычку SCL–SDA (соседние выводы разъёма) не
+  // видно, а TWIM с ней виснет без срока на первом нуле адреса — SDA тянет за собой и SCL.
+  // SDA вниз и вверх при высоком SCL — это старт и стоп, такт SCL при высокой SDA на свободной
+  // шине ведомые пропускают.
+  if (free) {
+    digitalWrite(sda, LOW);
+    pinMode(sda, OUTPUT_S0D1);
+    delayMicroseconds(5);
+    free = digitalRead(scl) == HIGH;
+    pinMode(sda, INPUT_PULLUP);
+    delayMicroseconds(10);
+    digitalWrite(scl, LOW);
+    pinMode(scl, OUTPUT_S0D1);
+    delayMicroseconds(5);
+    free = free && digitalRead(sda) == HIGH;
+    pinMode(scl, INPUT_PULLUP);
+    delayMicroseconds(10);
+    free = free && digitalRead(sda) == HIGH && digitalRead(scl) == HIGH;
+  }
   pinMode(sda, INPUT);
   pinMode(scl, INPUT);
+  return free;
 }
 
 void i2c_390k(int bus) {
@@ -148,6 +224,9 @@ void system_off() {
   digitalWrite(board::kDispEn, LOW);
   mic_end();
   delay(20);
+  // Пока ждали кнопку, могли подключить USB: из сна без кнопки его подключение уже не
+  // разбудит, а кнопка при USB включила бы загрузчик. Возвращаемся в выключение на USB.
+  if (usb_present()) return;
   // Кнопка будит из полного сна; подключение USB — тоже (событие VBUS у nRF52840).
   if (!stuck) systemOff(board::kButton, LOW);
   // Кнопка залипла: сон без неё, разбудит только USB.
@@ -205,12 +284,14 @@ void buzzer(uint16_t hz, bool soft) {
   const uint32_t top = 4000000u / hz;
   NRF_PWM3->COUNTERTOP = top > 32767u ? 32767u : top < 3u ? 3u : top;  // допустимо 3…32767
   const uint16_t half = (uint16_t)(NRF_PWM3->COUNTERTOP / 2);
+  // Бит 15 значения — полярность: 1 — с начала периода высокий до сравнения, потом низкий
+  // (так пишет analogWrite ядра), 0 — наоборот.
   if (soft) {
-    seq[0] = (uint16_t)(NRF_PWM3->COUNTERTOP / 8);  // узкий импульс на одном выводе
-    seq[1] = 0;                                     // второй вывод в нуле
+    seq[0] = (uint16_t)(NRF_PWM3->COUNTERTOP / 8) | 0x8000;  // узкий импульс на одном выводе
+    seq[1] = 0x8000;                                         // второй вывод всё время в нуле
   } else {
-    seq[0] = half;           // A: бит 15 = 0 — сначала высокий, спад на половине периода
-    seq[1] = half | 0x8000;  // B: бит 15 = 1 — сначала низкий: противофаза
+    seq[0] = half | 0x8000;  // A: сначала высокий, спад на половине периода
+    seq[1] = half;           // B: сначала низкий — противофаза
   }
   seq[2] = seq[3] = 0;
   NRF_PWM3->ENABLE = 1;
@@ -227,8 +308,8 @@ bool vib_started = false;
 uint16_t vib_seq[4];  // значение для PWM2: память в RAM на всё время работы
 constexpr uint16_t kVibTop = 800;  // 16 МГц / 800 = 20 кГц: выше слышимого
 
-// Мотор на 3 В стоит прямо на VSYS (до 4.2 В от ячейки и ~4.7 В от USB): ключ работает ШИМом
-// со скважностью 3 В / VSYS — ресурс и шум как у мотора на своём напряжении.
+// Мотор на 3 В стоит прямо на VSYS (до 4.2 В от ячейки и до ~5.4 В от USB через диод): ключ
+// работает ШИМом со скважностью 3 В / VSYS — ресурс и шум как у мотора на своём напряжении.
 void vib_on(bool on) {
   if (!on) {
     NRF_PWM2->TASKS_STOP = 1;
@@ -238,7 +319,7 @@ void vib_on(bool on) {
   const float v = vsys_volts();
   float duty = v > 3.0f ? 3.0f / v : 1.0f;
   if (duty < 0.5f) duty = 0.5f;
-  vib_seq[0] = (uint16_t)(kVibTop * duty);  // бит 15 = 0: сначала высокий
+  vib_seq[0] = (uint16_t)(kVibTop * duty) | 0x8000;  // бит 15 = 1: высокий (ключ открыт) duty периода
   vib_seq[1] = vib_seq[2] = vib_seq[3] = 0;
   NRF_PWM2->ENABLE = 1;
   NRF_PWM2->TASKS_SEQSTART[0] = 1;
@@ -290,12 +371,18 @@ void vibro_update(uint32_t now) {
 
 bool vibro_busy() { return vib_p != nullptr; }
 
+void vibro_stop() {
+  vib_p = nullptr;
+  vib_on(false);
+}
+
 // ---------------------------------------------------------------- микрофон
 
 namespace {
 int16_t mic_buf[512];
 volatile float mic_level = -90.0f;
 volatile bool mic_fresh = false;
+volatile int mic_skip = 0;
 bool mic_running = false;
 
 void on_pdm() {
@@ -303,6 +390,12 @@ void on_pdm() {
   const int n = PDM.available();
   const int got = PDM.read(mic_buf, n > (int)sizeof(mic_buf) ? (int)sizeof(mic_buf) : n) / 2;
   if (got <= 0) return;
+  // Первые блоки после включения — нули из буфера библиотеки и выход микрофона на режим:
+  // по ним вышло бы, что вокруг полная тишина, а потом — внезапный шум.
+  if (mic_skip > 0) {
+    mic_skip = mic_skip - 1;  // не «--»: у volatile в C++20 это устаревшая запись
+    return;
+  }
   int32_t mean = 0;
   for (int i = 0; i < got; ++i) mean += mic_buf[i];
   mean /= got;  // постоянная составляющая
@@ -321,13 +414,19 @@ bool mic_begin() {
   if (mic_running) return true;
   PDM.onReceive(on_pdm);
   PDM.setBufferSize((int)sizeof(mic_buf));
-  mic_running = PDM.begin(1, 16000) == 1;
-  // PDM.begin просит у SoftDevice кварц 64 МГц, а PDM.end его не отпускает: кварц (~0.25 мА)
-  // работал бы до выключения, в том числе в кармане. Для уровня в дБ хватает внутреннего
-  // генератора; радио SoftDevice включает кварц само, когда он ему нужен.
+  mic_skip = 4;  // ~130 мс
+  mic_fresh = false;
   uint8_t sd = 0;
   sd_softdevice_is_enabled(&sd);
-  if (sd) sd_clock_hfclk_release();
+  uint32_t was_running = 0;
+  if (sd) sd_clock_hfclk_is_running(&was_running);
+  mic_running = PDM.begin(1, 16000) == 1;
+  // PDM.begin просит у SoftDevice кварц 64 МГц, если он ещё не шёл, а PDM.end его не отпускает:
+  // кварц (~0.25 мА) работал бы до выключения, в том числе в кармане. Для уровня в дБ хватает
+  // внутреннего генератора; радио SoftDevice включает кварц само, когда он ему нужен. Запрос
+  // у SoftDevice один на всё приложение: снимаем его, только если его дал сам PDM.begin, — на
+  // USB кварц держит USBD (usb_crystal), и снять запрос значило бы оставить USB без кварца.
+  if (sd && !was_running && !usb_present()) sd_clock_hfclk_release();
   return mic_running;
 }
 

@@ -1,8 +1,16 @@
 // Одна плата rev B с настоящей прошивкой: процесс, которым управляет координатор
 // (keychain_sim.cpp) по строкам на stdin/stdout.
 //
-//   SET <поле> <значения>   мир вокруг платы (ускорение, свет, звук, USB, кнопка…)
-//   TAP 1|2                 касание или двойное касание (детектор LIS3DH)
+//   SET <поле> <значения>   мир вокруг платы (ускорение, свет, звук, USB, кнопка…) и
+//                           неисправности: lis|ltr|oled 0|1 — микросхема не отвечает и снова
+//                           отвечает (после сброса по питанию), lisreset — сброс LIS3DH,
+//                           wedge — контроллер экрана завис, sda <такты> и scl 0|1 — шина
+//                           датчиков зажата, dscl 0|1 и dbridge 0|1 — SCL шины экрана в нуле
+//                           или замкнута с SDA, osda 1|2 — контроллер экрана держит SDA после
+//                           следующего включения или сразу; dieoffset <°C> — кристалл теплее
+//                           воздуха
+//   TAP 1|2 [мс]            касание или двойное касание (флаги детектора LIS3DH; у двойного —
+//                           второе касание через столько мс, по умолчанию 200)
 //   RX <rssi> <hex>         пакет из эфира — Bluefruit отдаст его прошивке, если слушает
 //   IN <текст>              строка в консоль USB
 //   HOSTREAD 0|1            читает ли хост консоль (0 — порт открыт, но не читается)
@@ -80,6 +88,18 @@ uint32_t frame_hash() {
   return h;
 }
 
+// Ток в полном выключении, мкА: 12 — сон nRF без RAM, зарядник, диод и плата защиты ячейки с
+// датчиками во сне (docs/power.md); сверху — то, что прошивка оставила включённым: ножки и
+// микросхемы в System OFF остаются как были.
+double off_ua() {
+  double ua = 12;
+  if (sim::lis_active()) ua += 20 - 0.5;
+  if (sim::ltr_active()) ua += 220 - 5;
+  if (sim::oled_powered()) ua += 67 + 5;
+  if (sim::status.pdm_running) ua += 800;
+  return ua;
+}
+
 // Ток сейчас, мкА, по состоянию микросхем (типовые значения даташитов; docs/power.md).
 double state_ua() {
   double ua = 3 + 1 + 10;  // сон nRF с RAM, REG0, зарядник и плата защиты ячейки
@@ -96,8 +116,8 @@ double state_ua() {
   if (sim::status.hfclk_requested) ua += 250;
   if (Bluefruit.Scanner.isRunning()) ua += 5500;
   if (sim::status.tone_hz) ua += 4000;
-  // Мотор: ШИМ PWM2 со скважностью из последовательности; ток мотора ~60 мА на 3 В.
-  if (NRF_PWM2->ENABLE.v && NRF_PWM2->COUNTERTOP.v) ua += 60000;
+  // Мотор: ~60 мА на 3 В, ток — по среднему напряжению на нём (скважность × VSYS).
+  if (sim::status.vib_duty > 0) ua += 60000.0 * sim::status.vib_duty * (sim::world.vbus ? 4.7 : sim::world.cell_v) / 3.0;
   return ua;
 }
 
@@ -120,6 +140,9 @@ void account() {
 // Экран показывает ровно кадр движка? Сверка после каждого прохода цикла.
 void check_display() {
   if (!(screen_on && have_oled && !oled_full)) return;
+  // Контроллер, зажавший SDA (SET osda), кадров не получает по самой неисправности: прошивка
+  // видит её между обменами за ~2 с (сценарий oled проверяет, что видит), и это не расхождение.
+  if (sim::oled_dev.holds_sda()) return;
   if (!sim::oled_dev.visible()) {
     ++dark_errors;
     return;
@@ -149,17 +172,34 @@ void report() {
   std::string hex;
   char b[4];
   for (uint8_t c : adv.data) snprintf(b, sizeof b, "%02x", c), hex += b;
+  // chgen — нижний конец R3 (CHG_EN) в нуле: зарядник включён. sxp — опыт в последней записи
+  // журнала, fop — операция флеша идёт, oled/accok/alsok/sbus — прошивка считает экран,
+  // акселерометр, датчик света и шину датчиков рабочими; ls — время последней удачной записи,
+  // dm — минуты текущих суток в настройках; ovcc — минимум питания экрана перед
+  // последним включением, por — сколько раз контроллер экрана сбрасывался по питанию; offua —
+  // ток, если плата сейчас уснёт (System OFF), bpct — процент заряда у характера, vb — вибро
+  // по узору (и в паузах между толчками); scene — сцена на экране (none — лицо); theme, snd,
+  // duel, ghost, ucon, bday, date, clk — настройки: тема, звук, дуэли, невидимка, яркость
+  // (b), день рождения, дата и часы заданы.
   printf("ST t=%u adv=%d iv=%u scan=%d disp=%d vis=%d con=%u lit=%d tone=%u vib=%d mic=%d als=%d acc=%d hf=%d "
-         "q=%.0f loops=%u mism=%u dark=%u i2c=%u ffail=%u ovr=%u frames=%u xp=%u fr=%u steps=%u scanms=%.0f adv_ev=%.1f "
-         "uicr=%x data=%s\n",
+         "vibv=%.2f chgen=%d q=%.0f loops=%u mism=%u dark=%u i2c=%u ffail=%u ovr=%u frames=%u xp=%u sxp=%u fr=%u "
+         "steps=%u days=%u dm=%u ls=%u fop=%d oled=%d accok=%d alsok=%d sbus=%d ovcc=%.2f por=%u scanms=%.0f adv_ev=%.1f "
+         "offua=%.1f bpct=%d vb=%d scene=%s theme=%u snd=%u duel=%u ghost=%u ucon=%u bday=%u date=%u clk=%u uicr=%x "
+         "data=%s\n",
          sim::now_ms(), adv.running ? 1 : 0, adv.interval, Bluefruit.Scanner.isRunning() ? 1 : 0,
          sim::oled_powered() ? 1 : 0, sim::oled_dev.visible() ? 1 : 0, sim::oled_dev.contrast, sim::oled_dev.lit(),
          sim::status.tone_hz, NRF_PWM2->ENABLE.v ? 1 : 0, sim::status.pdm_running ? 1 : 0, sim::ltr_active() ? 1 : 0,
-         sim::lis_active() ? 1 : 0, sim::status.hfclk_requested ? 1 : 0, charge_uams, sim::status.loops, mismatches,
+         sim::lis_active() ? 1 : 0, sim::status.hfclk_requested ? 1 : 0, sim::status.vib_peak_v,
+         sim::pin_mode[board::kChgEn] == sim::kOutput && !sim::pin_out[board::kChgEn] ? 1 : 0, charge_uams, sim::status.loops, mismatches,
          dark_errors, sim::status.i2c_errors, sim::flash_failure_count(), sim::lis_overruns(), frame_changes,
-         (unsigned)progress.xp, (unsigned)friends.count(), (unsigned)progress.steps, scan_ms, adv_events,
-         sim::status.uicr_regout0, hex.empty() ? "-" : hex.c_str());
+         (unsigned)progress.xp, (unsigned)progress_saved.xp, (unsigned)friends.count(), (unsigned)progress.steps,
+         (unsigned)progress.days, (unsigned)cfg.day_min, (unsigned)last_save, sim::flash_busy() ? 1 : 0, have_oled ? 1 : 0, acc.ok() ? 1 : 0,
+         als.ok() ? 1 : 0, sensor_bus ? 1 : 0, sim::oled_dev.last_off_min, sim::oled_dev.resets, scan_ms, adv_events,
+         off_ua(), battery_shown, hal::vibro_busy() ? 1 : 0, scene_id(eng.scene()), cfg.theme, cfg.sound, cfg.duel_ready,
+         cfg.ghost, cfg.contrast, cfg.bday_m ? 1 : 0, cfg.year ? 1 : 0, cfg.clock_known, sim::status.uicr_regout0,
+         hex.empty() ? "-" : hex.c_str());
   charge_uams = 0;
+  sim::status.vib_peak_v = sim::status.vib_duty * (sim::world.vbus ? 4.7f : sim::world.cell_v);
   save_uicr();
 }
 
@@ -212,14 +252,46 @@ void serve() {
       if (!strcmp(key, "lux")) w.lux = a;
       if (!strcmp(key, "mic")) w.mic_db = a, w.mic_pattern = (int)b;
       if (!strcmp(key, "temp")) w.temp_c = a;
-      if (!strcmp(key, "vbus")) w.vbus = a != 0;
+      if (!strcmp(key, "vbus")) {
+        // TinyUSB: отключение (USB_EVT_REMOVED) снимает запрос кварца у SoftDevice — и тот, что
+        // делала прошивка (запрос один на приложение). При подключении (USB_EVT_DETECTED) он
+        // просит кварц, только если тот не идёт, а на плате кварц в этот миг часто идёт для
+        // радио. Здесь худший случай: TinyUSB кварц не просит, для USB его держит только прошивка.
+        if (w.vbus && a == 0) {
+          w.vbus_off_us = sim::now_us;
+          if (Bluefruit.started) sim::status.hfclk_requested = false;
+        }
+        w.vbus = a != 0;
+      }
       if (!strcmp(key, "chg")) w.charging = a != 0;
       if (!strcmp(key, "cell")) w.cell_v = a;
       if (!strcmp(key, "button")) w.button = a != 0;
       if (!strcmp(key, "usbhost")) Serial.connected = a != 0;
       if (!strcmp(key, "hang")) hang = a != 0;
+      // Микросхема пропала и вернулась: вернулась она после сброса по питанию.
+      if (!strcmp(key, "lis")) {
+        if (!w.lis_ok && a != 0) sim::lis_glitch();
+        w.lis_ok = a != 0;
+      }
+      if (!strcmp(key, "ltr")) {
+        if (!w.ltr_ok && a != 0) sim::ltr_glitch();
+        w.ltr_ok = a != 0;
+      }
+      if (!strcmp(key, "oled")) w.oled_ok = a != 0;
+      if (!strcmp(key, "lisreset")) sim::lis_glitch();
+      if (!strcmp(key, "wedge")) sim::oled_wedge();
+      if (!strcmp(key, "sda")) w.sda_stuck = (int)a;
+      if (!strcmp(key, "scl")) w.scl_stuck = a != 0;
+      if (!strcmp(key, "dscl")) w.dscl_stuck = a != 0;
+      if (!strcmp(key, "dbridge")) w.disp_bridge = a != 0;
+      if (!strcmp(key, "osda")) sim::oled_dev.arm_sda_hold(a >= 2);
+      if (!strcmp(key, "dieoffset")) w.die_offset = a;
     } else if (!strcmp(line, "TAP") && arg) {
-      sim::world.tap = atoi(arg);
+      sim::world_changing();
+      int kind = 0, gap = 200;
+      sscanf(arg, "%d %d", &kind, &gap);
+      sim::world.tap = kind;
+      sim::world.tap_gap_ms = (uint32_t)gap;
     } else if (!strcmp(line, "HOSTREAD") && arg) {
       Serial.host_reads = atoi(arg) != 0;
       if (Serial.host_reads) Serial.fifo_used = 0;
@@ -301,6 +373,7 @@ int main(int argc, char** argv) {
     account();
     const char* k = r.kind == sim::ResetKind::Soft        ? "reset"
                     : r.kind == sim::ResetKind::SystemOff ? "off"
+                    : r.kind == sim::ResetKind::SystemOffUsb ? "off_vbus"
                     : r.kind == sim::ResetKind::Dfu       ? "dfu"
                                                           : "watchdog";
     printf("EV %s\n", k);

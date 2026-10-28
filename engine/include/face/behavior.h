@@ -96,11 +96,21 @@ class Behavior {
   void update(uint32_t now_ms);
   uint32_t next_update_ms() const { return next_; }
 
-  // Часы для суточного ритма: минуты от полуночи (0..1439).
+  // Часы для суточного ритма: минуты от начала текущих суток (0..1439). Если часы известны —
+  // это минуты от полуночи.
   void set_clock(uint16_t minutes) {
     clock_min_ = (uint16_t)(minutes % 1440);
     if (voice_) voice_->set_quiet(night());  // тихие часы — сразу, а не на следующем пробуждении
   }
+  // Известно ли настоящее время (по умолчанию — да). Без часов минуты set_clock — только счёт
+  // суток (лимит кормления), а всё «по часам» выключено: ночь (приглушённый экран, тихий
+  // голос, сон без дела), недосып, пасхалки по времени и достижения за 3 и 5 утра. Темноту
+  // брелок и без часов видит по датчику света.
+  void set_clock_known(bool known) {
+    clock_known_ = known;
+    if (voice_) voice_->set_quiet(night());
+  }
+  bool clock_known() const { return clock_known_; }
   // Без автоматики поведение только ведёт настроение; включённое снова — сразу в деле.
   void set_auto(bool on) {
     auto_ = on;
@@ -144,13 +154,16 @@ class Behavior {
   // для разных пар (близнецы, ворчун и игрун, скромник с кем угодно…). 0 — неизвестен.
   // С таблицей знакомых новизну решает она, а дружба растёт по дням встреч. peer_level —
   // его имплант: старший на два и больше раз в день дарит эмоцию. С nonce сеанса старые
-  // знакомые иногда шепчутся шифром (решение из общего ключа — одинаковое у обоих).
+  // знакомые иногда шепчутся шифром: решение из общего ключа одинаково у обоих, а «старый
+  // ли знакомый» каждый решает по своей таблице (обычно у соседа она та же).
   void meet(const char* code, bool is_new, uint32_t now_ms, uint32_t peer_hash = 0, uint8_t peer_level = 0,
             uint32_t nonce = 0);
   // Хакерская дуэль с другим брелоком: победа открывает эмоцию досрочно. С peer_hash
   // и общим nonce сеанса BLE после дуэли брелоки «переговариваются» шифром (сцена chat):
-  // оба ставят её в очередь одинаково, поэтому разговор идёт у них одновременно.
-  void duel(const char* code, bool won, uint32_t now_ms, uint32_t peer_hash = 0, uint32_t nonce = 0);
+  // оба ставят её в очередь одинаково, поэтому разговор идёт у них одновременно. Дуэль —
+  // тоже встреча: день дружбы, подарок старшего (peer_level), близнец и легенда — как в meet.
+  void duel(const char* code, bool won, uint32_t now_ms, uint32_t peer_hash = 0, uint32_t nonce = 0,
+            uint8_t peer_level = 0);
   // Секретный разговор с соседом без дуэли.
   void chat(const char* code, uint32_t peer_hash, uint32_t nonce, uint32_t now_ms);
 
@@ -158,8 +171,10 @@ class Behavior {
   // поведение само переходит в экорежим: реже кадры и занятия, без сюрпризов.
   void set_battery_percent(int pct) { battery_pct_ = pct < -1 ? -1 : pct > 100 ? 100 : pct; }
   bool eco() const { return eco_; }
-  // Выключение: «LOW BATTERY → GOODNIGHT» и сон; прошивка гасит всё по eng.scene_ends_ms().
-  void power_off(uint32_t now_ms);
+  // Выключение: GOODNIGHT и сон; прошивка гасит всё по eng.scene_ends_ms(). Сцена начинается
+  // сразу: идущая сцена обрывается, очередь сцен (своих и общих) сбрасывается.
+  // low_battery — выключение из-за пустой ячейки: сцена сначала показывает батарейку и LOW BATTERY.
+  void power_off(uint32_t now_ms, bool low_battery = false);
 
   // Календарь: Новый год, Хэллоуин, день рождения хозяина и пасхалки — день π, 4 мая,
   // 1 апреля, 12 апреля, день полотенца, день программиста, пятница 13-е, 29 февраля.
@@ -224,13 +239,19 @@ class Behavior {
   // Эмоция после приветствия: зависит от своего характера и характера соседа.
   Expr greet_after(const Temperament* other, bool is_new);
   bool run_queue(uint32_t now);
+  // После встречи или дуэли (Friends::meet уже засчитал день): баннер роста дружбы с опытом
+  // и достижением, подарок старшего, близнец, легенда, опыт за нового или старого знакомого.
+  void friendship(const char* code, uint32_t peer_hash, bool is_new, int before, int level, bool first_today,
+                  uint8_t peer_level, uint32_t now);
   // Первая открытая из вариантов; если закрыты все — ближайшая замена первой.
   Expr pick_unlocked(const Expr* opts, int n);
   template <int N>
   Expr pick_unlocked(const Expr (&opts)[N]) {
     return pick_unlocked(opts, N);
   }
-  bool night() const { return clock_min_ >= 23 * 60 || clock_min_ < 6 * 60; }
+  // Время суток в [from, to) по настоящим часам; без часов — никогда.
+  bool clock_in(int from, int to) const { return clock_known_ && clock_min_ >= from && clock_min_ < to; }
+  bool night() const { return clock_known_ && (clock_min_ >= 23 * 60 || clock_min_ < 6 * 60); }
   // Эмоция доступна: открыта ростом или своя у характера.
   bool usable(Expr e) const;
   // Подмена через характер: «в покое» — его лицо, «рад» — его радость и т. д.
@@ -243,6 +264,7 @@ class Behavior {
   Mood mood_;
   bool auto_ = true;
   uint16_t clock_min_ = 12 * 60;
+  bool clock_known_ = true;
 
   Expr base_ = Expr::neutral;
   // Сроки с флагом «взведён»: устаревший срок не путается с будущим после переполнения millis().
@@ -271,7 +293,14 @@ class Behavior {
   uint32_t last_calling_ = 0;
   uint32_t last_cyclops_ = 0;
   Expr recent_react_[4] = {Expr::Count, Expr::Count, Expr::Count, Expr::Count};
-  uint32_t tap_times_[8] = {};
+  static constexpr int kTapHistory = 12;  // «тыкают без остановки» — от 9 тапов за 3 с
+  uint32_t tap_times_[kTapHistory] = {};
+  bool fed_ = false;  // покормили (зарядили голодного) в fed_at_
+  uint32_t fed_at_ = 0;
+  bool vented_ = false;  // вспылил на тапы в vented_at_: потом неловко
+  uint32_t vented_at_ = 0;
+  uint32_t moved_at_ = 0;  // когда последний раз шёл или остановился
+  uint32_t run_since_ = 0;  // бежит с этого момента
   float shake_level_ = 0;
   uint8_t recent_idle_[4] = {255, 255, 255, 255};
   const char* reason_ = "";

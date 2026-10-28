@@ -441,36 +441,55 @@ void FaceEngine::play_scene(Scene s, uint32_t now_ms, const SceneParams& p) {
 
 namespace {
 
-// Лицо со значками не подходит к краю ближе kSafeMargin − 1. Поле рассчитывает
-// compute_fit, но наклон брелока, переходы между эмоциями и жесты иногда выносят его
-// дальше: тогда весь слой лица сдвигается внутрь, вместе с привязками для рамки темы.
-void keep_inside(Framebuffer& fb, Anchors& a) {
+struct InkBox {
   int x0 = kWidth, x1 = -1, y0 = kHeight, y1 = -1;
+  bool empty() const { return x1 < 0; }
+};
+
+InkBox ink_box(const Framebuffer& fb) {
+  InkBox r;
   for (int p = 0; p < kPages; ++p)
     for (int x = 0; x < kWidth; ++x) {
       const uint8_t b = fb.data[p * kWidth + x];
       if (!b) continue;
-      x0 = imin(x0, x), x1 = imax(x1, x);
-      y0 = imin(y0, p * 8 + __builtin_ctz(b)), y1 = imax(y1, p * 8 + 31 - __builtin_clz((uint32_t)b));
+      r.x0 = imin(r.x0, x), r.x1 = imax(r.x1, x);
+      r.y0 = imin(r.y0, p * 8 + __builtin_ctz(b)), r.y1 = imax(r.y1, p * 8 + 31 - __builtin_clz((uint32_t)b));
     }
-  if (x1 < 0) return;
+  return r;
+}
+
+// Лицо не подходит к краю ближе kSafeMargin − 1. Поле рассчитывает compute_fit, но наклон
+// брелока, переходы между эмоциями и жесты иногда выносят лицо дальше: тогда весь слой
+// сдвигается внутрь, вместе с привязками для рамки темы. Сдвиг считается по самому лицу
+// (face — его рамка до значков): значки, которые пульсируют и летают, иначе дёргали бы всё
+// лицо туда-обратно. То, что от значков вылезло за поле, обрезается.
+void keep_inside(Framebuffer& fb, Anchors& a, InkBox face) {
+  if (face.empty()) face = ink_box(fb);
+  if (face.empty()) return;
   const int m = kSafeMargin - 1;
-  auto push = [m](int lo, int hi, int size) {
-    if (hi - lo + 1 > size - 2 * m) return 0;  // шире поля — не трогаем
+  auto fits = [m](int lo, int hi, int size) { return hi - lo + 1 <= size - 2 * m; };
+  auto push = [m, fits](int lo, int hi, int size) {
+    if (!fits(lo, hi, size)) return 0;  // шире поля — не трогаем
     if (lo < m) return m - lo;
     if (hi > size - 1 - m) return size - 1 - m - hi;
     return 0;
   };
-  const int dx = push(x0, x1, kWidth), dy = push(y0, y1, kHeight);
-  if (!dx && !dy) return;
-  static Framebuffer tmp;
-  tmp.clear();
-  for (int y = y0; y <= y1; ++y)
-    for (int x = x0; x <= x1; ++x)
-      if (fb.get(x, y)) tmp.set(x + dx, y + dy);
-  fb.copy_from(tmp);
-  for (int i = 0; i < 2; ++i) a.ex[i] += (float)dx, a.ey[i] += (float)dy;
-  a.mx += (float)dx, a.my += (float)dy, a.ox += (float)dx, a.oy += (float)dy;
+  const int dx = push(face.x0, face.x1, kWidth), dy = push(face.y0, face.y1, kHeight);
+  if (dx || dy) {
+    static Framebuffer tmp;
+    tmp.clear();
+    const InkBox all = ink_box(fb);
+    for (int y = all.y0; y <= all.y1; ++y)
+      for (int x = all.x0; x <= all.x1; ++x)
+        if (fb.get(x, y)) tmp.set(x + dx, y + dy);
+    fb.copy_from(tmp);
+    for (int i = 0; i < 2; ++i) a.ex[i] += (float)dx, a.ey[i] += (float)dy;
+    a.mx += (float)dx, a.my += (float)dy, a.ox += (float)dx, a.oy += (float)dy;
+  }
+  if (fits(face.x0, face.x1, kWidth))
+    for (int y = 0; y < kHeight; ++y) fb.hspan(y, 0, m - 1, Ink::Clear), fb.hspan(y, kWidth - m, kWidth - 1, Ink::Clear);
+  if (fits(face.y0, face.y1, kHeight))
+    for (int y = 0; y < m; ++y) fb.hspan(y, 0, kWidth - 1, Ink::Clear), fb.hspan(kHeight - 1 - y, 0, kWidth - 1, Ink::Clear);
 }
 
 }  // namespace
@@ -1398,11 +1417,12 @@ bool FaceEngine::update(uint32_t now) {
     } else {
       Anchors anchors;
       render_face(back_, composed_, &anchors);
+      const InkBox face = ink_box(back_);
       for (int i = 0; i < (int)Overlay::Count; ++i) {
         if (ov_alpha_[i] > 0.0f && !overlay_screen_space((Overlay)i))
           render_overlay(back_, (Overlay)i, anchors, ov_alpha_[i], (float)ov_local[i] * 0.001f);
       }
-      keep_inside(back_, anchors);
+      keep_inside(back_, anchors, face);
       for (int i = 0; i < (int)Overlay::Count; ++i) {
         if (ov_alpha_[i] > 0.0f && overlay_screen_space((Overlay)i))
           render_overlay(back_, (Overlay)i, anchors, ov_alpha_[i], (float)ov_local[i] * 0.001f);

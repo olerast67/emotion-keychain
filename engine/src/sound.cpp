@@ -434,7 +434,7 @@ void Voice::scene(Scene s, const SceneParams& p, uint32_t now) {
       render(Cue::win);
       break;
     case Scene::shutdown:
-      pad_to(1400);
+      pad_to(p.value ? 1400 : 0);  // при пустой ячейке прощание — после батарейки
       render(Cue::goodbye);
       pad_to(2600);
       for (int k = 0; k < 6; ++k) push(note_hz(base, 7 - k * 2), 80);  // гаснет кадр

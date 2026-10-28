@@ -3,7 +3,7 @@
 namespace {
 
 // Регистры LIS3DH.
-constexpr uint8_t kWhoAmI = 0x0F, kCtrl1 = 0x20, kCtrl2 = 0x21, kCtrl3 = 0x22, kCtrl4 = 0x23, kCtrl5 = 0x24,
+constexpr uint8_t kCtrl0 = 0x1E, kWhoAmI = 0x0F, kCtrl1 = 0x20, kCtrl2 = 0x21, kCtrl3 = 0x22, kCtrl4 = 0x23, kCtrl5 = 0x24,
                   kOutX = 0x28, kFifoCtrl = 0x2E, kFifoSrc = 0x2F, kClickCfg = 0x38, kClickSrc = 0x39,
                   kClickThs = 0x3A, kTimeLimit = 0x3B, kTimeLatency = 0x3C, kTimeWindow = 0x3D;
 
@@ -33,11 +33,18 @@ bool Lis3dh::read(uint8_t reg, uint8_t* buf, size_t n) {
 bool Lis3dh::begin(TwoWire& wire, uint8_t addr) {
   w_ = &wire;
   addr_ = addr;
+  // После подачи питания датчику нужно ~5 мс на загрузку настроек: несколько попыток.
   uint8_t id = 0;
-  ok_ = read(kWhoAmI, &id, 1) && id == 0x33;
+  ok_ = false;
+  for (int attempt = 0; attempt < 5 && !ok_; ++attempt) {
+    ok_ = read(kWhoAmI, &id, 1) && id == 0x33;
+    if (!ok_) delay(10);
+  }
   if (!ok_) return false;
+  // Внутренняя подтяжка SA0 не нужна: вывод и так на VDD (0x90 — подтяжка отключена,
+  // младшие биты по документации 0x10).
   // 100 Гц, все оси; высокое разрешение, ±4 g, данные целиком (BDU).
-  ok_ = write(kCtrl1, 0x57) && write(kCtrl4, 0x98) &&
+  ok_ = write(kCtrl0, 0x90) && write(kCtrl1, 0x57) && write(kCtrl4, 0x98) &&
         // Детектор касаний — по данным после фильтра верхних частот: наклон ему не мешает.
         write(kCtrl2, 0x04) && write(kCtrl3, 0x80) &&
         // FIFO в потоковом режиме.
@@ -83,7 +90,16 @@ int Lis3dh::take_click() {
 }
 
 void Lis3dh::power(bool on) {
+  on_ = on;
   if (ok_) write(kCtrl1, on ? 0x57 : 0x07);  // 0x07 — выключен, оси сохраняются
+}
+
+bool Lis3dh::healthy() {
+  if (!ok_) return false;
+  uint8_t c1 = 0;
+  if (!read(kCtrl1, &c1, 1)) return ok_ = false;
+  // Сброс питания датчика или сбой стирает настройки: CTRL1 возвращается к 0x07.
+  return ok_ = c1 == (on_ ? 0x57 : 0x07);
 }
 
 // ---------------------------------------------------------------- LTR-303ALS

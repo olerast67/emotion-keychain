@@ -16,13 +16,18 @@ class Lis3dh {
   int take_click();
   // Сон с минимальным током или работа.
   void power(bool on);
+  // Отвечает ли датчик и целы ли его настройки; false — пора перезапустить (begin).
+  bool healthy();
+  // Шина остановлена: до нового begin датчик молчит, и обмена с ним нет.
+  void lost() { ok_ = false; }
 
  private:
   bool write(uint8_t reg, uint8_t v);
   bool read(uint8_t reg, uint8_t* buf, size_t n);
   TwoWire* w_ = nullptr;
-  uint8_t addr_ = 0x18;
+  uint8_t addr_ = 0x19;
   bool ok_ = false;
+  bool on_ = true;
 };
 
 // LTR-303ALS: освещённость, замер 100 мс раз в 500 мс.
@@ -33,6 +38,8 @@ class Ltr303 {
   // Люксы; −1 — нет свежего замера или датчик не ответил.
   float lux();
   void power(bool on);
+  // Шина остановлена: до нового begin датчик молчит, и обмена с ним нет.
+  void lost() { ok_ = false; }
 
  private:
   bool write(uint8_t reg, uint8_t v);

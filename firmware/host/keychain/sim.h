@@ -17,7 +17,9 @@
 namespace sim {
 
 // Чем кончилась работа прошивки.
-enum class ResetKind { Soft = 1, SystemOff = 2, Dfu = 3, Watchdog = 4, Hang = 5 };
+// SystemOff — сон с пробуждением от кнопки (systemOff ядра), SystemOffUsb — без кнопки:
+// sd_power_system_off или SYSTEMOFF напрямую, будит только VBUS.
+enum class ResetKind { Soft = 1, SystemOff = 2, Dfu = 3, Watchdog = 4, Hang = 5, SystemOffUsb = 6 };
 struct Reset {
   ResetKind kind;
 };
@@ -44,12 +46,27 @@ struct World {
   int mic_pattern = 0;  // 0 — ровно, 1 — речь (слоги с паузами)
   float temp_c = 24;
   bool vbus = false;
+  uint64_t vbus_off_us = 0;  // когда отключили USB (провал VSYS через диод Q1)
   bool button = false;
   float cell_v = 3.9f;  // расчётное напряжение ячейки (координатор ведёт заряд)
   bool charging = false;
-  int tap = 0;           // 1 — касание, 2 — двойное: модель LIS3DH взводит CLICK
+  // Кристалл nRF теплее воздуха вокруг (SET dieoffset): температура для датчика — temp_c + он.
+  float die_offset = 3.0f;
+  // 1 — касание, 2 — двойное: модель LIS3DH взводит CLICK (SClick, а через tap_gap_ms — DClick,
+  // как настоящий датчик). Сам удар по выборкам не детектируется — флаг задаёт сценарий.
+  int tap = 0;
+  uint32_t tap_gap_ms = 200;
   uint32_t reset_reason = 0;
   uint64_t device_id = 0;
+  // Неисправности шин I2C (SET lis/ltr/oled/sda/scl): микросхема не отвечает на свой адрес;
+  // ведомый держит SDA шины датчиков, пока не получит столько тактов SCL от i2c_recover;
+  // SCL шины датчиков в нуле — обмен по ней в ядре ждёт без срока. Шина экрана (SET dscl,
+  // dbridge): SCL в нуле или SCL замкнута с SDA (перемычка на J2) — обмен в ядре тоже ждёт
+  // без срока; контроллер, зажавший SDA (SET osda), — в oled_model.h.
+  bool lis_ok = true, ltr_ok = true, oled_ok = true;
+  int sda_stuck = 0;
+  bool scl_stuck = false;
+  bool dscl_stuck = false, disp_bridge = false;
 };
 extern World world;
 
@@ -68,6 +85,8 @@ struct Status {
   bool hfclk_requested = false;
   bool pdm_running = false;
   uint16_t tone_hz = 0;
+  float vib_duty = 0;    // доля периода, когда ключ мотора открыт (по биту 15 полярности PWM)
+  float vib_peak_v = 0;  // наибольшее среднее напряжение на моторе с прошлого отчёта
   bool wdt_started = false;
   uint64_t wdt_fed_us = 0;
   uint32_t wdt_timeout_us = 0;
@@ -82,9 +101,20 @@ extern Status status;
 struct I2cDevice {
   virtual ~I2cDevice() = default;
   virtual bool powered() const { return true; }
+  virtual bool acks() const { return powered(); }  // отвечает на свой адрес
   virtual void write(const uint8_t* d, size_t n, bool stop) = 0;  // байты после адреса
   virtual size_t read(uint8_t* d, size_t n) = 0;
 };
 I2cDevice* i2c_device(int bus, uint8_t addr);
+
+// Ножку перенастроили (pinMode, digitalWrite, nrf_gpio_cfg_default): моделям, которые от
+// неё зависят, — питание экрана, линии I2C, — сначала досчитать своё время по старым уровням.
+void pin_changing(int pin);
+void pin_changed(int pin);
+// Неисправности для координатора: сброс LIS3DH по питанию, «зависший» контроллер экрана.
+void lis_glitch();
+void ltr_glitch();
+void oled_wedge();
+bool flash_busy();  // операция флеша SoftDevice ещё идёт
 
 }  // namespace sim

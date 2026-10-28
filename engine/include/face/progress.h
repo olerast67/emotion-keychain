@@ -99,7 +99,8 @@ const Achievement& achievement(Ach a);
 //
 // Как расширять: новое поле берётся из reserved (по умолчанию там нули), версия
 // растёт на 1, а load() читает предыдущую версию и дописывает значения по умолчанию.
-// Размер записи при этом не меняется.
+// Размер записи при этом не меняется. Поле, у которого значение по умолчанию — ноль, версию
+// не меняет: в запасе старых записей и так нули, а прошлая прошивка новую запись читает.
 struct Progress {
   static constexpr uint32_t kMagic = 0x4B43484Bu;  // «KCHK»
   static constexpr uint16_t kVersion = 3;
@@ -135,7 +136,10 @@ struct Progress {
   uint8_t today_duel_prizes = 0;
   uint8_t today_duels = 0;
   uint8_t today_known_friends = 0;
-  uint8_t reserved[5] = {};          // запас под будущие поля
+  // Когда сегодня кормили: минута текущих суток / 10 с округлением вверх, плюс 1; 0 — не
+  // кормили. Из запаса, без новой версии: в старых записях здесь ноль.
+  uint8_t fed_at = 0;
+  uint8_t reserved[4] = {};          // запас под будущие поля
   uint32_t extra[kExtraSlots] = {};  // ключи дополнительно открытых эмоций, 0 — пусто
   uint32_t crc = 0;
 
@@ -158,6 +162,11 @@ struct Progress {
   int duel(bool won, const XpRules& r = {});
   // Зарядили голодного: счётчик растёт всегда, опыт — раз в день.
   int feed(const XpRules& r = {});
+  // То же с отметкой времени: day_min — минута текущих суток (Behavior::set_clock). Отметка
+  // хранится в записи, поэтому может ли брелок «поесть» снова (may_feed: не раньше чем через
+  // 3 часа в те же сутки), перезагрузка не сбрасывает; сбрасывают новые сутки.
+  int feed(uint16_t day_min, const XpRules& r = {});
+  bool may_feed(uint16_t day_min) const { return !fed_at || day_min / 10 >= fed_at - 1 + 18; }
   void fell() { falls = (uint16_t)(falls + 1); }
   void chatted() { chats = (uint16_t)(chats + 1); }
 

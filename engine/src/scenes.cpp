@@ -484,14 +484,16 @@ void charge(Framebuffer& fb, uint32_t t, const SceneParams& p) {
   }
 }
 
-void shutdown(Framebuffer& fb, uint32_t t) {
-  if (t < 1400) {
+// Пустая ячейка (value = 1): сначала мигает батарейка. Выключение кнопкой — сразу «спокойной ночи».
+void shutdown(Framebuffer& fb, uint32_t t, const SceneParams& p) {
+  const uint32_t t0 = p.value ? 1400 : 0;
+  if (t < t0) {
     if (blink_on(t, 220)) draw_text_centered(fb, kCx, 8, "LOW BATTERY");
     battery_body(fb, 40, 26, 84, 46);
     if (blink_on(t, 350)) fill_box(fb, 44, 30, 47, 42);
     return;
   }
-  if (t < 2600) return draw_text_centered(fb, kCx, 27, "GOODNIGHT", 2, Ink::Set, (int)((t - 1400) / 80u));
+  if (t < 2600) return draw_text_centered(fb, kCx, 27, "GOODNIGHT", 2, Ink::Set, (int)((t - t0) / 80u));
   if (t < 3200) {
     const int w = iround(96.0f * (1.0f - ease_in(phase(t, 2600, 600)))) + 4;
     return fill_box(fb, kCx - w / 2, 31, kCx + w / 2, 32);
@@ -688,7 +690,7 @@ void render_scene(Framebuffer& fb, Scene s, uint32_t t, const SceneParams& p, co
     case Scene::chat: chat(fb, t, p); break;
     case Scene::achievement: achievement(fb, t, p); break;
     case Scene::charge: charge(fb, t, p); break;
-    case Scene::shutdown: shutdown(fb, t); break;
+    case Scene::shutdown: shutdown(fb, t, p); break;
     case Scene::banner: banner(fb, t, p); break;
     case Scene::bsod: bsod(fb, t); break;
     case Scene::visor: visor(fb, t); break;

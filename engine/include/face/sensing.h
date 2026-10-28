@@ -60,7 +60,6 @@ class MotionSensor {
   uint8_t steps_held_ = 0;  // шаги, ещё не засчитанные: ходьба пока не подтвердилась
   uint32_t steps_new_ = 0, steps_total_ = 0;
   uint8_t gait_ = 0;  // 0 — стоит, 1 — идёт, 2 — бежит
-  uint32_t gait_said_ = 0;
   // покой и ориентация
   uint32_t calm_since_ = 0;
   bool still_ = false;
@@ -137,6 +136,8 @@ class BatterySensor {
   bool low_said_ = false, critical_said_ = false, empty_ = false;
   uint32_t empty_since_ = 0;
   bool empty_timing_ = false;
+  bool settling_ = false;  // первые 30 с без USB: заряд по наибольшему замеру
+  uint32_t settle_from_ = 0;
 };
 
 }  // namespace face

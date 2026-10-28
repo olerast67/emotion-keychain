@@ -8,28 +8,58 @@
 
 namespace sim {
 
+// Питание модуля за ключом (DISP_VCC) после выключения DISP_EN спадает не сразу: конденсаторы
+// модуля разряжает только его собственный ток (~20 мкА, τ ≈ 0.85 с: около 1 В через секунду).
+// SDA и SCL, прижатые к нулю, разряжают его через подтяжки модуля (τ ≈ 0.1 с на линию), а
+// подтяжки nRF или единица на линиях, наоборот, питают модуль через них (~2.6 В). Контроллер
+// сбрасывается, только если питание опускалось ниже ~1 В; иначе после включения он помнит
+// прежнее, в том числе «зависание» (wedge): не отвечает на адрес, пока его не обесточат.
+// Другое зависание (osda): после следующего включения (osda 1) или сразу (osda 2) контроллер
+// держит SDA в нуле — такты его не отпускают, только сброс по питанию. Ноль на SDA читается как подтверждение: обмен
+// будто бы проходит, а до контроллера ничего не доходит.
 class OledModel : public I2cDevice {
  public:
   bool powered() const override;
+  bool acks() const override;
   void on_power(bool p) {
     if (p == was_powered_) return;
+    track_vcc();
     was_powered_ = p;
     if (p) {
-      // Питание подали: контроллер после сброса, в памяти — что угодно.
+      last_off_min = vcc_min;
       power_since = now_us;
-      on = pump = false;
-      contrast = 0x7F;
-      mode = 2, col = page = 0, col0 = 0, col1 = 127, page0 = 0, page1 = 7;
-      pend_need = pend_n = 0;
-      for (auto& row : ram)
-        for (auto& b : row) b = (uint8_t)rand();
+      if (vcc_min < kPorV) {
+        // Сброс по питанию: контроллер с нуля, в памяти — что угодно.
+        on = pump = false;
+        wedged = false;
+        sda_hold = false;
+        contrast = 0x7F;
+        mode = 2, col = page = 0, col0 = 0, col1 = 127, page0 = 0, page1 = 7;
+        pend_need = pend_n = 0;
+        for (auto& row : ram)
+          for (auto& b : row) b = (uint8_t)rand();
+        ++resets;
+      }
+      if (sda_arm) sda_hold = true, sda_arm = false;
+      vcc = vcc_min = 3.3f;
       ++power_cycles;
     } else {
-      on = pump = false;
+      vcc_min = vcc;
     }
   }
+  // Досчитать напряжение питания до сейчас по тому, как настроены ножки (models.cpp).
+  void track_vcc();
+  void wedge() { wedged = true; }
+  // now — держит SDA сразу (завис посреди работы), иначе — после следующего включения.
+  void arm_sda_hold(bool now) {
+    if (now)
+      sda_hold = true;
+    else
+      sda_arm = true;
+  }
+  bool holds_sda() const;  // держит SDA сейчас (под питанием)
   void write(const uint8_t* d, size_t n, bool) override {
-    if (!n) return;
+    if (!n || wedged) return;
     const bool data = (d[0] & 0x40) != 0;
     for (size_t i = 1; i < n; ++i) data ? put(d[i]) : command(d[i]);
     if (!data) ++cmd_packets;
@@ -46,11 +76,16 @@ class OledModel : public I2cDevice {
     return k;
   }
 
+  static constexpr float kPorV = 1.0f;
   uint8_t ram[8][128] = {};
-  bool on = false, pump = false;
+  bool on = false, pump = false, wedged = false;
+  bool sda_hold = false, sda_arm = false;
   uint8_t contrast = 0x7F;
   uint64_t power_since = 0;
-  uint32_t power_cycles = 0, cmd_packets = 0, stray = 0;
+  uint32_t power_cycles = 0, resets = 0, cmd_packets = 0, stray = 0;
+  float vcc = 0, vcc_min = 0;  // питание модуля и его минимум за последнее выключение
+  float last_off_min = 0;      // минимум перед последним включением
+  uint64_t vcc_t = 0;
 
  private:
   void command(uint8_t c) {

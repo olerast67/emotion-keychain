@@ -135,7 +135,12 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
   if (step_n_ >= 5) {
     const float span = (float)(step_times_[step_n_ - 1] - step_times_[0]) / 1000.0f;
     const float hz = span > 0.0f ? (float)(step_n_ - 1) / span : 0.0f;
-    gait = hz > 2.6f ? 2 : 1;
+    // Бег — от 2.8 шага в секунду, снова шаг — ниже 2.4: быстрая ходьба у границы иначе
+    // переключала бы «бежим» и «идём» на каждом шаге.
+    if (hz > 2.8f)
+      gait = 2;
+    else if (hz < 2.4f || gait_ != 2)
+      gait = 1;
   } else if (gait_ && now - step_last_ > 2500) {
     gait = 0;
   } else if (!gait_) {
@@ -147,8 +152,9 @@ int MotionSensor::feed(float ax, float ay, float az, uint32_t now, Event out[kSe
       steps_total_ += steps_held_;
       steps_held_ = 0;
     }
-    if (gait && (gait > gait_ || now - gait_said_ > 30000)) push(out, n, gait == 2 ? Event::run : Event::walk);
-    if (gait) gait_said_ = now;
+    // Пошёл, побежал или с бега перешёл на шаг — событие походки. Остановился — «покой» для
+    // походки: иначе ходьба на лице держалась бы до минуты полной неподвижности.
+    push(out, n, gait == 2 ? Event::run : gait == 1 ? Event::walk : Event::still);
     gait_ = gait;
   }
 
@@ -342,10 +348,21 @@ int BatterySensor::feed(float volts, bool usb, bool charging, uint32_t now, Even
       v_ = volts;  // отключили USB или первое измерение: начинаем заново
       pct_ = -1;
       have_v_ = true;
+      settling_ = true;
+      settle_from_ = now;
     }
-    v_ += (volts - v_) * 0.2f;  // моторчик и радио дают провалы напряжения
-    const int pct = percent_of(v_);
-    pct_ = pct_ < 0 || pct < pct_ ? pct : pct_;  // без USB заряд не растёт от шумов
+    if (settling_) {
+      // Первые 30 с — по наибольшему замеру: сразу после отключения USB система питается
+      // через диод и видит ячейку на полвольта ниже, а единственный неудачный замер иначе
+      // стал бы потолком процента до следующей зарядки.
+      if (volts > v_) v_ = volts;
+      pct_ = percent_of(v_);
+      if (now - settle_from_ >= 30000) settling_ = false;
+    } else {
+      v_ += (volts - v_) * 0.2f;  // моторчик и радио дают провалы напряжения
+      const int pct = percent_of(v_);
+      pct_ = pct_ < 0 || pct < pct_ ? pct : pct_;  // без USB заряд не растёт от шумов
+    }
   }
   if (!init_) {
     init_ = true;
@@ -366,6 +383,7 @@ int BatterySensor::feed(float volts, bool usb, bool charging, uint32_t now, Even
     empty_timing_ = false;
     return n;
   }
+  if (settling_) return n;  // проценты и «пусто» — после установления
   if (pct_ >= 0 && pct_ <= 15 && !low_said_) {
     low_said_ = true;
     push(out, n, Event::battery_low);

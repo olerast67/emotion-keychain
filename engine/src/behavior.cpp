@@ -126,6 +126,15 @@ enum IdleId : uint8_t {
   kDevil,
   kBoo,
   kCyclops,
+  kFocused,
+  kNervous,
+  kUwu,
+  kDoomer,
+  kImDead,
+  kNervousLaugh,
+  kGuilty,
+  kApologetic,
+  kKiss,
   kIdleCount
 };
 
@@ -141,6 +150,9 @@ const IdleAct kIdle[kIdleCount] = {
     {Expr::troll_grin, Clip::None, 3500},  {Expr::money, Clip::None, 3000},        {Expr::robot, Clip::None, 5000},
     {Expr::party, Clip::None, 5000},       {Expr::derp, Clip::None, 3500},         {Expr::cool, Clip::None, 5000},
     {Expr::devilish, Clip::None, 4000},    {Expr::boo, Clip::None, 3000},          {Expr::cyclops, Clip::None, 3000},
+    {Expr::focused, Clip::None, 4500},     {Expr::nervous, Clip::None, 3000},      {Expr::uwu, Clip::None, 3500},
+    {Expr::doomer, Clip::None, 4500},      {Expr::im_dead, Clip::None, 3500},      {Expr::nervous_laugh, Clip::None, 3000},
+    {Expr::guilty, Clip::None, 3000},      {Expr::apologetic, Clip::None, 3000},   {Expr::kiss, Clip::None, 2500},
 };
 
 }  // namespace
@@ -163,6 +175,10 @@ void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   next_eval_ = now;
   shake_level_ = 0;
   for (uint32_t& t : tap_times_) t = 0;
+  fed_ = vented_ = false;
+  fed_at_ = vented_at_ = 0;
+  moved_at_ = now - kDay;
+  run_since_ = now;
   for (uint32_t& t : falls_) t = 0;
   for (uint8_t& r : recent_idle_) r = 255;
   for (Expr& r : recent_react_) r = Expr::Count;
@@ -330,6 +346,10 @@ void Behavior::age_marks(uint32_t now) {
   cap(last_calling_);
   cap(last_cyclops_);
   cap(chose_ms_);
+  cap(moved_at_);
+  cap(run_since_);
+  if (fed_ && now - fed_at_ > kDay) fed_ = false;
+  if (vented_ && now - vented_at_ > kDay) vented_ = false;
   // Отметки, где 0 значит «не было», просто забываются.
   for (uint32_t& t : tap_times_)
     if (t && now - t > kDay) t = 0;
@@ -382,8 +402,8 @@ void Behavior::on_event(Event e, uint32_t now) {
       last_touch_ = now;
       off_ = false;
       if (progress_) grant(progress_->touch(), now);
-      if (clock_min_ >= 3 * 60 && clock_min_ < 4 * 60) earn(Ach::night_owl, now);
-      if (clock_min_ >= 5 * 60 && clock_min_ < 6 * 60) earn(Ach::early_bird, now);
+      if (clock_in(3 * 60, 4 * 60)) earn(Ach::night_owl, now);
+      if (clock_in(5 * 60, 6 * 60)) earn(Ach::early_bird, now);
       // Секретный стук «Shave and a haircut»: отвечает «two bits» и подмигивает.
       if (e == Event::tap && knock(now)) {
         react(pick_unlocked({Expr::playful, Expr::wink}), now, 3000, "секретный стук", Clip::wink);
@@ -395,7 +415,7 @@ void Behavior::on_event(Event e, uint32_t now) {
       }
       const int add = e == Event::double_tap ? 2 : 1;
       for (int a = 0; a < add; ++a) {
-        for (int i = 7; i > 0; --i) tap_times_[i] = tap_times_[i - 1];
+        for (int i = kTapHistory - 1; i > 0; --i) tap_times_[i] = tap_times_[i - 1];
         tap_times_[0] = now;
       }
       int n = 0;
@@ -414,22 +434,26 @@ void Behavior::on_event(Event e, uint32_t now) {
       if (since_touch > 2u * 60u * kMin && n <= 2) {
         react(Expr::touched, now, 3000, "тронули после долгой разлуки");
       } else if (n >= 9) {
+        vented_ = true, vented_at_ = now;
         mood_.annoyance = clamp01(mood_.annoyance + 0.3f);
         const Option o[] = {{Expr::furious, 3}, {Expr::rage, 2}, {Expr::table_flip, 1}};
         react(pick(o), now, 4000, "тыкают без остановки");
       } else if (n >= 6) {
+        vented_ = true, vented_at_ = now;
         mood_.annoyance = clamp01(mood_.annoyance + 0.2f);
         const Option o[] = {{Expr::angry, 3}, {Expr::twitchy, 1.5f}, {Expr::disapproval, 1}};
         react(pick(o), now, 3500, "слишком много тапов");
       } else if (n >= 4) {
         mood_.annoyance = clamp01(mood_.annoyance + 0.12f);
-        const Option o[] = {{Expr::annoyed, 3}, {Expr::unamused, 2}, {Expr::bruh, 1.5f}, {Expr::skeptical, 1}};
+        const Option o[] = {{Expr::annoyed, 3},   {Expr::unamused, 2},  {Expr::bruh, 1.5f},
+                            {Expr::skeptical, 1}, {Expr::disgusted, 0.5f}};
         react(pick(o), now, 2600, "надоедают тапами", Clip::headshake);
       } else if (n == 3) {
         mood_.valence = clamp11(mood_.valence + 0.1f);
         const Option o[] = {{Expr::playful, 2 * pers_.playful},
                             {Expr::giggle, 2},
                             {Expr::tears_of_joy, good ? 1.0f : 0.2f},
+                            {Expr::im_dead, good ? 0.5f : 0.1f},  // «умер со смеху»
                             {Expr::troll_grin, 0.3f}};
         react(pick(o), now, 2600, "тройной тап");
       } else if (n == 2) {
@@ -440,13 +464,23 @@ void Behavior::on_event(Event e, uint32_t now) {
           const Option o[] = {{temp_->dtap[0], 3}, {temp_->dtap[1], 2}, {temp_->dtap[2], 1}};
           react(pick(o), now, 3000, "двойной тап");
         } else {
-          const Option o[] = {{Expr::laugh, 3},  {Expr::happy, 2},   {Expr::playful, 1},
-                              {Expr::giggle, 1}, {Expr::wink, 0.7f}, {Expr::tears_of_joy, good ? 0.6f : 0.0f}};
+          const Option o[] = {{Expr::laugh, 3},
+                              {Expr::happy, 2},
+                              {Expr::playful, 1},
+                              {Expr::giggle, 1},
+                              {Expr::wink, 0.7f},
+                              {Expr::tears_of_joy, good ? 0.6f : 0.0f},
+                              {Expr::kiss, good ? 0.5f : 0.0f}};
           react(pick(o), now, 3000, "двойной тап");
         }
       } else if (mood_.annoyance > 0.5f) {
         const Option o[] = {{Expr::annoyed, 2}, {Expr::disapproval, 1}, {Expr::unamused, 1}};
         react(pick(o), now, 2000, "тап, но он не в духе");
+      } else if (vented_ && now - vented_at_ < 3u * kMin && rng_.chance(0.7f)) {
+        // Вспылил на тапы, злость почти прошла, а его гладят: неловко за вспышку.
+        vented_ = false;
+        const Option o[] = {{Expr::apologetic, 2}, {Expr::guilty, 1.5f}, {Expr::embarrassed, 1}};
+        react(pick(o), now, 2500, "отошёл после вспышки, неловко");
       } else if (since_touch > 10u * kMin) {
         react(Expr::surprised, now, 1800, "тап после долгой паузы", Clip::startle);
       } else {
@@ -506,12 +540,14 @@ void Behavior::on_event(Event e, uint32_t now) {
         falls_[1] = falls_[0];
         falls_[0] = now;
         if (progress_) progress_->fell();
-        if (falls_[2] && now - falls_[2] < 10u * kMin)
+        if (falls_[2] && now - falls_[2] < 10u * kMin) {
           react(Expr::game_over, now, 3500, "третье падение за 10 минут");
-        else if (falls_[1] && now - falls_[1] < 10u * kMin)
-          react(Expr::crying, now, 4000, "опять уронили");
-        else
+        } else if (falls_[1] && now - falls_[1] < 10u * kMin) {
+          const Option o[] = {{Expr::crying, 3}, {Expr::sobbing, 1}};
+          react(pick(o), now, 4000, "опять уронили");
+        } else {
           react(Expr::knocked_out, now, 3500, "упал и ударился");
+        }
       } else {
         const Option o[] = {{Expr::hurt, 3}, {Expr::cringe, 1}};
         react(pick(o), now, 1800, "стукнули");
@@ -528,14 +564,21 @@ void Behavior::on_event(Event e, uint32_t now) {
       } else if (since_touch > 10u * kMin) {
         react(Expr::hello, now, 2500, "взяли в руки после перерыва", Clip::hop);
       } else {
-        const Option o[] = {
-            {Expr::happy, good ? 3.0f : 1.0f}, {Expr::curious, 2}, {Expr::alert, 1}, {Expr::suspicious, 0.4f}};
+        const Option o[] = {{Expr::happy, good ? 3.0f : 1.0f},
+                            {Expr::curious, 2},
+                            {Expr::alert, 1},
+                            {Expr::suspicious, 0.4f},
+                            {Expr::kiss, good && mood_.affection > 0.35f ? 0.6f : 0.0f},
+                            {Expr::uwu, good ? 0.3f : 0.0f}};
         react(pick(o), now, 2000, "взяли в руки");
       }
       break;
     case Event::walk: {
-      const bool first = !moving;
+      // «Пошли гулять» — после настоящего перерыва, а не после каждого светофора: походка
+      // кончается уже через 2.5 с без шагов.
+      const bool first = !moving && now - moved_at_ > 2u * kMin;
       moving = true;
+      moved_at_ = now;
       running = false;
       mood_.arousal = clamp01(mood_.arousal + 0.1f);
       if (first && mood_.energy > 0.5f && rng_.chance(0.5f))
@@ -545,7 +588,9 @@ void Behavior::on_event(Event e, uint32_t now) {
       break;
     }
     case Event::run: {
+      if (!running) run_since_ = now;
       moving = running = true;
+      moved_at_ = now;
       mood_.arousal = clamp01(mood_.arousal + 0.3f);
       mood_.energy = clamp01(mood_.energy - 0.03f);
       if (mood_.energy < 0.3f) {
@@ -557,6 +602,7 @@ void Behavior::on_event(Event e, uint32_t now) {
       break;
     }
     case Event::still:
+      if (moving) moved_at_ = now;  // перерыв в прогулке считается с остановки
       moving = running = false;
       next_eval_ = now;
       break;
@@ -581,7 +627,7 @@ void Behavior::on_event(Event e, uint32_t now) {
       if (asleep) {
         react(Expr::scared, now, 2500, "громкий звук разбудил");
       } else if (again) {
-        const Option o[] = {{Expr::annoyed, 2}, {Expr::disapproval, 1}, {Expr::unamused, 1}};
+        const Option o[] = {{Expr::annoyed, 2}, {Expr::disapproval, 1}, {Expr::unamused, 1}, {Expr::disgusted, 0.5f}};
         react(pick(o), now, 2500, "опять шумят");
       } else {
         const Option o[] = {{Expr::startled, 4},
@@ -657,7 +703,16 @@ void Behavior::on_event(Event e, uint32_t now) {
       const char* why = "подключили зарядку";
       if (battery == 0) x = Expr::relieved, why = "зарядку подключили в последний момент";
       if (battery == 1) x = Expr::grateful, why = "голодного покормили";
-      if (battery <= 1 && progress_) grant(progress_->feed(), now);
+      // Покормить можно не чаще раза в 3 часа: иначе «голод» набивали бы, дёргая кабель
+      // (после отключения датчик снова говорит «мало заряда», если ячейка не набралась).
+      // Отметка о кормлении — и в записи роста по минутам суток: выключение и включение
+      // кнопкой её не сбрасывают.
+      if (battery <= 1 && progress_ && (!fed_ || now - fed_at_ >= 3u * 60u * kMin) &&
+          progress_->may_feed(clock_min_)) {
+        fed_ = true;
+        fed_at_ = now;
+        grant(progress_->feed(clock_min_), now);
+      }
       set_eco(0);
       SceneParams p;
       p.value = battery_pct_;
@@ -671,10 +726,17 @@ void Behavior::on_event(Event e, uint32_t now) {
       react(pick(o), now, 3000, "зарядился");
       break;
     }
-    case Event::charge_stop:
+    case Event::charge_stop: {
       charging = false;
-      react(battery < 2 ? Expr::disappointed : Expr::hello, now, 2200, "отключили зарядку");
+      // Недозарядили — расстроен. Заряд на зарядке прошивка оценивает сама; не знает — судим
+      // по тому, был ли голоден до неё.
+      const bool short_charge = battery_pct_ >= 0 ? battery_pct_ < 50 : battery < 2;
+      react(short_charge ? Expr::disappointed : Expr::hello, now, 2200, "отключили зарядку");
+      // Заряд снова меряется без USB: если ячейка ещё мало заряжена, датчик сам скажет
+      // «мало заряда» после установления. Иначе голод держался бы до полной зарядки.
+      battery = 2;
       break;
+    }
     case Event::battery_low: {
       battery = 1;
       set_eco(1);
@@ -710,7 +772,9 @@ void Behavior::on_event(Event e, uint32_t now) {
 }
 
 Expr Behavior::choose_base(uint32_t now) {
-  const uint32_t quiet = now - last_event_;
+  // Шаги не события (походку датчик сообщает, только когда она меняется): на ходу брелок не
+  // «без дела», и ночью он не засыпает посреди прогулки.
+  const uint32_t quiet = moving ? 0u : now - last_event_;
   const uint32_t alone = now - last_touch_;
   if (off_) return Expr::sleeping;
   if (charging) return Expr::charging;
@@ -723,12 +787,15 @@ Expr Behavior::choose_base(uint32_t now) {
   if (hot) return Expr::hot;
   if (music_on) return ((now / 15000u) & 1u) ? Expr::vibing : Expr::music;
   if (speech_on) return Expr::listening;
-  if (running) return Expr::running;
   if (battery == 1) return ((now / 20000u) & 1u) ? Expr::low_battery : Expr::hungry;
+  // Бег дольше 5 минут или без сил — выдохся.
+  if (running) return now - run_since_ > 5u * kMin || mood_.energy < 0.3f ? Expr::exhausted : Expr::running;
   if (mood_.annoyance > 0.6f) return Expr::grumpy;
   if (mood_.annoyance > 0.35f) return Expr::annoyed;
   if (mood_.energy < 0.12f) return Expr::sleepy;
-  if (mood_.energy < 0.25f) return clock_min_ >= 60 && clock_min_ < 6 * 60 ? Expr::sleep_deprived : Expr::tired;
+  // С ним возятся во втором часу ночи и позже — недосып (без дела он к этому времени спит).
+  if (clock_in(60, 6 * 60)) return Expr::sleep_deprived;
+  if (mood_.energy < 0.25f) return Expr::tired;
   // Игнор, но брелок двигается: зовёт хозяина (не чаще раза в 20 минут).
   if (moving && alone > 60u * kMin && now - last_calling_ > 20u * kMin) {
     last_calling_ = now;
@@ -743,7 +810,7 @@ Expr Behavior::choose_base(uint32_t now) {
   if (mood_.valence > 0.55f) return flavor(Expr::happy);
   if (temp_) return temp_->rest;  // у характера своё лицо в покое
   if (mood_.valence > 0.35f) return Expr::content;
-  if (clock_min_ >= 21 * 60 && clock_min_ < 22 * 60) return Expr::content;
+  if (clock_in(21 * 60, 22 * 60)) return Expr::content;
   if (quiet > 5u * kMin) return Expr::calm;
   return Expr::neutral;
 }
@@ -801,6 +868,18 @@ void Behavior::idle_action(uint32_t now) {
   w[kBoo] = night() ? 0.08f : 0.0f;
   // Циклоп — не чаще раза в 2 часа.
   w[kCyclops] = (happy && now - last_cyclops_ > 120u * kMin) ? 0.05f : 0.0f;
+  // Эмоции из имплантов, которые иначе встречались бы только в сценах наград.
+  w[kFocused] = night() ? 0.0f : 0.15f;
+  w[kNervous] = m.annoyance * 0.3f + 0.05f * pers_.shy;
+  w[kUwu] = happy ? meme * 0.6f : 0.0f;
+  w[kDoomer] = (m.valence < 0.0f || m.boredom > 0.5f) ? meme * 0.8f : 0.0f;  // хандра от скуки
+  w[kImDead] = happy ? meme * 0.4f : 0.0f;
+  w[kNervousLaugh] = 0.08f * pers_.shy;
+  // Недавно вспылил на тапы — неловко за это.
+  const bool sorry = vented_ && now - vented_at_ < 3u * kMin;
+  w[kGuilty] = sorry ? 0.4f : 0.0f;
+  w[kApologetic] = sorry ? 0.2f + 0.3f * pers_.shy : 0.0f;
+  w[kKiss] = m.affection > 0.4f ? 0.15f : 0.0f;
   float total = 0;
   for (int i = 0; i < kIdleCount; ++i) {
     if (kIdle[i].expr != Expr::Count && !usable(kIdle[i].expr)) w[i] = 0.0f;
@@ -820,6 +899,7 @@ void Behavior::idle_action(uint32_t now) {
   for (int i = 3; i > 0; --i) recent_idle_[i] = recent_idle_[i - 1];
   recent_idle_[0] = (uint8_t)chosen;
   if (chosen == kCyclops) last_cyclops_ = now;
+  if (chosen == kGuilty || chosen == kApologetic) vented_ = false;
   const IdleAct& a = kIdle[chosen];
   if (a.expr != Expr::Count) {
     react(a.expr, now, a.ms, "сам по себе");
@@ -1017,7 +1097,8 @@ void Behavior::queue_scene(Scene s, const SceneParams& p, Expr after, uint32_t n
 
 void Behavior::queue_shared(Scene s, const SceneParams& p, Expr after, uint32_t now, const char* why, bool fresh) {
   const Scene playing = eng_->scene();
-  if (playing != Scene::None && !(cur_shared_ && playing == cur_scene_)) {
+  // Прощание (power_off) общей сцене не уступает: та встаёт в очередь за ним.
+  if (playing != Scene::None && playing != Scene::shutdown && !(cur_shared_ && playing == cur_scene_)) {
     // Своя сцена уступает: доиграет после общих (если её запускала очередь).
     if (playing == cur_scene_ && queue_n_ < (int)(sizeof(queue_) / sizeof(queue_[0])))
       queue_[queue_n_++] = Queued{playing, eng_->scene_params(), after_scene_, after_why_, after_fresh_};
@@ -1107,9 +1188,26 @@ void Behavior::set_eco(int level) {
   eng_->options().frame_ms = level == 0 ? eco_frame_ms_ : (eco_frame_ms_ > slow ? eco_frame_ms_ : slow);
 }
 
-void Behavior::power_off(uint32_t now) {
+void Behavior::power_off(uint32_t now, bool low_battery) {
   off_ = true;
-  queue_scene(Scene::shutdown, SceneParams{}, Expr::sleeping, now, "выключается");
+  // Прощание — сразу, а не после очереди: идущая сцена обрывается (с её музыкой), очередь — и
+  // свои сцены, и общие — сбрасывается, паузы между сценами нет. Иначе выключение ждало бы
+  // встречу, разговор или достижение, и жест загрузчика (10 с от нажатия) не успевал бы после
+  // того, как экран погас. Опыт и достижения уже записаны в рост — пропадают только их сцены;
+  // общую сцену сосед доиграет у себя.
+  queue_n_ = shared_n_ = 0;
+  if (eng_->scene() != Scene::None) {
+    eng_->stop_scene(now);
+    if (voice_) voice_->stop();
+  }
+  cur_scene_ = Scene::None;
+  cur_shared_ = false;
+  after_scene_ = Expr::Count;
+  after_fresh_ = false;
+  queue_at_ = now;
+  SceneParams p;
+  p.value = low_battery ? 1 : 0;
+  queue_scene(Scene::shutdown, p, Expr::sleeping, now, low_battery ? "выключается: ячейка пуста" : "выключается");
 }
 
 void Behavior::banner(const char* big, const char* sub, BannerIcon icon, Expr after, uint32_t now, const char* why) {
@@ -1126,6 +1224,11 @@ bool Behavior::date_eggs(uint32_t now) {
   if (holiday_done_ == key) return false;
   holiday_done_ = key;
   const int m = month_, d = day_;
+  // День рождения хозяина важнее любого праздника в тот же день.
+  if (bday_m_ && m == bday_m_ && d == bday_d_) {
+    queue_scene(Scene::birthday, SceneParams{}, pick_unlocked({Expr::party, Expr::love}), now, "день рождения хозяина");
+    return true;
+  }
   if ((m == 12 && d == 31) || (m == 1 && d == 1)) {
     char y[6];
     const uint16_t yy = m == 12 ? (uint16_t)(year_ + 1) : year_;
@@ -1134,10 +1237,6 @@ bool Behavior::date_eggs(uint32_t now) {
     SceneParams p;
     p.set_text(y);
     queue_scene(Scene::new_year, p, pick_unlocked({Expr::party, Expr::happy}), now, "Новый год");
-    return true;
-  }
-  if (bday_m_ && m == bday_m_ && d == bday_d_) {
-    queue_scene(Scene::birthday, SceneParams{}, pick_unlocked({Expr::party, Expr::love}), now, "день рождения хозяина");
     return true;
   }
   if (m == 10 && d == 31) {
@@ -1186,6 +1285,7 @@ bool Behavior::date_eggs(uint32_t now) {
 }
 
 bool Behavior::time_eggs(uint32_t now) {
+  if (!clock_known_) return false;  // без часов «13:37» и «3 AM» показывались бы когда попало
   if (clock_min_ < last_clock_) time_eggs_done_ = 0;  // часы прошли полночь
   last_clock_ = clock_min_;
   auto once = [&](int bit) {
@@ -1242,6 +1342,7 @@ bool Behavior::knock(uint32_t now) {
 }
 
 void Behavior::new_day(uint32_t now) {
+  time_eggs_done_ = 0;  // без часов полночь не видна: новые сутки открывают пасхалки заново
   if (!progress_) return;
   grant(progress_->new_day(), now);
   achieve(now);
@@ -1304,7 +1405,10 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_h
   p.set_text(code);
   p.value = is_new ? 0 : 1;
   if (other) p.set_sub(other == temp_ ? "TWIN!" : other->tag);
-  queue_shared(Scene::greet, p, greet_after(other, is_new), now,
+  // Легендарный брелок рядом — звёзды в глазах, кто бы ни встретил.
+  const bool legend = peer_hash && identity_from_hash(peer_hash).rarity == Rarity::Legendary;
+  queue_shared(Scene::greet, p,
+               legend ? pick_unlocked({Expr::starstruck, Expr::amazed, Expr::excited}) : greet_after(other, is_new), now,
                other == temp_ && other ? "встретил такого же" : is_new ? "новый знакомый брелок" : "встретил знакомого");
   // Ворчун при виде брелока с золотым глазом, глюк с глюком — данные текут рекой.
   if (other && temp_ && other == temp_ && temp_->glitches)
@@ -1316,6 +1420,12 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_h
     chat(code, peer_hash, nonce, now);
     reason_ = "старые знакомые шепчутся";
   }
+  friendship(code, peer_hash, is_new, before, level, first_today, peer_level, now);
+  achieve(now);
+}
+
+void Behavior::friendship(const char* code, uint32_t peer_hash, bool is_new, int before, int level,
+                          bool first_today, uint8_t peer_level, uint32_t now) {
   if (friends_ && before >= 0 && level > before) {
     banner(friend_level_tag(level), code, BannerIcon::Heart, pick_unlocked({Expr::love, Expr::happy}), now,
            "дружба крепнет");
@@ -1333,20 +1443,23 @@ void Behavior::meet(const char* code, bool is_new, uint32_t now, uint32_t peer_h
       queue_scene(Scene::banner, g, gift, now, "подарок от старшего брелока", true);
     }
   }
+  const Temperament* other = peer_hash ? &temperament(archetype_from_hash(peer_hash)) : nullptr;
   if (other && other == temp_) earn(Ach::twin, now);
   if (peer_hash && identity_from_hash(peer_hash).rarity == Rarity::Legendary) earn(Ach::legend, now);
   if (progress_ && (is_new || first_today)) grant(progress_->met_friend(is_new), now);  // старый знакомый — раз в день
-  achieve(now);
 }
 
-void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash, uint32_t nonce) {
+void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash, uint32_t nonce,
+                    uint8_t peer_level) {
   last_event_ = now;
   if (eng_) eng_->note_activity(now);
   SceneParams p;
   p.set_text(code);
   p.value = won ? 1 : 0;
-  Expr after =
-      won ? pick_unlocked({Expr::proud, Expr::smug, Expr::happy}) : pick_unlocked({Expr::sulking, Expr::grumpy});
+  // Из пула, а не первую открытую: иначе звёзды в глазах и рыдания не выпадали бы никогда.
+  const Option win[] = {{Expr::proud, 3}, {Expr::smug, 2}, {Expr::starstruck, 1.5f}, {Expr::happy, 1}};
+  const Option lose[] = {{Expr::sulking, 3}, {Expr::grumpy, 2}, {Expr::sobbing, 1}};
+  Expr after = won ? pick(win) : pick(lose);
   const char* why = won ? "выиграл дуэль" : "проиграл дуэль";
   bool fresh = false;
   if (won && progress_) {
@@ -1365,12 +1478,12 @@ void Behavior::duel(const char* code, bool won, uint32_t now, uint32_t peer_hash
   if (progress_) grant(progress_->duel(won), now);
   // Дуэль — тоже встреча: день дружбы засчитывается, новый соперник становится знакомым
   // (без своей сцены приветствия — её место заняли дуэль и разговор).
-  if (friends_ && peer_hash) {
-    int before = -1;
-    bool first_today = false;
-    friends_->meet(peer_hash, progress_ ? progress_->days : 0, &before, &first_today);
-    if (progress_ && before < 0) grant(progress_->met_friend(true), now);
-  }
+  // Рост дружбы, подарок старшего, близнец, легенда и опыт за знакомство — как после встречи:
+  // первая встреча дня с готовым к дуэлям соседом и есть дуэль, а короткая встреча — только она.
+  int before = -1, level = 0;
+  bool first_today = false;
+  if (friends_ && peer_hash) level = friends_->meet(peer_hash, progress_ ? progress_->days : 0, &before, &first_today);
+  if (peer_hash) friendship(code, peer_hash, friends_ && before < 0, before, level, first_today, peer_level, now);
   achieve(now);
 }
 

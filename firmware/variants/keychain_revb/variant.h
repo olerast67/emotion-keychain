@@ -32,7 +32,7 @@ extern "C" {
 // Кнопка на правом торце, на землю.
 #define PIN_BUTTON1 (22)
 
-// Шина датчиков (Wire): акселерометр LIS3DH 0x18 и датчик света LTR-303ALS 0x29.
+// Шина датчиков (Wire): акселерометр LIS3DH 0x19 (SA0 на VDD) и датчик света LTR-303ALS 0x29.
 #define WIRE_INTERFACES_COUNT 2
 #define PIN_WIRE_SDA (27)
 #define PIN_WIRE_SCL (1)

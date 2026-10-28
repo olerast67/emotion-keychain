@@ -1,0 +1,28 @@
+Item #,Designator,Qty,Manufacturer,Mfg Part #,Description / Value,Package/Footprint,Type,LCSC #
+1,BZ1,1,Murata,PKMCS0909E4000-R1,"Piezo buzzer 9x9 mm, 4 kHz",Buzzer_Murata_PKMCS0909E,SMD,C910763
+2,"C1,C2,C3,C4",4,Samsung Electro-Mechanics,CL10A106KP8NNNC,"Capacitor 10uF 10V X5R 10% 0603, or equivalent",C_0603_1608Metric,SMD,C19702
+3,"C5,C7,C8,C11,C13,C14,C15,C16",8,Samsung Electro-Mechanics,CL05B104KO5NNNC,"Capacitor 100nF 16V X7R 10% 0402, or equivalent",C_0402_1005Metric,SMD,C1525
+4,C6,1,Samsung Electro-Mechanics,CL10A475KO8NNNC,"Capacitor 4.7uF 16V X5R 10% 0603, or equivalent",C_0603_1608Metric,SMD,C19666
+5,C12,1,Samsung Electro-Mechanics,CL05A105KA5NQNC,"Capacitor 1uF 25V X5R 10% 0402, or equivalent",C_0402_1005Metric,SMD,C52923
+6,D1,1,Jiangsu Changjing Electronics Technology (JSCJ),B5819W SL,Schottky diode 40V 1A SOD-123,D_SOD-123,SMD,C8598
+7,D2,1,Jiangsu Changjing Electronics Technology (JSCJ),1N4148WS,Switching diode 100V 150mA SOD-323,D_SOD-323,SMD,C2128
+8,D3,1,Jiangsu Changjing Electronics Technology (JSCJ),SMF5.0A,"TVS diode unidirectional, 5V standoff, 6.4V min breakdown, 200W, SOD-123FL; cathode to VBUS",D_SOD-123F,SMD,C1509112
+9,J1,1,Korean Hroparts Elec,TYPE-C-31-M-12,"USB-C receptacle 16P, SMD pins + 4 THT shell tabs",USB_C_Receptacle_HRO_TYPE-C-31-M-12,SMD+THT,C165948
+10,LED1,1,Hubei KENTO Elec,KT-0603R,LED red 0603,LED_0603_1608Metric,SMD,C2286
+11,"Q1,Q2",2,Alpha & Omega Semiconductor,AO3401A,P-MOSFET -30V -4A SOT-23,SOT-23,SMD,C15127
+12,"Q3,Q4",2,Alpha & Omega Semiconductor,AO3400A,N-MOSFET 30V 5.7A SOT-23,SOT-23,SMD,C20917
+13,"R1,R2",2,UNI-ROYAL,0402WGF5101TCE,"Resistor 5.1k 1% 1/16W 0402, or equivalent",R_0402_1005Metric,SMD,C25905
+14,"R3,R5,R6,R8,R10,R11,R12",7,UNI-ROYAL,0402WGF1002TCE,"Resistor 10k 1% 1/16W 0402, or equivalent",R_0402_1005Metric,SMD,C25744
+15,"R4,R13,R14",3,UNI-ROYAL,0402WGF1001TCE,"Resistor 1k 1% 1/16W 0402, or equivalent",R_0402_1005Metric,SMD,C11702
+16,"R7,R9,R15",3,UNI-ROYAL,0402WGF1003TCE,"Resistor 100k 1% 1/16W 0402, or equivalent",R_0402_1005Metric,SMD,C25741
+17,"R16,R18",2,UNI-ROYAL,0402WGF0000TCE,"Jumper 0R 0402, or equivalent",R_0402_1005Metric,SMD,C17168
+18,R20,1,UNI-ROYAL,0402WGF4702TCE,"Resistor 47k 1% 1/16W 0402, or equivalent",R_0402_1005Metric,SMD,C25792
+19,SW1,1,Omron,B3U-3100P,"Tactile switch, side actuated, with GND terminal",SW_SPST_B3U-3100P,SMD,
+20,U1,1,Raytac,MDBT50Q-1MV2,"BLE module nRF52840, chip antenna",Raytac_MDBT50Q,SMD,
+21,U2,1,Microchip,MCP73832T-2ACI/OT,Li-Po charger 4.2V SOT-23-5,SOT-23-5,SMD,C38066
+22,U3,1,STMicroelectronics,USBLC6-2SC6,USB ESD protection SOT-23-6,SOT-23-6,SMD,C7519
+23,U4,1,STMicroelectronics,LIS3DHTR,Accelerometer 3-axis I2C LGA-16 3x3,LGA-16_3x3mm_P0.5mm_LayoutBorder3x5y,SMD,C15134
+24,U5,1,Lite-On,LTR-303ALS-01,Ambient light sensor I2C,Lite-On_LTR-303ALS-01,SMD,C364577
+25,U6,1,Knowles,SPH0641LM4H-1,"PDM MEMS microphone, bottom port",Knowles_LGA-5_3.5x2.65mm,SMD,C497724
+,R17,0,,,DNP - do not place (0R),R_0402_1005Metric,DNP,
+,R19,0,,,DNP - do not place (0R),R_0402_1005Metric,DNP,

@@ -1,0 +1,4 @@
+(version 1)
+(rule "JLCPCB hole to hole, different nets"
+  (constraint hole_to_hole (min 0.5mm))
+  (condition "A.Net != B.Net"))

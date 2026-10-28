@@ -190,6 +190,13 @@ bool load(void* buf, size_t n) {
   return true;
 }
 
+int load_any(void* buf, size_t cap) {
+  if (!last_addr) return -1;
+  const Header* h = (const Header*)last_addr;
+  memcpy(buf, h + 1, h->len < cap ? h->len : cap);
+  return (int)h->len;
+}
+
 bool save(const void* data, size_t n) {
   if (!n || n > kMaxRecord) return false;
   static uint8_t rec[sizeof(Header) + kMaxRecord] __attribute__((aligned(4)));

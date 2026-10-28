@@ -26,10 +26,15 @@ MOTOR = {"d": 8.0, "pad_x": 5.2, "pad_y": (-1.4, 1.4)}
 HEAD = '(footprint "{name}" (version 20221018) (generator "keychain")\n  (layer "F.Cu")\n  (descr "{descr}")\n  (attr {attr})\n'
 
 
-def _text(kind, text, x, y, layer, size=0.8, hide=False):
+SILK_LINE = 0.16  # мм: линия знаков на шёлке — минимум JLCPCB 0.153
+
+
+def _text(kind, text, x, y, layer, size=0.8, hide=False, width=None):
+    """Надпись; на шёлке линия не тоньше SILK_LINE. width — ширина знака, если уже высоты."""
     h = " hide" if hide else ""
+    t = max(SILK_LINE, size * 0.16) if "SilkS" in layer else size * 0.15
     return (f'  (fp_text {kind} "{text}" (at {x:.3f} {y:.3f}) (layer "{layer}"){h}\n'
-            f'    (effects (font (size {size} {size}) (thickness {size * 0.15:.3f}))))\n')
+            f'    (effects (font (size {size} {width or size}) (thickness {t:.3f}))))\n')  # высота, ширина
 
 
 def _line(x0, y0, x1, y1, layer, w=0.1):
@@ -54,7 +59,7 @@ def oled_module():
     top, bottom = -o["pin_y"], o["h"] - o["pin_y"]
     s = HEAD.format(name="OLED_SSD1306_0.96in_I2C_Module", attr="through_hole",
                     descr="Модуль OLED 0.96 дюйма SSD1306 128x64 I2C, 4 штыря 2.54 мм, "
-                          "крепёж M2 по углам. Стоит над батареей на стойках 5 мм")
+                          "крепёж M2 по углам. Стоит над батареей на ушках рамок корпуса, 6/7/8 мм")
     s += _text("reference", "REF**", 0, -2.4, "F.SilkS")
     s += _text("value", "OLED", 0, o["h"] / 2, "F.Fab")
     s += _rect(left, top, right, bottom, "F.Fab")
@@ -69,15 +74,16 @@ def oled_module():
         dy = 2.0 if sy < 0 else -2.0
         s += _line(sx, sy, sx + dx, sy, "F.SilkS", 0.15)
         s += _line(sx, sy, sx, sy + dy, "F.SilkS", 0.15)
+    # Подписи штырей — 1.0 мм, знак уже (0.75), чтобы SCL и SDA не сливались при шаге 2.54.
     for i, label in enumerate(("1", "2", "SCL", "SDA")):
-        s += _text("user", label, -3.81 + 2.54 * i, 1.7, "F.SilkS", 0.7)
-    # Двор: только вокруг штырей и стоек, под модулем живёт батарея.
+        s += _text("user", label, -3.81 + 2.54 * i, 1.8, "F.SilkS", 1.0, width=0.75)
+    # Двор: только вокруг штырей и крепежа, под модулем живёт батарея.
     s += _rect(-5.1, -1.3, 5.1, 1.3, "F.CrtYd", 0.05)
     holes = []
     for hx in (left + o["hole_dx"], right - o["hole_dx"]):
         for hy in (top + o["hole_dy"], bottom - o["hole_dy"]):
             holes.append((hx, hy))
-            s += _circle(hx, hy, 1.8, "F.CrtYd", 0.05)   # стойка M2 Ø3.5
+            s += _circle(hx, hy, 1.8, "F.CrtYd", 0.05)   # винт M2; ушки рамок корпуса шире, их проверяет case.py
             s += _circle(hx, hy, 2.35, "B.CrtYd", 0.05)  # гайка M2 с обратной стороны
     for i in range(4):
         shape = "rect" if i == 0 else "circle"
@@ -92,14 +98,15 @@ def oled_module():
 def lipo_pads():
     c = CELL
     s = HEAD.format(name="LiPo_Pads_20x25mm", attr="smd",
-                    descr="Площадки под провода ячейки Li-Po 402025/502025, контур ячейки на слое Fab")
+                    descr="Площадки под провода ячейки Li-Po 402025/502025/602025, контур ячейки на слое Fab")
     s += _text("reference", "REF**", c["pad_x"], c["pad_y"][0] - 2.0, "F.SilkS", 0.8, hide=True)
     s += _text("value", "LiPo", 0, 0, "F.Fab")
     s += _rect(-c["w"] / 2, -c["h"] / 2, c["w"] / 2, c["h"] / 2, "F.Fab")
     s += _text("user", "LiPo 20x25", 0, 2.0, "F.Fab", 1.0)
     for i, (label, y) in enumerate(zip(("+", "-"), c["pad_y"])):
+        # Без пасты: провода паяются руками, капли припоя с завода только мешали бы.
         s += (f'  (pad "{i + 1}" smd roundrect (at {c["pad_x"]:.3f} {y:.3f}) (size 2.0 1.6) '
-              f'(layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))\n')
+              f'(layers "F.Cu" "F.Mask") (roundrect_rratio 0.25))\n')
         s += _text("user", label, c["pad_x"] - 2.0, y, "F.SilkS", 1.0)
     y0, y1 = c["pad_y"][0] - 1.05, c["pad_y"][1] + 1.05
     s += _rect(c["pad_x"] - 2.7, y0, c["pad_x"] + 1.25, y1, "F.CrtYd", 0.05)
@@ -127,8 +134,8 @@ def vibro_motor():
           ') (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))\n')
     for i, (label, y) in enumerate(zip(("+", "-"), m["pad_y"])):
         s += (f'  (pad "{i + 1}" smd roundrect (at {m["pad_x"]:.3f} {y:.3f}) (size 1.4 1.2) '
-              f'(layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))\n')
-        s += _text("user", label, m["pad_x"], y + (-1.65 if i == 0 else 1.65), "F.SilkS", 0.8)
+              f'(layers "F.Cu" "F.Mask") (roundrect_rratio 0.25))\n')
+        s += _text("user", label, m["pad_x"], y + (-1.65 if i == 0 else 1.65), "F.SilkS", 1.0)
     return s + ")\n"
 
 

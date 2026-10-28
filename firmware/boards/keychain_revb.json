@@ -8,10 +8,8 @@
     "extra_flags": "-DARDUINO_KEYCHAIN_REVB -DNRF52840_XXAA",
     "f_cpu": "64000000L",
     "hwids": [
-      ["0x239A", "0x8029"],
-      ["0x239A", "0x0029"],
-      ["0x239A", "0x002A"],
-      ["0x239A", "0x802A"]
+      ["0x239A", "0x810B"],
+      ["0x239A", "0x010B"]
     ],
     "usb_product": "Emotion Keychain",
     "mcu": "nrf52840",
@@ -37,8 +35,8 @@
   "frameworks": ["arduino"],
   "name": "Emotion Keychain rev B (Raytac MDBT50Q, nRF52840)",
   "upload": {
-    "maximum_ram_size": 248832,
-    "maximum_size": 815104,
+    "maximum_ram_size": 237568,
+    "maximum_size": 802816,
     "speed": 115200,
     "protocol": "nrfutil",
     "protocols": ["jlink", "nrfjprog", "nrfutil", "cmsis-dap", "blackmagic"],

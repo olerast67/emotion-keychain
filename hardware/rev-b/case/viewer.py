@@ -3,13 +3,24 @@
 Собирает одну страницу out/keychain-3d.html из шаблона viewer.html: текстуры платы
 (чёрная маска, золото площадок, белая шелкография) рисуются из слоёв KiCad, лицо на
 экране — кадр из facegen, детали — коробки по дворам с типовыми высотами, корпус —
-слои из case-model.json (сначала запустите case.py).
+слои всех трёх версий из case-model.json (сначала запустите case.py).
+
+  python3 viewer.py                      # out/keychain-3d.html
+  python3 viewer.py --render PNG         # картинка платы: лицо и оборот рядом
+  python3 viewer.py --shots DIR          # case-3d.png и case-exploded.png для README
+
+Нужны KiCad 7 (pcbnew в Python и kicad-cli), Pillow и программа, которая переводит SVG
+в PNG: cairosvg (pip install cairosvg; другой путь — в переменной CAIROSVG) или
+rsvg-convert. facegen берётся из build/ в корне репозитория или из переменной FACEGEN.
+Для --shots нужен Node.js с Playwright (shots.js); если браузер не достаёт до CDN,
+укажите в THREE_DIR распакованный пакет npm three@0.128.0.
 """
 import base64
 import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,10 +35,15 @@ sys.path.insert(0, os.path.join(REV, "gen"))
 import footprints  # noqa: E402
 import netlist  # noqa: E402
 
+sys.path.insert(0, HERE)
+import case  # noqa: E402
+
 PCB = os.path.join(REV, "keychain-rev-b.kicad_pcb")
 OUT = os.path.join(HERE, "out")
 PX_PER_MM = 24  # текстуры и картинки платы
-CAIROSVG = os.environ.get("CAIROSVG", "cairosvg")
+CAIROSVG = os.environ.get("CAIROSVG") or shutil.which("cairosvg")
+RSVG = shutil.which("rsvg-convert")
+FACEGEN = os.environ.get("FACEGEN", os.path.join(ROOT, "build", "facegen"))
 
 # Высоты корпусов деталей над платой, мм, и цвет.
 BODY = {
@@ -58,9 +74,12 @@ def _render(layers, tmp):
                     "--exclude-drawing-sheet", "--page-size-mode", "2", "-o", svg, PCB],
                    check=True, capture_output=True)
     head = open(svg).read(2000)
-    w_mm = float(re.search(r'width="([\d.]+)mm"', head).group(1))
-    subprocess.run([CAIROSVG, svg, "-o", png, "--output-width", str(round(w_mm * PX_PER_MM)), "-b", "white"],
-                   check=True, capture_output=True)
+    width = str(round(float(re.search(r'width="([\d.]+)mm"', head).group(1)) * PX_PER_MM))
+    if CAIROSVG:
+        cmd = [CAIROSVG, svg, "-o", png, "--output-width", width, "-b", "white"]
+    else:
+        cmd = [RSVG, "-w", width, "-b", "white", "-o", png, svg]
+    subprocess.run(cmd, check=True, capture_output=True)
     return ImageChops.invert(Image.open(png).convert("L"))
 
 
@@ -99,7 +118,7 @@ def board_texture(side, bbox, tmp):
 
 def face_texture(tmp, emotion="happy"):
     gif = os.path.join(tmp, "face.gif")
-    subprocess.run([os.path.join(ROOT, "build", "facegen"), "still", emotion, gif, "--scale", "1", "--raw"],
+    subprocess.run([FACEGEN, "still", emotion, gif, "--scale", "1", "--raw"],
                    check=True, capture_output=True)
     im = Image.open(gif).convert("RGB")
     w, h = im.size
@@ -162,9 +181,45 @@ def board_render(path):
     print(f"{path}: {out.size[0]}×{out.size[1]}")
 
 
+def shots(out_dir):
+    """Картинки корпуса для README: снимки страницы просмотра в Chromium, обрезанные по брелоку."""
+    page = os.path.join(OUT, "keychain-3d.html")
+    if not shutil.which("node"):
+        sys.exit("viewer.py --shots: нужен Node.js с пакетом playwright (npm install playwright)")
+    os.makedirs(out_dir, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(["node", os.path.join(HERE, "shots.js"), page, tmp], check=True)
+        for name in ("case-3d", "case-exploded"):
+            im = Image.open(os.path.join(tmp, name + ".png")).convert("RGB")
+            bg = Image.new("RGB", im.size, im.getpixel((0, 0)))
+            x0, y0, x1, y1 = ImageChops.difference(im, bg).convert("L").point(lambda v: 255 if v > 12 else 0).getbbox()
+            m = 16
+            im = im.crop((max(0, x0 - m), max(0, y0 - m), min(im.width, x1 + m), min(im.height, y1 + m)))
+            path = os.path.join(out_dir, name + ".png")
+            im.save(path, optimize=True)
+            print(f"{path}: {im.size[0]}×{im.size[1]}")
+
+
+def need_tools():
+    """Внятная ошибка вместо трассировки, если чего-то не хватает."""
+    missing = []
+    if not shutil.which("kicad-cli"):
+        missing.append("kicad-cli (KiCad 7)")
+    if not (CAIROSVG or RSVG):
+        missing.append("cairosvg (pip install cairosvg) или rsvg-convert")
+    if missing:
+        sys.exit("viewer.py: не хватает: " + ", ".join(missing) + ". Готовые out/keychain-3d.html и файлы резки "
+                 "уже лежат в out/, для резки запускать скрипты не нужно.")
+
+
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--shots":
+        return shots(sys.argv[2])
+    need_tools()
     if len(sys.argv) > 2 and sys.argv[1] == "--render":
         return board_render(sys.argv[2])
+    if not os.access(FACEGEN, os.X_OK):
+        sys.exit(f"viewer.py: нет {FACEGEN}: соберите движок (cmake, см. README в корне) или укажите путь в FACEGEN")
     board = pcbnew.LoadBoard(PCB)
     bb = board.GetBoardEdgesBoundingBox()
     bbox = (pcbnew.ToMM(bb.GetX()), pcbnew.ToMM(bb.GetY()), pcbnew.ToMM(bb.GetRight()), pcbnew.ToMM(bb.GetBottom()))
@@ -197,6 +252,8 @@ def main():
     mod_x0 = pins[0][0] + (pins[-1][0] - pins[0][0]) / 2 - o["w"] / 2
     mod_y0 = pins[0][1] - o["pin_y"]
     _, bx, by, _ = netlist.PLACE["BT1"]
+    variants = {v: json.load(open(os.path.join(OUT if v == "s" else os.path.join(OUT, v), "case-model.json")))
+                for v in case.VARIANTS}
     with tempfile.TemporaryDirectory() as tmp:
         data = {
             "bbox": bbox, "outline": outline_points(board), "holes": holes, "parts": parts,
@@ -204,8 +261,11 @@ def main():
             "face": face_texture(tmp),
             "oled": {"x": mod_x0, "y": mod_y0, **o}, "pins": pins, "screws": screws,
             "cell": {"x": bx - footprints.CELL["w"] / 2, "y": by - footprints.CELL["h"] / 2,
-                     "w": footprints.CELL["w"], "h": footprints.CELL["h"], "t": 4.0},
-            "case": json.load(open(os.path.join(OUT, "case-model.json"))),
+                     "w": footprints.CELL["w"], "h": footprints.CELL["h"]},
+            "k": {"module_t": case.MODULE_T, "glass_t": case.GLASS_T, "header_short": case.HEADER_SHORT,
+                  "header_plastic": case.HEADER_PLASTIC, "under_cell": case.UNDER_CELL,
+                  "tube_od": case.TUBE_OD, "nut_t": case.NUT_T},
+            "variants": variants,
         }
     html = open(os.path.join(HERE, "viewer.html")).read().replace("/*DATA*/null", json.dumps(data))
     path = os.path.join(OUT, "keychain-3d.html")
