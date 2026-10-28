@@ -3,6 +3,13 @@ name: CI
 on:
   push:
   pull_request:
+  # Выпуск релиза кнопкой: Actions → CI → Run workflow, версия вида v0.1.0.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия релиза, например v0.1.0 (пусто: просто проверка)"
+        required: false
+        default: ""
 
 jobs:
   engine:
@@ -52,6 +59,12 @@ jobs:
         with:
           fetch-depth: 0  # git describe видит метку версии v*
 
+      - name: Метка версии для git describe
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: git -c user.name=ci -c user.email=ci@localhost tag -a "$VERSION" -m "$VERSION"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -86,6 +99,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # git describe видит метку версии v*
+
+      - name: Метка версии для git describe
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: git -c user.name=ci -c user.email=ci@localhost tag -a "$VERSION" -m "$VERSION"
 
       - uses: actions/setup-python@v5
         with:
@@ -158,10 +177,10 @@ jobs:
       - id: deploy
         uses: actions/deploy-pages@v4
 
-  # Релиз на GitHub по метке v* (git tag v0.1.0 && git push origin v0.1.0): прошивки стенда и брелока
-  # из сборок выше. Отсюда их берёт страница прошивки на olerast.com.
+  # Релиз на GitHub: по метке v* (git push origin v0.1.0) или кнопкой Run workflow с версией.
+  # Прошивки стенда и брелока из сборок выше; отсюда их берёт страница прошивки на olerast.com.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version != '')
     needs: [engine, firmware, keychain]
     runs-on: ubuntu-24.04
     permissions:
@@ -182,4 +201,5 @@ jobs:
       - name: Релиз
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+          VERSION: ${{ inputs.version || github.ref_name }}
+        run: gh release create "$VERSION" out/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
