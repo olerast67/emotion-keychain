@@ -8,8 +8,8 @@ This folder holds prebuilt firmware for the keychain (rev B board) and for the E
 
 | | |
 |---|---|
-| Version (`git describe`) | `d7b6eee` |
-| Source commit | `d7b6eeeb37effdea758321ccc8af845f8489d534` |
+| Version (`git describe`) | `65d3416` |
+| Source commit | `65d3416a9ff7838b23ce49668fb076671995760b` |
 
 The keychain reports the same version for the `ver` command ([how to check](#which-firmware-is-on-the-keychain)).
 
