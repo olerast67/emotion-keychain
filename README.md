@@ -190,6 +190,10 @@ Ideas for new emotions are easiest to file with the [issue template](https://git
 
 ## Support
 
-If you like the project and want to help it reach a tested board:
+The project is free and open: no ads, no paid features, no accounts. Donations go into test boards, parts and the time it takes to get rev B from "designed" to "tested on real hardware".
 
-- Support: Boosty — &lt;link coming soon&gt;; crypto — &lt;addresses coming soon&gt;
+<a href="https://boosty.to/olerast/donate"><img alt="Donate on Boosty" src="https://img.shields.io/badge/Donate-Boosty-F15F2C?style=for-the-badge" height="36"></a>
+&nbsp;
+<a href="DONATE.md"><img alt="USDT TRC20 and more" src="https://img.shields.io/badge/USDT%20TRC20%20%C2%B7%20more-DONATE.md-26A17B?style=for-the-badge" height="36"></a>
+
+A star on the repository, a photo of the stand you built, or a bug report helps too.

@@ -255,4 +255,10 @@ tools/           вспомогательные скрипты
 
 ## Поддержать проект
 
-- Поддержать: Boosty — &lt;ссылка скоро&gt;; криптовалюта — &lt;адреса скоро&gt;
+Проект бесплатный и открытый: без рекламы, платных функций и аккаунтов. Донаты идут на тестовые платы, детали и время, чтобы довести rev B от «спроектировано» до «проверено на живом железе».
+
+<a href="https://boosty.to/olerast/donate"><img alt="Донат на Boosty" src="https://img.shields.io/badge/Донат-Boosty-F15F2C?style=for-the-badge" height="36"></a>
+&nbsp;
+<a href="DONATE.md"><img alt="USDT TRC20 и другие способы" src="https://img.shields.io/badge/USDT%20TRC20%20%C2%B7%20другие%20способы-DONATE.md-26A17B?style=for-the-badge" height="36"></a>
+
+Звёздочка репозиторию, фото собранного стенда или сообщение об ошибке тоже очень помогают.
