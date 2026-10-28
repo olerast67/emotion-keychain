@@ -59,7 +59,7 @@
 ### Из браузера, без установки
 
 1. Возьмите готовый файл своей платы из [`release/`](release/README.md): `stand-esp32c5.bin`, `stand-esp32dev.bin`, `stand-esp32c3.bin` или `stand-esp32s3.bin`. Свою сборку даёт PlatformIO (ниже): файл `.pio/build/<среда>/firmware.factory.bin`. Те же файлы CI кладёт в архив **stand-firmware** в разделе Actions на GitHub, но только когда Actions работают ([почему сейчас нет](#где-взять-файлы)).
-2. Откройте в Chrome или Edge прошивальщик [olerast67.github.io/emotion-keychain/flash](https://olerast67.github.io/emotion-keychain/flash/) (заработает, когда репозиторий станет публичным), подключите плату и выберите её порт.
+2. Откройте в Chrome или Edge на компьютере прошивальщик [olerast.com/flash](https://olerast.com/flash), подключите плату и выберите её порт.
 3. Прошейте файл своей платы с адреса `0x0`.
 4. Откройте консоль на 115200: там появятся сообщения и можно вводить команды.
 

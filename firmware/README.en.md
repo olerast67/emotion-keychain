@@ -59,7 +59,7 @@ The engine is the same as in the simulators, unchanged.
 ### From the browser, nothing to install
 
 1. Take the ready-made file for your board from [`release/`](release/README.en.md): `stand-esp32c5.bin`, `stand-esp32dev.bin`, `stand-esp32c3.bin` or `stand-esp32s3.bin`. Your own build comes from PlatformIO (below): the file `.pio/build/<env>/firmware.factory.bin`. CI puts the same files into the **stand-firmware** artifact in the Actions tab on GitHub, but only when Actions are running ([why they aren't right now](#where-to-get-the-files)).
-2. Open the project's web flasher [olerast67.github.io/emotion-keychain/flash](https://olerast67.github.io/emotion-keychain/flash/) in desktop Chrome or Edge (live once the repository is public), connect the board and pick its port.
+2. Open the web flasher [olerast.com/flash](https://olerast.com/flash) in desktop Chrome or Edge, connect the board and pick its port.
 3. Flash your board's file at address `0x0`.
 4. Open the console at 115200: messages appear there and you can type commands.
 

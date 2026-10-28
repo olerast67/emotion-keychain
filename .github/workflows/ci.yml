@@ -113,13 +113,13 @@ jobs:
           name: keychain-firmware
           path: out/*
 
-  # Сайт на GitHub Pages: веб-симулятор в корне, прошивальщик стенда (ESP Web Tools) в flash/.
-  # Файлы берутся из сборок выше. Только push в main; Pages включается в настройках репозитория
+  # Сайт на GitHub Pages: веб-симулятор (прошивка стенда из браузера — на olerast.com/flash).
+  # Симулятор берётся из сборки выше. Только push в main; Pages включается в настройках репозитория
   # (Settings → Pages → Source: GitHub Actions). Pages у бесплатного аккаунта — только для
   # публичного репозитория, поэтому для закрытого задание пропускается, а не падает.
   pages:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.private
-    needs: [engine, firmware]
+    needs: [engine]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -139,15 +139,10 @@ jobs:
           name: face-simulator
           path: artifacts/sim
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: stand-firmware
-          path: artifacts/stand
-
       - name: Сайт
         run: |
           sim="$(find artifacts/sim -path '*dist/index.html' | head -n 1)"
-          python3 tools/build_pages.py --sim "$sim" --bins artifacts/stand --out site --version "$(git rev-parse --short HEAD)"
+          python3 tools/build_pages.py --sim "$sim" --out site
           ls -lR site
 
       - uses: actions/configure-pages@v5
