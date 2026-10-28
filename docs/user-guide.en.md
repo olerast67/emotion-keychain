@@ -177,7 +177,7 @@ A new keychain knows 44 emotions. The rest are unlocked with "implants" earned t
 
 ## For enthusiasts
 
-The keychain has a USB console. Connect it to a computer and open any serial terminal, such as the Arduino IDE Serial Monitor, at 115200 baud with any line ending except "No Line Ending" ([details](../firmware/release/README.en.md)). Type a command and press Enter; `?` lists all commands.
+The keychain has a USB console. Connect it to a computer and open any serial terminal, such as the Arduino IDE Serial Monitor, at 115200 baud with any line ending except "No Line Ending" ([details](../firmware/release/README.en.md#which-firmware-is-on-the-keychain)). Type a command and press Enter; `?` lists all commands.
 
 - `t 14:30`, `date 2026-12-31`: time and date, for quiet night hours, holidays and easter eggs. After turning off with the button, you need to set them again.
 - `bday 05-14`: your birthday. On that day the keychain shows a cake (if the date is set).

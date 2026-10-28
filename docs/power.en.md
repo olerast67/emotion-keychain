@@ -29,13 +29,13 @@ Sound and vibration draw from a few to tens of milliamps, but only while they pl
 
 ### Battery life
 
-Usable capacity, down to the firmware cutoff at 3.35 V, is about 95 % of nominal: ~142, ~190 and ~237 mAh for the S, M and L cells ([case](../hardware/rev-b/case/README.en.md), section "Three versions: S, M, L").
+Usable capacity, down to the firmware cutoff at 3.35 V, is about 95 % of nominal: ~142, ~190 and ~237 mAh for the S, M and L cells ([case](../hardware/rev-b/case/README.en.md#three-versions-s-m-l), section "Three versions: S, M, L").
 
 | Day | Daily consumption | S, 402025, 150 mAh | M, 502025, 200 mAh | L, 602025, 250 mAh |
 |---|---|---|---|---|
 | Normal: 3 h face, 1 h in dim light, 20 h in a pocket and at night | ≈12.9 mAh | ≈11 days | ≈15 days | ≈18 days |
 | Heavy: 8 h face, 16 h in a pocket | ≈23.5 mAh | ≈6 days | ≈8 days | ≈10 days |
-| Target from [hardware](hardware.en.md) (Goals): 16 h face + 8 h dark | ≈44 mAh | ≈3 days | ≈4.3 days | ≈5.4 days |
+| Target from [hardware](hardware.en.md#goals) (Goals): 16 h face + 8 h dark | ≈44 mAh | ≈3 days | ≈4.3 days | ≈5.4 days |
 
 - **Normal day** comes straight from the `day` scenario (one hour per mode, taps and walking during the day): face 2.69 mA, dim light 2.27 mA, pocket and night 0.127 mA.
 - **Heavy day and target** are calculated from the same currents: face 2.69 mA, the rest of the time 0.127 mA.
@@ -53,7 +53,7 @@ With items 1–3 the face draws about 1.8 mA, and the target is met already with
 
 ### Switched-off keychain and storage
 
-A switched-off keychain draws 6–17 µA by typical datasheet values: nRF52840 sleep, the charger, the diode on VBUS, the cell's protection board, sensors asleep. The limit for the first-board check is 25 µA ([first power-on](../hardware/rev-b/README.en.md)).
+A switched-off keychain draws 6–17 µA by typical datasheet values: nRF52840 sleep, the charger, the diode on VBUS, the cell's protection board, sensors asleep. The limit for the first-board check is 25 µA ([first power-on](../hardware/rev-b/README.en.md#first-power-on)).
 
 | What | 6 µA | 12 µA | 17 µA | 25 µA |
 |---|---|---|---|---|
@@ -97,10 +97,10 @@ A static frame burns into an OLED. A white panel ages more slowly than a blue on
 - **Instrument:** a Nordic PPK2 in source mode powers the board at 3.7–3.8 V in place of the cell. Record each state for at least 60 s. A µCurrent or other ammeters go only in series between a 3.7 V source and the board, not in place of the cell.
 - **Where to connect.** The BT1 pads are covered by the cell and the screen module, so:
   - **without the screen module**: on the BT1 pads, before the cell is soldered in (the assembly step before the cell). The firmware runs without a screen;
-  - **with the screen module**: on a separate measurement board assembled without a cell: PPK2 on test points SYS (+) and GND (−) on the back ([measurement board](../hardware/rev-b/README.en.md), section on the first boards). Without USB, SYS is connected to VBAT through Q1, which is on, so this is the same as powering from the cell. The points are accessible until the back frame and the bottom are installed. A cell cannot be soldered into such a board later without removing the screen.
+  - **with the screen module**: on a separate measurement board assembled without a cell: PPK2 on test points SYS (+) and GND (−) on the back ([measurement board](../hardware/rev-b/README.en.md#on-the-first-boards), section on the first boards). Without USB, SYS is connected to VBAT through Q1, which is on, so this is the same as powering from the cell. The points are accessible until the back frame and the bottom are installed. A cell cannot be soldered into such a board later without removing the screen.
   - **Do not connect USB while the PPK2 is connected:** USB puts more than 3.7 V on SYS, and current will flow into the PPK2 output.
 - **Screen current:** the difference between measurements "with module" and "without module", on the measurement board or before and after installing the module.
-- **Switched-off keychain:** hold the button 3 s, USB disconnected, record for at least 60 s. Above 25 µA, look for a leak ([first power-on](../hardware/rev-b/README.en.md)); the screen pins with the switch off can only be checked with the module installed.
+- **Switched-off keychain:** hold the button 3 s, USB disconnected, record for at least 60 s. Above 25 µA, look for a leak ([first power-on](../hardware/rev-b/README.en.md#first-power-on)); the screen pins with the switch off can only be checked with the module installed.
 - **Common measurement mistakes:**
   - USB connected: the keychain runs from it, and the charge LED glows faintly;
   - an encounter nearby: another keychain on the table adds +1.2 mA;

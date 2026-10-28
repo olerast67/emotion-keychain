@@ -124,7 +124,7 @@ For each thickness there is `case-acrylic-2mm.svg`, `…-3mm.svg` and so on, plu
 - **Kapton tape** (USB-C legs, cell solder joints, back of the module above the cell, display flex) **and thin double-sided tape** 0.1–0.15 mm, not foam. UV glue for the flex is optional.
 - **Adhesive transfer tape without a carrier, up to 0.06 mm** (e.g. 3M 467MP): to glue both back frame pieces to the bottom (step 16). Do not use ordinary double-sided tape here: it is thicker and lifts the bottom.
 - **USB-C cable with an ordinary plug:** plug body no thicker than 6.4 mm ([why](#layers-from-face-to-back)). A data cable, not charge-only: the console runs over it.
-- **Electronics fitted by hand** ([purchasing](../../../docs/hardware.en.md)):
+- **Electronics fitted by hand** ([purchasing](../../../docs/hardware.en.md#shopping-list-for-assembly)):
   - 0.96″ SSD1306 display module, I2C, 4 pins, white, with LDO; for M and L without a soldered header. The keychain firmware drives the display only as an SSD1306: 1.3″ modules usually use the SH1106 and do not work ([what to check](../README.en.md#what-to-check-before-ordering));
   - 0820 coin vibration motor, 3 V;
   - for a `VCC GND` module: two 0 Ω 0402 jumpers (R17 and R19), or move the removed R16 and R18 (step 2).
@@ -140,7 +140,7 @@ For each thickness there is `case-acrylic-2mm.svg`, `…-3mm.svg` and so on, plu
 
 This is the complete keychain assembly: electronics first, then the case. The cell lies under the display module and covers its pads, so the order is: firmware, display jumpers, motor, cell, display, case. Everything that gets soldered on the board near the cell is done before it: once the cell is on, no hot air near the board. Before cutting, measure the display module and the sheets ([what to check](#what-to-check)).
 
-1. **Firmware**, if the board arrived without it: over SWD, with the board powered from its own USB-C, no cell and no display yet. Programmer: Pico with debugprobe through a TXS0108E: VA of the module to pad 1 of J3 (VTref), VB to the Pico's 3V3; never connect the Pico's 3V3 to J3 ([wiring and commands](../../../firmware/README.en.md), [J3](../README.en.md#programmer-swd)). The file for prototypes is `keychain-revb-factory.hex` from [`firmware/release/`](../../../firmware/release/README.en.md). For keychains for sale, `firmware-factory.hex` from your own build with your own IDs (the `[sale]` section in `firmware/platformio.ini`). 3V3 is ~1.8 V before flashing and ~3.3 V after. Do the first check from [first power-on](../README.en.md#first-power-on) right here: USB-C only, no cell; in the console `ver` shows the firmware version, `sensors` shows that the accelerometer and light sensor respond.
+1. **Firmware**, if the board arrived without it: over SWD, with the board powered from its own USB-C, no cell and no display yet. Programmer: Pico with debugprobe through a TXS0108E: VA of the module to pad 1 of J3 (VTref), VB to the Pico's 3V3; never connect the Pico's 3V3 to J3 ([wiring and commands](../../../firmware/README.en.md#main-programmer-raspberry-pi-pico), [J3](../README.en.md#programmer-swd)). The file for prototypes is `keychain-revb-factory.hex` from [`firmware/release/`](../../../firmware/release/README.en.md). For keychains for sale, `firmware-factory.hex` from your own build with your own IDs (the `[sale]` section in `firmware/platformio.ini`). 3V3 is ~1.8 V before flashing and ~3.3 V after. Do the first check from [first power-on](../README.en.md#first-power-on) right here: USB-C only, no cell; in the console `ver` shows the firmware version, `sensors` shows that the accelerometer and light sensor respond.
 2. **Display power pin order — before the motor and the cell.** 0.96″ modules come as `GND VCC SCL SDA` or `VCC GND SCL SDA`: check the labels on your module now. Unplug USB-C — the board has neither power nor a cell.
    - The factory fits R16 and R18: pin 1 is GND, pin 2 is VCC.
    - Only for a `VCC GND` module, remove R16 and R18 and fit R17 and R19 (0 Ω 0402) **in their place**, or move the removed R16 and R18. Use a fine-tip soldering iron and tweezers, not hot air. The G and V labels are on the back above the jumpers, between them and the display pins.
@@ -199,7 +199,7 @@ This is the complete keychain assembly: electronics first, then the case. The ce
     - there are no pressure marks on the display;
     - buzzer and microphone: per "What to check" below.
 
-A keychain that will be given as a gift gets `factory yes` in the console as the last step ([commands](../../../firmware/README.en.md)): it returns to the factory state and switches off, and the new owner switches it on.
+A keychain that will be given as a gift gets `factory yes` in the console as the last step ([commands](../../../firmware/README.en.md#console)): it returns to the factory state and switches off, and the new owner switches it on.
 
 ## What to check
 

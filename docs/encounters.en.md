@@ -11,7 +11,7 @@ The engine already does everything you can see and hear:
 
 Below is how this works over radio in the rev B board firmware (`firmware/src/keychain/radio.cpp`). The radio-independent logic (packet format, meeting confirmation, countdown and duel outcome) lives in the engine (`face/encounter.h`) and is covered by tests: two keychains exchange packets, and their scenes match.
 
-The ESP32 test stand meets over radio the same way (`firmware/src/stand_radio.cpp`): same packet, same schedule and same engine logic. So two stands on a desk greet each other, duel and chat just like two keychains, and a stand and a rev B keychain do the same with each other. All four stand boards work: ESP32-C5, C3 and S3 (NimBLE stack) and the plain ESP32 (Bluedroid). On the stand, encounters only happen in live mode. The `meet`, `duel` and `chat` commands still play an encounter with a made-up neighbor without radio. How to test on two boards and what differs from the keychain is in the [firmware README](../firmware/README.en.md).
+The ESP32 test stand meets over radio the same way (`firmware/src/stand_radio.cpp`): same packet, same schedule and same engine logic. So two stands on a desk greet each other, duel and chat just like two keychains, and a stand and a rev B keychain do the same with each other. All four stand boards work: ESP32-C5, C3 and S3 (NimBLE stack) and the plain ESP32 (Bluedroid). On the stand, encounters only happen in live mode. The `meet`, `duel` and `chat` commands still play an encounter with a made-up neighbor without radio. How to test on two boards and what differs from the keychain is in the [firmware README](../firmware/README.en.md#bluetooth-encounters).
 
 ## The key idea: no connection
 
@@ -47,7 +47,7 @@ The BLE packet is service data with a 128-bit UUID (Service Data, type 0x21), 27
 
 **How long until a meeting.** While no neighbor is heard, the keychain listens with a 150 ms window every 30 s, and the neighbor sends a packet once per second. So the first packet isn't caught right away: according to the model, usually within 40–60 s, and occasionally after 5–7 minutes (a window catches a packet in roughly one case out of seven). The one that hears switches to frequent listening and advertising every 100 ms; the other hears it in its next window, and the scene starts about 20 seconds later. In total a meeting usually happens within 1–3 minutes, occasionally up to 5–7.
 
-At night, while asleep and in the dark, frequent listening is not turned on, even if a neighbor is nearby: only once a shared scene has already been announced. "Night" is determined only by a set clock ([clock](../firmware/README.en.md)); without it, it's just darkness and a sleepy or sleeping face.
+At night, while asleep and in the dark, frequent listening is not turned on, even if a neighbor is nearby: only once a shared scene has already been announced. "Night" is determined only by a set clock ([clock](../firmware/README.en.md#console)); without it, it's just darkness and a sleepy or sleeping face.
 
 For comparison: the face on the screen draws 2.3–2.7 mA. One meeting is tens of seconds at +1.2 mA, about 0.01 mAh: less than 0.1% of a normal day (≈12.9 mAh). A neighbor that doesn't hear us (our signal is below its threshold) or doesn't listen itself keeps frequent listening on for no longer than 40 s per attempt: roughly 10–13% of the time it's nearby, not all the time.
 

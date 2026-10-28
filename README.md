@@ -35,8 +35,8 @@ It blinks, looks around, laughs, gets angry, falls asleep in the dark and reacts
 | | | |
 |---|---|---|
 | **Try it in the browser** | No hardware, nothing to install. Tap the face, shake it, turn off the lights, start a duel with a neighbour. | [olerast67.github.io/emotion-keychain](https://olerast67.github.io/emotion-keychain/) |
-| **Build the ~$10 ESP32 version** | Any ESP32 dev board (C5, classic, C3 or S3), a 0.96″ SSD1306 module and four wires. Optional touch button and piezo. Flash it from the browser. | [ESP32 stand](firmware/README.en.md) |
-| **Make the rev B keychain** | The real thing: a 30 × 46 mm nRF52840 board in an acrylic case, with sensors, a piezo voice, vibration and a Li-Po cell. Not yet tested — see the status above. | [Board](hardware/rev-b/README.en.md) · [Case](hardware/rev-b/case/README.en.md) · [Firmware](firmware/README.en.md) |
+| **Build the ~$10 ESP32 version** | Any ESP32 dev board (C5, classic, C3 or S3), a 0.96″ SSD1306 module and four wires. Optional touch button and piezo. Flash it from the browser. | [ESP32 stand](firmware/README.en.md#esp32-stand) |
+| **Make the rev B keychain** | The real thing: a 30 × 46 mm nRF52840 board in an acrylic case, with sensors, a piezo voice, vibration and a Li-Po cell. Not yet tested — see the status above. | [Board](hardware/rev-b/README.en.md) · [Case](hardware/rev-b/case/README.en.md) · [Firmware](firmware/README.en.md#rev-b-board) |
 
 ## Features
 

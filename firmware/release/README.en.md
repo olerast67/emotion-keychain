@@ -4,7 +4,7 @@ English | [Русский](README.md)
 
 > **These files are for prototypes:** they carry Adafruit USB IDs (239A:810B for the firmware, 239A:010B for the bootloader), i.e. the `[sale]` section of `firmware/platformio.ini` as it is in the repository. Keychains for sale are flashed with your own build that has your own IDs in `[sale]` — both at assembly and when updating keychains already sold (your own `firmware.uf2`, not `keychain-revb.uf2`).
 
-This folder holds prebuilt firmware for the keychain (rev B board) and for the ESP32 stand. All of it is built from one commit; there is nothing to build. Other places to get the firmware are listed in the [firmware README](../README.en.md).
+This folder holds prebuilt firmware for the keychain (rev B board) and for the ESP32 stand. All of it is built from one commit; there is nothing to build. Other places to get the firmware are listed in the [firmware README](../README.en.md#where-to-get-the-files).
 
 | | |
 |---|---|
@@ -17,10 +17,10 @@ The keychain reports the same version for the `ver` command ([how to check](#whi
 
 | File | Contents | Where and how |
 |---|---|---|
-| `keychain-revb-factory.hex` | Everything at once: Adafruit bootloader with SoftDevice S140, keychain firmware, the "firmware is valid" mark for the bootloader, and UICR.REGOUT0 = 3.3 V | With a programmer over SWD onto a new board ([first flash](../README.en.md)) or to the factory for "Firmware loading". Prototypes only: keychains for sale get `firmware-factory.hex` from your own build. After writing, the keychain starts the firmware right away: a face if the display is already fitted; without a display, check with `ver` and `sensors` in the console |
-| `keychain-revb.uf2` | Keychain firmware only | Drag onto the KEYCHAIN drive ([USB update](../README.en.md)). The bootloader must already be on the board. Keychains already sold get not this file but `firmware.uf2` from your own sale build |
+| `keychain-revb-factory.hex` | Everything at once: Adafruit bootloader with SoftDevice S140, keychain firmware, the "firmware is valid" mark for the bootloader, and UICR.REGOUT0 = 3.3 V | With a programmer over SWD onto a new board ([first flash](../README.en.md#first-flash-bootloader-over-swd)) or to the factory for "Firmware loading". Prototypes only: keychains for sale get `firmware-factory.hex` from your own build. After writing, the keychain starts the firmware right away: a face if the display is already fitted; without a display, check with `ver` and `sensors` in the console |
+| `keychain-revb.uf2` | Keychain firmware only | Drag onto the KEYCHAIN drive ([USB update](../README.en.md#bootloader-and-usb-updates)). The bootloader must already be on the board. Keychains already sold get not this file but `firmware.uf2` from your own sale build |
 | `keychain-revb-dfu.zip` | Keychain firmware only, DFU package | Via `adafruit-nrfutil` over USB while the keychain is in the bootloader. Only needed if the drive will not do, e.g. for your own script |
-| `stand-esp32c5.bin` | Stand for ESP32-C5-DevKitC-1 | Browser flasher, at address `0x0` ([stand](../README.en.md)) |
+| `stand-esp32c5.bin` | Stand for ESP32-C5-DevKitC-1 | Browser flasher, at address `0x0` ([stand](../README.en.md#from-the-browser-nothing-to-install)) |
 | `stand-esp32dev.bin` | Stand for a DevKit with ESP-WROOM-32 | same |
 | `stand-esp32c3.bin` | Stand for ESP32-C3 SuperMini or DevKitM | same |
 | `stand-esp32s3.bin` | Stand for ESP32-S3 DevKitC | same |

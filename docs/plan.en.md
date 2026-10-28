@@ -7,7 +7,7 @@ English | [Русский](plan.md)
 - **The face is always on screen.** The screen goes dark only when nobody can see it: in a pocket, in a bag, in the dark.
 - **Our own face engine**: `engine/`, with no third-party face code or animations.
 - **Transparent case.** An acrylic "sandwich": the boards are visible right through it, and the cell is enclosed on all sides ([hardware](hardware.en.md), [case](../hardware/rev-b/case/README.en.md)).
-- **Straight to our own rev B board.** We skipped the XIAO carrier board (variant A): the rev B firmware is fully verified by the [full-board simulation](../firmware/README.en.md), and faces on a real panel by the ESP32 stand.
+- **Straight to our own rev B board.** We skipped the XIAO carrier board (variant A): the rev B firmware is fully verified by the [full-board simulation](../firmware/README.en.md#whole-board-simulation), and faces on a real panel by the ESP32 stand.
 
 ## Stages
 
@@ -59,8 +59,8 @@ English | [Русский](plan.md)
 ### 0. Purchasing and test stand
 
 - [x] Stand firmware for ESP32-C5, ESP32, C3 and S3 + SSD1306 and a touch button: live mode, catalog display, Serial commands ([firmware/](../firmware/README.en.md)).
-- [x] Build the stand on ESP32-C5 and go through the [live panel checklist](../firmware/README.en.md): emotions are readable; fixed proximity to the edge and thin lines.
-- [ ] Buy parts from the [list](hardware.en.md) (assembly purchases).
+- [x] Build the stand on ESP32-C5 and go through the [live panel checklist](../firmware/README.en.md#what-to-check-on-a-real-panel): emotions are readable; fixed proximity to the edge and thin lines.
+- [ ] Buy parts from the [list](hardware.en.md#shopping-list-for-assembly) (assembly purchases).
 - [ ] Measure screen modules from different sellers: dimensions, holes, component height on the back, controller, pinout, LDO.
 - [ ] Measure 402025, 502025 and 602025 cells from the batch: thickness, width, length, wire exit.
 
@@ -71,7 +71,7 @@ English | [Русский](plan.md)
   - [ ] VCOMH and precharge from measurements;
   - [ ] autodetection of SSD1306, SSD1315 or SH1106.
 - [x] Engine in the board firmware (`firmware/src/keychain`), frames are checked against the screen in simulation.
-- [ ] First board per the ["What to check"](../firmware/README.en.md) list: power, bootloader, screen, accelerometer axes, taps, sound, charging, encounter, shutdown.
+- [ ] First board per the ["What to check"](../firmware/README.en.md#what-to-check-on-the-first-board) list: power, bootloader, screen, accelerometer axes, taps, sound, charging, encounter, shutdown.
 - [ ] Measure frame render and transfer time on nRF52840.
 - [ ] PPK2 measurements:
   - face at different contrasts;
@@ -128,21 +128,21 @@ We went straight to our own rev B board. The XIAO nRF52840 Sense remains a fallb
 - [x] Schematic: MDBT50Q module (nRF52840), MCP73832 charger enabled by firmware, USB/battery power separation, LIS3DH, LTR-303ALS, PDM microphone, buzzer and vibration motor on switches, USB-C with CC resistors, TVS and ESD, Tag-Connect pads for SWD, screen power switch.
 - [x] Layout: ground on L2, power rails and slow signals on L3, antenna at the edge with no copper; DRC: 0 errors, 0 unconnected, 0 warnings.
 - [x] Gerber, BOM and CPL for JLCPCB, BOM and placement for PCBWay, assembly drawings, hand-assembly list; a 2-board assembly panel (`hardware/rev-b/out/panel`).
-- [x] Fixes from the pre-release audit: accelerometer SA0 to VDD, REG0 capacitance, screen jumpers, temperature-gated charging, charge status levels, VBUS protection ([board README](../hardware/rev-b/README.en.md), pre-order check).
+- [x] Fixes from the pre-release audit: accelerometer SA0 to VDD, REG0 capacitance, screen jumpers, temperature-gated charging, charge status levels, VBUS protection ([board README](../hardware/rev-b/README.en.md#pre-order-review), pre-order check).
 - [x] Board firmware: all sensors, voice, vibration, BLE encounters, sleep and shutdown, flash log, bootloader with a UF2 drive, factory file with bootloader and UICR (`firmware/src/keychain`, `firmware/bootloader`).
-- [ ] Order from JLCPCB: PCB, 5 panels (the minimum), of which 3 assembled = 6 boards (PCBA requires at least 2 panels); 76 × 72 mm panel, 2 boards, from `hardware/rev-b/out/panel` ([board README](../hardware/rev-b/README.en.md): assembly panel, JLCPCB order). Order number: "Order Number (Specify Position)"; it goes onto the label under the cell. By hand: screen module, cell, vibration motor.
-- [ ] Bring-up on a real board: checklists in the [board README](../hardware/rev-b/README.en.md) (first power-on) and the [firmware README](../firmware/README.en.md) (what to check on the first board).
+- [ ] Order from JLCPCB: PCB, 5 panels (the minimum), of which 3 assembled = 6 boards (PCBA requires at least 2 panels); 76 × 72 mm panel, 2 boards, from `hardware/rev-b/out/panel` ([panel](../hardware/rev-b/README.en.md#assembly-panel), [order](../hardware/rev-b/README.en.md#ordering-from-jlcpcb)). Order number: "Order Number (Specify Position)"; it goes onto the label under the cell. By hand: screen module, cell, vibration motor.
+- [ ] Bring-up on a real board: checklists in the [board README](../hardware/rev-b/README.en.md#first-power-on) (first power-on) and the [firmware README](../firmware/README.en.md#what-to-check-on-the-first-board) (what to check on the first board).
 - [ ] Measurements: off ≤25 µA, pocket ~0.13 mA, face ≤2.7 mA; discharge test.
-- [ ] USB hot-plug: oscilloscope on VBUS and VSYS, short cable, 10 plug-ins ([how](../hardware/rev-b/README.en.md), section on the first boards). According to the ngspice model, ringing briefly exceeds the module's 5.8 V limit; TVS D3 does not suppress it. Record the peak and the time above 5.8 V: this is data for the rev C damper. For our own rev B prototypes the risk is accepted; before any sale the measurement is mandatory. The pass criterion and what to do if it fails are in the [board README](../hardware/rev-b/README.en.md).
+- [ ] USB hot-plug: oscilloscope on VBUS and VSYS, short cable, 10 plug-ins ([how](../hardware/rev-b/README.en.md#on-the-first-boards), section on the first boards). According to the ngspice model, ringing briefly exceeds the module's 5.8 V limit; TVS D3 does not suppress it. Record the peak and the time above 5.8 V: this is data for the rev C damper. For our own rev B prototypes the risk is accepted; before any sale the measurement is mandatory. The pass criterion and what to do if it fails are in the [board README](../hardware/rev-b/README.en.md#on-the-first-boards).
 - [ ] Charging temperature sensor: keychain in the fridge for an hour (+4…6 °C), then straight to USB: `sensors` shows a temperature within 2 °C of a kitchen thermometer next to it. From the freezer: the console prints «Заряд не идёт» ("Not charging"), the LED does not light brightly. Repeat on several keychains from each batch.
 - [ ] Radio inside the case: encounter range with two keychains, −70 dBm threshold ([encounters](encounters.en.md)).
 
 **Before selling rev B**: only if the keychains are ever sold; not needed for gifts:
 
-- [x] Encounter packet without a Company ID: our own free UUID in the service data ([encounters](encounters.en.md), advertising packet).
-- [ ] Our own USB VID/PID instead of Adafruit's numbers: in the `[sale]` section of `firmware/platformio.ini`, rebuild the bootloader. Build from a tag, without `-dirty`. The `firmware/release/` files are for prototypes only ([bootloader](../firmware/bootloader/README.en.md), how to rebuild; [encounters](encounters.en.md), advertising packet).
-- [ ] Cell datasheet (charge current from 100 mA) and screen module check on the stand ([board README](../hardware/rev-b/README.en.md), what to verify before ordering).
-- [ ] Tests before the first sale: USB ringing ([measurement](../hardware/rev-b/README.en.md)) and a pilot batch (below). Optional for gifts; the most useful and free test is to carry one keychain for a week or two before giving away the rest.
+- [x] Encounter packet without a Company ID: our own free UUID in the service data ([encounters](encounters.en.md#advertising-packet), advertising packet).
+- [ ] Our own USB VID/PID instead of Adafruit's numbers: in the `[sale]` section of `firmware/platformio.ini`, rebuild the bootloader. Build from a tag, without `-dirty`. The `firmware/release/` files are for prototypes only ([bootloader](../firmware/bootloader/README.en.md#how-to-rebuild), how to rebuild; [encounters](encounters.en.md#advertising-packet), advertising packet).
+- [ ] Cell datasheet (charge current from 100 mA) and screen module check on the stand ([board README](../hardware/rev-b/README.en.md#what-to-check-before-ordering), what to verify before ordering).
+- [ ] Tests before the first sale: USB ringing ([measurement](../hardware/rev-b/README.en.md#on-the-first-boards)) and a pilot batch (below). Optional for gifts; the most useful and free test is to carry one keychain for a week or two before giving away the rest.
 
   **Pilot batch**: for example, 5 keychains, at least one of each version you will sell:
 
@@ -159,7 +159,7 @@ We went straight to our own rev B board. The XIAO nRF52840 Sense remains a fallb
 
 - [x] Owner's guide: [user-guide.en.md](user-guide.en.md).
 - [ ] Guide for the box: print the [card](user-guide.en.md#card-for-the-box).
-- [ ] Every keychain before shipping: the checks from [first power-on](../hardware/rev-b/README.en.md), with `factory yes` last ([console](../firmware/README.en.md)).
+- [ ] Every keychain before shipping: the checks from [first power-on](../hardware/rev-b/README.en.md#first-power-on), with `factory yes` last ([console](../firmware/README.en.md#console)).
 
 **Rev C: fully factory-assembled.** Rev B remains the working version; rev C is developed alongside in `hardware/rev-c`:
 
