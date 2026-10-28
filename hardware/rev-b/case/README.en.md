@@ -113,7 +113,7 @@ For each thickness there is `case-acrylic-2mm.svg`, `…-3mm.svg` and so on, plu
 - **M2 × 25 nylon (polyamide) screws and M2 nuts, also nylon,** 4 of each, for any version.
   - **Head:** cheese or pan head, Ø no more than 4 mm, **not countersunk:** a countersunk head in the lid's straight hole wedges the acrylic apart.
   - **Where to get them.** Nylon M2 pan-head screws are usually sold only up to 20 mm, which is too short. M2 × 25 exists with a cheese head (DIN 84), e.g. Essentra 50M020040D025 (polyamide 6.6, head Ø 3.8), but more often in bulk packs. Nylon M2 nuts are sold everywhere.
-  - **Why nylon.** The top right screw, looking at the display, is only 7.7 mm below the antenna zone of the nRF module ([board README](../README.en.md)), and metal near the antenna shortens the encounter range.
+  - **Why nylon.** The top right screw, looking at the display, is only 7.7 mm below the antenna zone of the nRF module ([board README](../README.en.md#layout-by-block)), and metal near the antenna shortens the encounter range.
   - **Length.** The screw protrudes from the nut by 4.6 mm (S), 3.6 mm (M) and 2.6 mm (L). After final tightening, not before, clip the end with flush cutters, leaving about 1 mm above the nut. The margin is calculated like this: the screw protrudes from the nut by at least 1.2 mm on nominal sheets, which is +0.2 mm for each of the six sheets under the screw. Shorter is not allowed.
   - **Could not find nylon M2 × 25?** Steel ones will do (stainless is better): M2 × 22 for S, M2 × 25 for M and L, with nylon nuts all the same. The case assembles the same way, only the radio gets a bit weaker; check the encounter threshold on assembled keychains ([what to check](#what-to-check)). This is only for your own prototypes: keychains for sale use nylon only. Nylon shorter than 25 mm does not work: M2 × 20 does not pass through the nut in any version.
 - **Cell** with a protection board, per the rules above.
@@ -125,7 +125,7 @@ For each thickness there is `case-acrylic-2mm.svg`, `…-3mm.svg` and so on, plu
 - **Adhesive transfer tape without a carrier, up to 0.06 mm** (e.g. 3M 467MP): to glue both back frame pieces to the bottom (step 16). Do not use ordinary double-sided tape here: it is thicker and lifts the bottom.
 - **USB-C cable with an ordinary plug:** plug body no thicker than 6.4 mm ([why](#layers-from-face-to-back)). A data cable, not charge-only: the console runs over it.
 - **Electronics fitted by hand** ([purchasing](../../../docs/hardware.en.md)):
-  - 0.96″ SSD1306 display module, I2C, 4 pins, white, with LDO; for M and L without a soldered header. The keychain firmware drives the display only as an SSD1306: 1.3″ modules usually use the SH1106 and do not work ([what to check](../README.en.md));
+  - 0.96″ SSD1306 display module, I2C, 4 pins, white, with LDO; for M and L without a soldered header. The keychain firmware drives the display only as an SSD1306: 1.3″ modules usually use the SH1106 and do not work ([what to check](../README.en.md#what-to-check-before-ordering));
   - 0820 coin vibration motor, 3 V;
   - for a `VCC GND` module: two 0 Ω 0402 jumpers (R17 and R19), or move the removed R16 and R18 (step 2).
 - **Tools:**
@@ -133,14 +133,14 @@ For each thickness there is `case-acrylic-2mm.svg`, `…-3mm.svg` and so on, plu
   - multimeter, calipers and a ruler;
   - flush cutters, a needle file and sandpaper on a flat sheet;
   - a sponge or foam block to rest the board and the stack on;
-  - an SWD programmer, if the board arrived without firmware: a Raspberry Pi Pico with debugprobe firmware and a TXS0108E level shifter module, wires up to 10–15 cm; to J3, a Tag-Connect TC2030-CTX-NL cable via an adapter to 2.54 mm pins, or thin wires soldered to the pads ([which and how](../README.en.md)). Another option is a J-Link EDU Mini V2; the cable plugs straight into it. The cable has no latches, so it is held against J3 by hand for the whole flashing;
+  - an SWD programmer, if the board arrived without firmware: a Raspberry Pi Pico with debugprobe firmware and a TXS0108E level shifter module, wires up to 10–15 cm; to J3, a Tag-Connect TC2030-CTX-NL cable via an adapter to 2.54 mm pins, or thin wires soldered to the pads ([which and how](../README.en.md#programmer-swd)). Another option is a J-Link EDU Mini V2; the cable plugs straight into it. The cable has no latches, so it is held against J3 by hand for the whole flashing;
   - Nordic PPK2 for measuring current (step 6).
 
 ## Assembly
 
 This is the complete keychain assembly: electronics first, then the case. The cell lies under the display module and covers its pads, so the order is: firmware, display jumpers, motor, cell, display, case. Everything that gets soldered on the board near the cell is done before it: once the cell is on, no hot air near the board. Before cutting, measure the display module and the sheets ([what to check](#what-to-check)).
 
-1. **Firmware**, if the board arrived without it: over SWD, with the board powered from its own USB-C, no cell and no display yet. Programmer: Pico with debugprobe through a TXS0108E: VA of the module to pad 1 of J3 (VTref), VB to the Pico's 3V3; never connect the Pico's 3V3 to J3 ([wiring and commands](../../../firmware/README.en.md), [J3](../README.en.md)). The file for prototypes is `keychain-revb-factory.hex` from [`firmware/release/`](../../../firmware/release/README.en.md). For keychains for sale, `firmware-factory.hex` from your own build with your own IDs (the `[sale]` section in `firmware/platformio.ini`). 3V3 is ~1.8 V before flashing and ~3.3 V after. Do the first check from [first power-on](../README.en.md) right here: USB-C only, no cell; in the console `ver` shows the firmware version, `sensors` shows that the accelerometer and light sensor respond.
+1. **Firmware**, if the board arrived without it: over SWD, with the board powered from its own USB-C, no cell and no display yet. Programmer: Pico with debugprobe through a TXS0108E: VA of the module to pad 1 of J3 (VTref), VB to the Pico's 3V3; never connect the Pico's 3V3 to J3 ([wiring and commands](../../../firmware/README.en.md), [J3](../README.en.md#programmer-swd)). The file for prototypes is `keychain-revb-factory.hex` from [`firmware/release/`](../../../firmware/release/README.en.md). For keychains for sale, `firmware-factory.hex` from your own build with your own IDs (the `[sale]` section in `firmware/platformio.ini`). 3V3 is ~1.8 V before flashing and ~3.3 V after. Do the first check from [first power-on](../README.en.md#first-power-on) right here: USB-C only, no cell; in the console `ver` shows the firmware version, `sensors` shows that the accelerometer and light sensor respond.
 2. **Display power pin order — before the motor and the cell.** 0.96″ modules come as `GND VCC SCL SDA` or `VCC GND SCL SDA`: check the labels on your module now. Unplug USB-C — the board has neither power nor a cell.
    - The factory fits R16 and R18: pin 1 is GND, pin 2 is VCC.
    - Only for a `VCC GND` module, remove R16 and R18 and fit R17 and R19 (0 Ω 0402) **in their place**, or move the removed R16 and R18. Use a fine-tip soldering iron and tweezers, not hot air. The G and V labels are on the back above the jumpers, between them and the display pins.
@@ -152,10 +152,10 @@ This is the complete keychain assembly: electronics first, then the case. The ce
    - on the top edge left of the tab: 2.5–6.5 mm from the left edge;
    - on the bottom edge: 22.0–25.0 mm from the left edge (between USB-C and the right screw).
 
-   There are none on the right edge or on the tab ([where they are](../README.en.md)).
+   There are none on the right edge or on the tab ([where they are](../README.en.md#assembly-panel)).
 5. **Display module.** For M and L, solder the long header into the module: short end through the module, plastic under the module. Cover the back of the module above the future cell with a layer of Kapton so the corners of the SOT-23 and 0805 do not dent the cell's wrap. Leave 3.3 mm radius circles around the module holes uncovered: the frame tabs will rest on them. Cover the glass flex, folded around the lower edge of the module, with a narrow strip of Kapton: it protects it from kinking and from the edge of the display frame. Do not bend or pull the flex. UV glue is optional: a thin bead along the edge of the glass at the flex, no higher than the glass.
 6. **Cell — only with a protection board (PCM).** The board has no reverse-polarity protection: a reversed cell forward-biases the internal diode of charger U2, and the current is limited only by the cell's protection board. The cell's position is set by the lower cell frame, used as a template: its pocket is only 0.3–1.0 mm wider than the cell.
-   - First, while the BT1 pads are free, measure the current of the switched-off keychain: PPK2 on the BT1 pads, keychain switched off with the button, less than 25 µA ([how](../README.en.md)). Then desolder the PPK2 wires.
+   - First, while the BT1 pads are free, measure the current of the switched-off keychain: PPK2 on the BT1 pads, keychain switched off with the button, less than 25 µA ([how](../README.en.md#first-power-on)). Then desolder the PPK2 wires.
    - Double-sided tape goes on the bottom side of the cell; do not peel the liner yet.
    - Put the board on the sponge face up and insert two M2 screws from the back into the two lower board holes. Slip the lower cell frame (the one with the cutout around the nRF52840 module, no tube holder) over them: its fork tabs open toward each other, and on two screws the frame cannot shift sideways or lengthwise. Leave the upper holes free: the wires will run by the top right one.
    - Peel the liner and place the cell in the frame pocket: protection board end up, wires at the right corner, pushed down against the lower wall of the pocket. Press it down.
@@ -178,7 +178,7 @@ This is the complete keychain assembly: electronics first, then the case. The ce
     - The pads of adjacent pins are only 0.84 mm apart. A solder blob on GND–VCC is a short on the display supply, and switch Q2 passes it straight from the cell, with no current limit. A blob on VCC–SCL puts the display supply (up to ~5.4 V from USB) straight onto an nRF pin: the firmware cannot protect against that. A shorted SCL–SDA, or SCL to GND, the firmware detects itself — «Шина экрана зажата…» ("Display bus stuck…") in the console — and runs without the display.
     - The R16–R19 jumpers are almost 2 mm away from the pins, but check them too.
 
-    Only then press the button: boot and a face. The rest follows [first power-on](../README.en.md).
+    Only then press the button: boot and a face. The rest follows [first power-on](../README.en.md#first-power-on).
 11. **Microphone tube** — through the holder of the upper cell frame, lower end over the board hole next to C4.
 12. **Display frame** — around the module, with the tube passing into its holder. Put strips of thin tape on the top face of the frame (see "Stack height" below).
 13. **Washers** — on the module holes, the lower two with the flat toward the glass. The tube should stick out about 0.6 mm (0.4–0.8) above the washers: if longer, trim it; if shorter, cut a new one.

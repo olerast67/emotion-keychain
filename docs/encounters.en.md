@@ -106,7 +106,7 @@ A new level brings a scene with a heart and the friend's call sign, and 15 × le
 
 ## Duel
 
-A duel happens if both keychains have raised the "ready to duel" flag and there hasn't been a duel with that keychain today yet (the announcer keeps track of this). Readiness is toggled with a double press of the button and is on by default, so only those who want to take part in duels.
+A duel happens if both keychains have raised the "ready to duel" flag and there hasn't been a duel with that keychain today yet (the announcer keeps track of this). Readiness is toggled with a double press of the button and is on by default, so only those who want to duel take part.
 
 A duel is also a meeting. It counts as a day of friendship: level growth with a heart and experience, BEST FRIENDS, a gift from an elder. It also gives experience for a new or old acquaintance and the achievements for a twin and a legend. A duel has no greeting scene of its own: the duel and the chat took its place. This matters because the first meeting of the day with a neighbor that also has duels on (and they are on by default) is usually a duel. That's why two new keychains don't show each other NEW FRIEND, and a short meeting on the subway can only be a duel.
 

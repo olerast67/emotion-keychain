@@ -1,3 +1,5 @@
+[English](README.en.md) | Русский
+
 # Загрузчик платы rev B
 
 Готовый файл `emotion_keychain_revb_bootloader-0.11.0-keychain_s140_6.1.1.hex` — [загрузчик Adafruit nRF52](https://github.com/adafruit/Adafruit_nRF52_Bootloader) 0.11.0 (коммит `c67f0bc`) с небольшим патчем, вместе с SoftDevice S140 6.1.1. Записывается программатором один раз, как описано в [README прошивки](../README.md#первая-прошивка-загрузчик-по-swd). Обычно отдельно его не пишут: он уже есть внутри `keychain-revb-factory.hex` ([готовые файлы](../release/README.md)).
