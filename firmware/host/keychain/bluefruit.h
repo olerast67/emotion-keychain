@@ -29,6 +29,7 @@ class BLEAdvertising {
   void clearData() { data.clear(); }
   bool addFlags(uint8_t f) { return add(BLE_GAP_AD_TYPE_FLAGS, &f, 1); }
   bool addManufacturerData(const void* d, uint8_t n) { return add(BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA, d, n); }
+  bool addData(uint8_t t, const void* d, uint8_t n) { return add(t, d, n); }
   void setType(uint8_t t) { type = t; }
   void setInterval(uint16_t a, uint16_t) { interval = a; }
   void setFastTimeout(uint16_t s) { fast_timeout = s; }

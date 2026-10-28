@@ -12,17 +12,17 @@
 
 namespace face {
 
-// Пакет — данные производителя (Manufacturer Specific Data), 15 байт.
-constexpr int kAdvLen = 15;
-// Company ID в пакете. 0xFFFF — номер для прототипов; для продажи — свой ID из Bluetooth SIG.
-// Задаётся при сборке (-DFACE_ADV_COMPANY=0x…): у прошивки брелока — в разделе [sale] файла
-// firmware/platformio.ini, рядом с USB VID/PID. Брелоки с разными ID друг друга не узнают.
-#ifndef FACE_ADV_COMPANY
-#define FACE_ADV_COMPANY 0xFFFF
-#endif
-constexpr uint16_t kAdvCompany = FACE_ADV_COMPANY;
-static_assert(FACE_ADV_COMPANY >= 0 && FACE_ADV_COMPANY <= 0xFFFF, "Company ID — 16 бит");
-constexpr uint8_t kAdvVersion = 2;  // 2: ответ «принял» и отсчёт 4 с — со старой прошивкой встреч нет
+// Пакет — данные сервиса со 128-битным UUID (Service Data, тип 0x21), 27 байт: UUID брелоков
+// и 11 байт полей. Свой случайный UUID (5f4c45b9-ab1b-4dd4-bfea-54bcf4274da6) никому не
+// принадлежит и бесплатен — в отличие от Company ID в данных производителя, который выдаёт
+// Bluetooth SIG. Вместе с длиной и типом поле занимает 29 байт из 31: флаги в пакете не
+// нужны, реклама без соединения.
+constexpr int kAdvLen = 27;
+constexpr uint8_t kAdvType = 0x21;
+// UUID в порядке байтов эфира (младший байт первым).
+constexpr uint8_t kAdvUuid[16] = {0xA6, 0x4D, 0x27, 0xF4, 0xBC, 0x54, 0xEA, 0xBF,
+                                  0xD4, 0x4D, 0x1B, 0xAB, 0xB9, 0x45, 0x4C, 0x5F};
+constexpr uint8_t kAdvVersion = 3;  // 3: данные сервиса с UUID; со старой прошивкой встреч нет
 
 // Флаги пакета.
 constexpr uint8_t kAdvDuelReady = 1u << 0;   // хозяин разрешил дуэли

@@ -1,14 +1,12 @@
-# До сборки платы rev B: номера, под которыми брелок виден компьютеру и другим брелокам, — из
-# раздела [sale] в platformio.ini (одно место для своих номеров перед продажей, docs/selling.md).
+# До сборки платы rev B: USB-номера, под которыми брелок виден компьютеру, — из раздела [sale]
+# в platformio.ini (одно место для своих номеров).
 #   usb_vid, usb_pid   — USB VID/PID прошивки. Ядро Adafruit берёт их из первой пары hwids в
 #                        описании платы (boards/keychain_revb.json), поэтому здесь hwids
 #                        подменяются до сборки ядра;
 #   usb_pid_boot       — PID загрузчика: вторая пара hwids, по ней PlatformIO находит брелок в
 #                        загрузчике. Сам загрузчик свои номера берёт из своего board.h — его
 #                        пересобирают отдельно (bootloader/README.md);
-#   ble_company        — Company ID в пакете встреч: FACE_ADV_COMPANY для движка
-#                        (engine/include/face/encounter.h), и для src, и для библиотеки движка.
-# Раздела нет — номера из описания платы и 0xFFFF, как раньше.
+# Раздела нет — номера из описания платы.
 Import("env")  # noqa: F821
 
 config = env.GetProjectConfig()  # noqa: F821
@@ -30,7 +28,5 @@ hwids = board.get("build.hwids")
 vid = number("usb_vid", hwids[0][0])
 pid = number("usb_pid", hwids[0][1])
 pid_boot = number("usb_pid_boot", hwids[1][1] if len(hwids) > 1 else hwids[0][1])
-company = number("ble_company", "0xFFFF")
 board.update("build.hwids", [[vid, pid], [vid, pid_boot]])
-env.Append(CPPDEFINES=[("FACE_ADV_COMPANY", company)])  # noqa: F821
-print("Номера: USB %s:%s (загрузчик %s:%s), Company ID %s" % (vid, pid, vid, pid_boot, company))
+print("Номера: USB %s:%s (загрузчик %s:%s)" % (vid, pid, vid, pid_boot))

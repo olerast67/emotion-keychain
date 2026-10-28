@@ -21,33 +21,32 @@ uint32_t rotl(uint32_t x, int r) { return (x << r) | (x >> (32 - r)); }
 }  // namespace
 
 void adv_encode(const Advert& a, uint8_t out[kAdvLen]) {
-  out[0] = (uint8_t)(kAdvCompany & 0xFF);
-  out[1] = (uint8_t)(kAdvCompany >> 8);
-  out[2] = 'K';
-  out[3] = 'C';
-  out[4] = kAdvVersion;
-  for (int i = 0; i < 4; ++i) out[5 + i] = (uint8_t)(a.hash >> (8 * i));
-  out[9] = a.level;
-  out[10] = a.flags;
-  out[11] = a.mood;
-  out[12] = a.countdown;
-  out[13] = (uint8_t)(a.to & 0xFF);
-  out[14] = (uint8_t)(a.to >> 8);
+  for (int i = 0; i < 16; ++i) out[i] = kAdvUuid[i];
+  uint8_t* f = out + 16;
+  f[0] = kAdvVersion;
+  for (int i = 0; i < 4; ++i) f[1 + i] = (uint8_t)(a.hash >> (8 * i));
+  f[5] = a.level;
+  f[6] = a.flags;
+  f[7] = a.mood;
+  f[8] = a.countdown;
+  f[9] = (uint8_t)(a.to & 0xFF);
+  f[10] = (uint8_t)(a.to >> 8);
 }
 
 bool adv_decode(const uint8_t* p, int n, Advert* out) {
   if (!p || n < kAdvLen) return false;
-  if (p[0] != (kAdvCompany & 0xFF) || p[1] != (kAdvCompany >> 8) || p[2] != 'K' || p[3] != 'C' ||
-      p[4] != kAdvVersion)
-    return false;
+  for (int i = 0; i < 16; ++i)
+    if (p[i] != kAdvUuid[i]) return false;
+  const uint8_t* f = p + 16;
+  if (f[0] != kAdvVersion) return false;
   Advert a;
-  a.hash = (uint32_t)p[5] | (uint32_t)p[6] << 8 | (uint32_t)p[7] << 16 | (uint32_t)p[8] << 24;
+  a.hash = (uint32_t)f[1] | (uint32_t)f[2] << 8 | (uint32_t)f[3] << 16 | (uint32_t)f[4] << 24;
   if (!a.hash) return false;
-  a.level = p[9];
-  a.flags = p[10];
-  a.mood = p[11];
-  a.countdown = p[12];
-  a.to = (uint16_t)(p[13] | p[14] << 8);
+  a.level = f[5];
+  a.flags = f[6];
+  a.mood = f[7];
+  a.countdown = f[8];
+  a.to = (uint16_t)(f[9] | f[10] << 8);
   *out = a;
   return true;
 }
