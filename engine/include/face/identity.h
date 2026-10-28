@@ -30,6 +30,7 @@ Identity make_identity(uint64_t serial);
 // Всё о брелоке по его позывному-хэшу: так брелок узнаёт характер соседа по рекламному
 // пакету BLE, где передаётся только хэш.
 Identity identity_from_hash(uint32_t hash);
-const char* rarity_name(Rarity r);  // по-русски
+const char* rarity_name(Rarity r);  // на языке lang(), по умолчанию по-русски
+const char* rarity_name(Rarity r, Lang l);
 
 }  // namespace face

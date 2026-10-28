@@ -68,6 +68,42 @@ const char* const kEventNames[] = {
     "Поражение в дуэли",
 };
 static_assert(sizeof(kEventNames) / sizeof(kEventNames[0]) == kEventCount, "названия событий");
+const char* const kEventNamesEn[] = {
+    "Tap",
+    "Double tap",
+    "Shaken",
+    "Shaken hard",
+    "Falling",
+    "Hit",
+    "Picked up",
+    "Walking",
+    "Running",
+    "Lying still",
+    "Upside down",
+    "Turned back over",
+    "Loud sound",
+    "Speech nearby",
+    "Music",
+    "Silence",
+    "Dark",
+    "Light",
+    "Very bright",
+    "Cold",
+    "Hot",
+    "Temperature normal",
+    "Charger plugged in",
+    "Charged",
+    "Charger unplugged",
+    "Low battery",
+    "Battery almost empty",
+    "Button",
+    "Long press",
+    "New keychain met",
+    "Known keychain nearby",
+    "Duel won",
+    "Duel lost",
+};
+static_assert(sizeof(kEventNamesEn) / sizeof(kEventNamesEn[0]) == kEventCount, "названия событий по-английски");
 
 // День недели по григорианскому календарю: 0 — воскресенье (алгоритм Сакамото).
 int weekday(int y, int m, int d) {
@@ -158,7 +194,11 @@ const IdleAct kIdle[kIdleCount] = {
 }  // namespace
 
 const char* event_id(Event e) { return (int)e < kEventCount ? kEventIds[(int)e] : "?"; }
-const char* event_name(Event e) { return (int)e < kEventCount ? kEventNames[(int)e] : "?"; }
+const char* event_name(Event e, Lang l) {
+  if ((int)e >= kEventCount) return "?";
+  return l == Lang::En ? kEventNamesEn[(int)e] : kEventNames[(int)e];
+}
+const char* event_name(Event e) { return event_name(e, lang()); }
 
 void Behavior::init(FaceEngine* engine, uint32_t seed, uint32_t now) {
   eng_ = engine;

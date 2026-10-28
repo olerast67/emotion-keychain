@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include "face/lang.h"
 #include "face/params.h"
 
 namespace face {
@@ -278,6 +279,7 @@ constexpr int kExprCount = (int)Expr::Count;
 struct Expression {
   const char* id;
   const char* name;  // по-русски, для симулятора и документации
+  const char* name_en = "";  // то же по-английски (expr_name выбирает по lang())
   Category cat = Category::Positive;
   EyePair eyes = both(ring(30, 4));
   BrowPair brows = {};
@@ -295,11 +297,18 @@ struct Expression {
   uint16_t hold_ms = 0;       // сколько держится (0 — пока не сменят)
   Expr next = Expr::neutral;  // во что переходит после hold_ms
   const char* when = "";      // в каких ситуациях
+  const char* when_en = "";   // то же по-английски
 };
 
 const Expression& expression(Expr e);
 const char* expr_id(Expr e);
-const char* category_name(Category c);
+// Название и описание на языке lang() (по умолчанию — по-русски) или на заданном.
+const char* expr_name(Expr e);
+const char* expr_name(Expr e, Lang l);
+const char* expr_when(Expr e);
+const char* expr_when(Expr e, Lang l);
+const char* category_name(Category c);  // на языке lang()
+const char* category_name(Category c, Lang l);
 bool expr_from_id(const char* id, Expr* out);
 // Базовая форма лица для эмоции (без процедурных слоёв).
 void expression_face(Expr e, Face* out);

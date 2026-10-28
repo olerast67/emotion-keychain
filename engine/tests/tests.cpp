@@ -83,6 +83,83 @@ static void test_catalog() {
   }
 }
 
+static bool has_cyrillic(const char* s) {
+  for (; s && *s; ++s)
+    if ((unsigned char)*s == 0xD0 || (unsigned char)*s == 0xD1) return true;
+  return false;
+}
+
+// Английские тексты: у каждой эмоции, сцены, события, характера и достижения есть перевод
+// без кириллицы, выбор языка не трогает русский текст, а каждая причина реакции из
+// behavior.cpp переведена.
+static void test_i18n() {
+  CHECK(lang() == Lang::Ru, "язык по умолчанию — русский");
+  Lang l;
+  CHECK(lang_from_id("en", &l) && l == Lang::En && strcmp(lang_id(l), "en") == 0, "en");
+  CHECK(lang_from_id("ru", &l) && l == Lang::Ru && !lang_from_id("de", &l), "ru/de");
+  for (int i = 0; i < kExprCount; ++i) {
+    const Expression& x = expression((Expr)i);
+    CHECK(x.name_en[0] && !has_cyrillic(x.name_en), "%s: name_en «%s»", x.id, x.name_en);
+    CHECK(x.when_en[0] && !has_cyrillic(x.when_en), "%s: when_en «%s»", x.id, x.when_en);
+    CHECK(expr_name((Expr)i) == x.name && expr_when((Expr)i) == x.when, "%s: по умолчанию русский", x.id);
+    CHECK(expr_name((Expr)i, Lang::En) == x.name_en && expr_when((Expr)i, Lang::En) == x.when_en, "%s", x.id);
+  }
+  for (int c = 0; c < (int)Category::Count; ++c)
+    CHECK(!has_cyrillic(category_name((Category)c, Lang::En)), "категория %d", c);
+  for (int i = 0; i < kSceneCount; ++i)
+    CHECK(!has_cyrillic(scene_name((Scene)i, Lang::En)), "сцена %s", scene_id((Scene)i));
+  for (int i = 0; i < kEventCount; ++i)
+    CHECK(!has_cyrillic(event_name((Event)i, Lang::En)), "событие %s", event_id((Event)i));
+  for (int i = 0; i < kArchetypeCount; ++i)
+    CHECK(!has_cyrillic(archetype_name((Archetype)i, Lang::En)), "характер %s", archetype_id((Archetype)i));
+  for (Rarity r : {Rarity::Common, Rarity::Rare, Rarity::Legendary})
+    CHECK(!has_cyrillic(rarity_name(r, Lang::En)), "редкость %d", (int)r);
+  for (int i = 0; i < kFriendLevels; ++i) CHECK(!has_cyrillic(friend_level_name(i, Lang::En)), "дружба %d", i);
+  for (int i = 0; i < implant_count(); ++i)
+    CHECK(implant(i).name_en[0] && !has_cyrillic(implant_name(i, Lang::En)), "имплант %s", implant(i).tag);
+  for (int i = 0; i < kAchCount; ++i) {
+    const Achievement& a = achievement((Ach)i);
+    CHECK(a.name_en[0] && a.how_en[0] && !has_cyrillic(achievement_name((Ach)i, Lang::En)) &&
+              !has_cyrillic(achievement_how((Ach)i, Lang::En)),
+          "достижение %s", a.id);
+  }
+  set_lang(Lang::En);
+  CHECK(strcmp(expr_name(Expr::happy), "Happy") == 0 && strcmp(reason_text("тап"), "tap") == 0, "set_lang(En)");
+  set_lang(Lang::Ru);
+  CHECK(strcmp(reason_text("тап"), "тап") == 0, "по-русски причина как есть");
+
+#ifdef FACE_SOURCE_DIR
+  // Каждая кириллическая строка в коде behavior.cpp — причина реакции, название события
+  // или текст static_assert; причины должны быть переведены.
+  FILE* f = fopen(FACE_SOURCE_DIR "/engine/src/behavior.cpp", "rb");
+  CHECK(f, "нет %s", FACE_SOURCE_DIR "/engine/src/behavior.cpp");
+  if (!f) return;
+  char line[1024];
+  int reasons = 0;
+  while (fgets(line, sizeof line, f)) {
+    if (strstr(line, "static_assert")) continue;
+    const char* comment = strstr(line, "//");
+    for (const char* p = strchr(line, '"'); p && (!comment || p < comment); p = strchr(p, '"')) {
+      const char* e = strchr(p + 1, '"');
+      if (!e) break;
+      char lit[256];
+      int n = (int)(e - p - 1) < 255 ? (int)(e - p - 1) : 255;
+      memcpy(lit, p + 1, n);
+      lit[n] = 0;
+      p = e + 1;
+      if (!has_cyrillic(lit)) continue;
+      bool is_event = false;
+      for (int i = 0; i < kEventCount; ++i) is_event |= strcmp(event_name((Event)i, Lang::Ru), lit) == 0;
+      if (is_event) continue;
+      ++reasons;
+      CHECK(reason_translated(lit), "нет перевода причины «%s» (engine/src/lang.cpp)", lit);
+    }
+  }
+  fclose(f);
+  CHECK(reasons >= 60, "найдено причин %d", reasons);
+#endif
+}
+
 // Каждая эмоция рисует заметную картинку, которая влезает в экран и не заливает его.
 static void test_every_expression_renders() {
   for (int i = 0; i < kExprCount; ++i) {
@@ -3476,6 +3553,7 @@ static void test_emotion_reachability() {
 int main() {
   test_framebuffer();
   test_catalog();
+  test_i18n();
   test_every_expression_renders();
   test_symmetry();
   test_safe_area_and_strokes();

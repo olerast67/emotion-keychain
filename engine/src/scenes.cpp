@@ -24,6 +24,8 @@ const char* const kNames[] = {"Загрузка «OLERAST LINK»", "Взлом",
                               "Секретный разговор",     "Достижение", "Зарядка",    "Выключение",
                               "Пасхалка",               "Синий экран", "Визор",     "Заставка"};
 static_assert(sizeof(kNames) / sizeof(kNames[0]) == kSceneCount, "имена сцен");
+const char* const kNamesEn[] = {"“OLERAST LINK” boot", "Hacking", "Data rain", "ERROR 404", "Reboot", "Hide and seek", "Upgrade", "New Year", "Birthday", "Halloween", "Meeting", "Duel", "Secret chat", "Achievement", "Charging", "Shutdown", "Easter egg", "Blue screen", "Visor", "Screensaver"};
+static_assert(sizeof(kNamesEn) / sizeof(kNamesEn[0]) == kSceneCount, "имена сцен по-английски");
 
 // Разговор: четыре реплики, «расшифровка» и отказ в доступе.
 constexpr uint32_t kChatDecryptMs = kChatMs, kChatFlashMs = kChatMs + 900, kChatDeniedMs = kChatMs + 1650;
@@ -633,7 +635,11 @@ void screensaver(Framebuffer& fb, uint32_t t, const SceneParams& p) {
 }  // namespace
 
 const char* scene_id(Scene s) { return (int)s < kSceneCount ? kIds[(int)s] : "none"; }
-const char* scene_name(Scene s) { return (int)s < kSceneCount ? kNames[(int)s] : "—"; }
+const char* scene_name(Scene s, Lang l) {
+  if ((int)s >= kSceneCount) return "—";
+  return l == Lang::En ? kNamesEn[(int)s] : kNames[(int)s];
+}
+const char* scene_name(Scene s) { return scene_name(s, lang()); }
 
 bool scene_from_id(const char* id, Scene* out) {
   for (int i = 0; i < kSceneCount; ++i) {

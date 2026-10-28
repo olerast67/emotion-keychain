@@ -30,7 +30,7 @@ def main() -> int:
     html = html.replace(MARKER, b64)
     if standalone:
         html = (
-            '<!doctype html>\n<html lang="ru">\n<head>\n<meta charset="utf-8">\n'
+            '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
             '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
             "</head>\n<body>\n" + html + "\n</body>\n</html>\n"
         )

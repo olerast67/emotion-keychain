@@ -24,6 +24,7 @@ target_link_libraries(facegen PRIVATE face_sim_common)
 enable_testing()
 add_executable(face_tests engine/tests/tests.cpp)
 target_link_libraries(face_tests PRIVATE face_engine)
+target_compile_definitions(face_tests PRIVATE FACE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME face_tests COMMAND face_tests)
 
 # Прошивка стенда на ПК: заглушки Arduino и эмулятор контроллера экрана вместо железа.

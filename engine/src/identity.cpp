@@ -17,14 +17,16 @@ float range(uint64_t& s, float lo, float hi) { return lo + (hi - lo) * unit(s); 
 
 }  // namespace
 
-const char* rarity_name(Rarity r) {
+const char* rarity_name(Rarity r, Lang l) {
+  const bool en = l == Lang::En;
   switch (r) {
-    case Rarity::Common: return "обычный";
-    case Rarity::Rare: return "редкий";
-    case Rarity::Legendary: return "легендарный";
+    case Rarity::Common: return en ? "common" : "обычный";
+    case Rarity::Rare: return en ? "rare" : "редкий";
+    case Rarity::Legendary: return en ? "legendary" : "легендарный";
   }
   return "?";
 }
+const char* rarity_name(Rarity r) { return rarity_name(r, lang()); }
 
 Identity make_identity(uint64_t serial) {
   uint64_t s = serial ^ 0x6B65796368616E21ull;  // «keychan!»: свой поток даже для номера 0

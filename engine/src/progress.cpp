@@ -7,46 +7,70 @@ namespace {
 using E = Expr;
 
 const Implant kImplants[] = {
-    {"BASE", "База", 0},
-    {"EMPATHY.MOD", "Модуль эмпатии", 150},
-    {"REFLEX.SYS", "Рефлексы", 350},
-    {"SOCIAL.LIB", "Общение", 600},
-    {"MEME.DRV", "Мем-драйвер", 900},
-    {"DRAMA.EXE", "Драма", 1250},
-    {"SARCASM.DLL", "Сарказм", 1650},
-    {"MEME.DRV2", "Мем-драйвер 2", 2100},
-    {"PARTY.PKG", "Вечеринка", 2600},
-    {"GLITCH.CORE", "Глитч-ядро", 3150},
-    {"CHAOS.BIN", "Хаос", 3750},
-    {"GHOST.SHELL", "Призрак в оболочке", 4400},
+    {"BASE", "База", 0, "Base"},
+    {"EMPATHY.MOD", "Модуль эмпатии", 150, "Empathy module"},
+    {"REFLEX.SYS", "Рефлексы", 350, "Reflexes"},
+    {"SOCIAL.LIB", "Общение", 600, "Social skills"},
+    {"MEME.DRV", "Мем-драйвер", 900, "Meme driver"},
+    {"DRAMA.EXE", "Драма", 1250, "Drama"},
+    {"SARCASM.DLL", "Сарказм", 1650, "Sarcasm"},
+    {"MEME.DRV2", "Мем-драйвер 2", 2100, "Meme driver 2"},
+    {"PARTY.PKG", "Вечеринка", 2600, "Party"},
+    {"GLITCH.CORE", "Глитч-ядро", 3150, "Glitch core"},
+    {"CHAOS.BIN", "Хаос", 3750, "Chaos"},
+    {"GHOST.SHELL", "Призрак в оболочке", 4400, "Ghost in the shell"},
 };
 constexpr int kImplantCount = (int)(sizeof(kImplants) / sizeof(kImplants[0]));
 
 const Achievement kAchievements[] = {
-    {"first_friend", "FIRST FRIEND", "Первый друг", "встретил первый брелок", 20},
-    {"social", "10 FRIENDS", "Душа компании", "десять знакомых брелоков", 40},
-    {"first_win", "FIRST WIN", "Первая победа", "выиграл дуэль", 20},
-    {"champion", "10 WINS", "Чемпион", "десять побед в дуэлях", 50},
-    {"good_loser", "NEVER GIVE UP", "Не сдаётся", "пять поражений — и всё равно в бой", 30},
-    {"petted", "100 TAPS", "Ласковый", "сто касаний", 20},
-    {"loved", "1000 TAPS", "Залюбленный", "тысяча касаний", 50},
-    {"walker", "10K STEPS", "Путешественник", "десять тысяч шагов вместе", 30},
-    {"marathon", "MARATHON", "Марафонец", "55 000 шагов — марафон с запасом", 60},
-    {"streak3", "3 DAY STREAK", "Три дня подряд", "три дня подряд хозяин был рядом", 20},
-    {"streak7", "7 DAY STREAK", "Неделя вместе", "семь дней подряд", 40},
-    {"streak30", "30 DAY STREAK", "Месяц вместе", "тридцать дней подряд", 100},
-    {"day100", "DAY 100", "Сотый день", "сто дней вместе", 100},
-    {"full_upgrade", "FULL UPGRADE", "Полный апгрейд", "установлены все импланты", 50},
-    {"whisperer", "5 SECRETS", "Шептун", "пять секретных разговоров", 30},
-    {"caring", "CARING HUMAN", "Заботливый хозяин", "пять раз зарядили голодного", 30},
-    {"survivor", "SURVIVOR", "Неваляшка", "пережил десять падений", 30},
-    {"twin", "TWIN FOUND", "Близнец", "встретил брелок того же характера", 30},
-    {"legend", "LEGEND MET", "Встреча с легендой", "встретил легендарный брелок", 50},
-    {"night_owl", "NIGHT OWL", "Сова", "с ним играли в три часа ночи", 20},
-    {"early_bird", "EARLY BIRD", "Жаворонок", "с ним играли в пять утра", 20},
-    {"knock", "KNOCK KNOCK", "Тук-тук", "секретный стук и ответ", 30},
-    {"leet", "1337", "Хакер", "был на связи в 13:37", 20},
-    {"best_friend", "BEST FRIENDS", "Лучшие друзья", "дружба с одним брелоком до уровня BEST FRIENDS", 60},
+    {"first_friend", "FIRST FRIEND", "Первый друг", "встретил первый брелок", 20,
+     "First friend", "met its first keychain"},
+    {"social", "10 FRIENDS", "Душа компании", "десять знакомых брелоков", 40,
+     "Life of the party", "ten keychains met"},
+    {"first_win", "FIRST WIN", "Первая победа", "выиграл дуэль", 20,
+     "First win", "won a duel"},
+    {"champion", "10 WINS", "Чемпион", "десять побед в дуэлях", 50,
+     "Champion", "ten duel wins"},
+    {"good_loser", "NEVER GIVE UP", "Не сдаётся", "пять поражений — и всё равно в бой", 30,
+     "Never gives up", "five defeats and still fighting"},
+    {"petted", "100 TAPS", "Ласковый", "сто касаний", 20,
+     "Cuddly", "a hundred touches"},
+    {"loved", "1000 TAPS", "Залюбленный", "тысяча касаний", 50,
+     "Much loved", "a thousand touches"},
+    {"walker", "10K STEPS", "Путешественник", "десять тысяч шагов вместе", 30,
+     "Traveller", "ten thousand steps together"},
+    {"marathon", "MARATHON", "Марафонец", "55 000 шагов — марафон с запасом", 60,
+     "Marathoner", "55,000 steps: a marathon with room to spare"},
+    {"streak3", "3 DAY STREAK", "Три дня подряд", "три дня подряд хозяин был рядом", 20,
+     "Three days in a row", "its owner was around three days in a row"},
+    {"streak7", "7 DAY STREAK", "Неделя вместе", "семь дней подряд", 40,
+     "A week together", "seven days in a row"},
+    {"streak30", "30 DAY STREAK", "Месяц вместе", "тридцать дней подряд", 100,
+     "A month together", "thirty days in a row"},
+    {"day100", "DAY 100", "Сотый день", "сто дней вместе", 100,
+     "Day 100", "a hundred days together"},
+    {"full_upgrade", "FULL UPGRADE", "Полный апгрейд", "установлены все импланты", 50,
+     "Full upgrade", "all implants installed"},
+    {"whisperer", "5 SECRETS", "Шептун", "пять секретных разговоров", 30,
+     "Whisperer", "five secret chats"},
+    {"caring", "CARING HUMAN", "Заботливый хозяин", "пять раз зарядили голодного", 30,
+     "Caring owner", "charged five times while hungry"},
+    {"survivor", "SURVIVOR", "Неваляшка", "пережил десять падений", 30,
+     "Weeble", "survived ten falls"},
+    {"twin", "TWIN FOUND", "Близнец", "встретил брелок того же характера", 30,
+     "Twin", "met a keychain with the same character"},
+    {"legend", "LEGEND MET", "Встреча с легендой", "встретил легендарный брелок", 50,
+     "Meeting a legend", "met a legendary keychain"},
+    {"night_owl", "NIGHT OWL", "Сова", "с ним играли в три часа ночи", 20,
+     "Night owl", "played with at three in the morning"},
+    {"early_bird", "EARLY BIRD", "Жаворонок", "с ним играли в пять утра", 20,
+     "Early bird", "played with at five in the morning"},
+    {"knock", "KNOCK KNOCK", "Тук-тук", "секретный стук и ответ", 30,
+     "Knock knock", "secret knock and reply"},
+    {"leet", "1337", "Хакер", "был на связи в 13:37", 20,
+     "Hacker", "was online at 13:37"},
+    {"best_friend", "BEST FRIENDS", "Лучшие друзья", "дружба с одним брелоком до уровня BEST FRIENDS", 60,
+     "Best friends", "friendship with one keychain reached BEST FRIENDS"},
 };
 static_assert(sizeof(kAchievements) / sizeof(kAchievements[0]) == kAchCount, "описание каждого достижения");
 
@@ -281,9 +305,15 @@ bool from_v1(Progress& out, const uint8_t* p, uint32_t n) {
 }  // namespace
 
 const Achievement& achievement(Ach a) { return kAchievements[(int)a < kAchCount ? (int)a : 0]; }
+const char* achievement_name(Ach a, Lang l) { return pick_lang(l, achievement(a).name, achievement(a).name_en); }
+const char* achievement_name(Ach a) { return achievement_name(a, lang()); }
+const char* achievement_how(Ach a, Lang l) { return pick_lang(l, achievement(a).how, achievement(a).how_en); }
+const char* achievement_how(Ach a) { return achievement_how(a, lang()); }
 
 int implant_count() { return kImplantCount; }
 const Implant& implant(int i) { return kImplants[i < 0 ? 0 : i >= kImplantCount ? kImplantCount - 1 : i]; }
+const char* implant_name(int i, Lang l) { return pick_lang(l, implant(i).name, implant(i).name_en); }
+const char* implant_name(int i) { return implant_name(i, lang()); }
 
 int implant_of(Expr e) { return (int)e < kExprCount ? kImplantOf.of[(int)e] : kImplantCount - 1; }
 

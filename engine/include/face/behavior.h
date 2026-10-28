@@ -63,7 +63,8 @@ enum class Event : uint8_t {
 };
 constexpr int kEventCount = (int)Event::Count;
 const char* event_id(Event e);
-const char* event_name(Event e);  // по-русски
+const char* event_name(Event e);  // на языке lang(), по умолчанию по-русски
+const char* event_name(Event e, Lang l);
 
 // Черты характера 0..1, задают вероятности реакций.
 struct Personality {

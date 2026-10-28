@@ -7,6 +7,8 @@ namespace {
 const char* const kTags[kFriendLevels] = {"NEW FRIEND", "BUDDY", "FRIENDS", "BEST FRIENDS", "BFF"};
 const char* const kNames[kFriendLevels] = {"новый знакомый", "приятель", "друзья", "лучшие друзья",
                                            "друзья навсегда"};
+const char* const kNamesEn[kFriendLevels] = {"new acquaintance", "buddy", "friends", "best friends",
+                                             "friends forever"};
 const uint16_t kDays[kFriendLevels] = {1, 3, 7, 15, 30};
 
 int level_of(uint16_t days) {
@@ -27,9 +29,11 @@ uint32_t crc32(const uint8_t* p, uint32_t n) {
 }  // namespace
 
 const char* friend_level_tag(int level) { return kTags[level < 0 ? 0 : level >= kFriendLevels ? kFriendLevels - 1 : level]; }
-const char* friend_level_name(int level) {
-  return kNames[level < 0 ? 0 : level >= kFriendLevels ? kFriendLevels - 1 : level];
+const char* friend_level_name(int level, Lang l) {
+  const int i = level < 0 ? 0 : level >= kFriendLevels ? kFriendLevels - 1 : level;
+  return l == Lang::En ? kNamesEn[i] : kNames[i];
 }
+const char* friend_level_name(int level) { return friend_level_name(level, lang()); }
 uint16_t friend_level_days(int level) { return kDays[level < 0 ? 0 : level >= kFriendLevels ? kFriendLevels - 1 : level]; }
 
 const FriendRecord* Friends::find(uint32_t hash) const {
