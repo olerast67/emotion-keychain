@@ -1,230 +1,195 @@
+English | [Русский](README.ru.md)
+
 <div align="center">
 
-<img src="docs/img/banner.gif" width="584" alt="Модуль экрана 128×64 с живым лицом: смех, удивление, любовь, сон, головокружение">
+<img src="docs/img/banner.gif" width="584" alt="A 128×64 OLED module showing a living face: laughing, surprised, in love, asleep, dizzy">
 
-# Брелок с эмоциями
+# Emotion keychain
 
-**Брелок на рюкзак с белым OLED-экраном, на котором живёт персонаж.**<br>
-Он моргает, оглядывается, смеётся, злится, засыпает в темноте и реагирует на тапы, тряску, звук и свет.
+**A backpack keychain with a small white OLED screen and a character living on it.**<br>
+It blinks, looks around, laughs, gets angry, falls asleep in the dark and reacts to taps, shaking, sound and light.
 
 [![CI](https://github.com/olerast67/emotion-keychain/actions/workflows/ci.yml/badge.svg)](https://github.com/olerast67/emotion-keychain/actions/workflows/ci.yml)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-1d3f8f?logo=cplusplus&logoColor=white)
 ![nRF52840](https://img.shields.io/badge/MCU-nRF52840-1d3f8f)
 ![OLED](https://img.shields.io/badge/OLED-SSD1306_128%C3%9764-1d3f8f)
 ![Emotions](https://img.shields.io/badge/emotions-139-c7a35a)
-![PCB](https://img.shields.io/badge/PCB-rev_B_%C2%B7_4_layers_%C2%B7_DRC_0-1d3f8f?logo=kicad&logoColor=white)
-[![License](https://img.shields.io/badge/license-PolyForm_Noncommercial-c7a35a)](LICENSE.md)
+[![Code: Apache-2.0](https://img.shields.io/badge/code-Apache--2.0-c7a35a)](LICENSE)
+[![Hardware: CERN-OHL-W-2.0](https://img.shields.io/badge/hardware-CERN--OHL--W--2.0-c7a35a)](hardware/LICENSE)
+[![Docs: CC-BY-4.0](https://img.shields.io/badge/docs-CC--BY--4.0-c7a35a)](LICENSES/CC-BY-4.0.txt)
 
-[Владельцу](docs/user-guide.md) · [Движок](docs/engine.md) · [Эмоции](docs/emotions.md) · [Голос](docs/sound.md) · [Встречи](docs/encounters.md) · [Железо](docs/hardware.md) · [Плата](hardware/rev-b/README.md) · [Корпус](hardware/rev-b/case/README.md) · [Энергия](docs/power.md) · [План](docs/plan.md)
+[Owner's guide](docs/user-guide.en.md) · [Engine](docs/engine.en.md) · [Emotions](docs/emotions.en.md) · [Voice](docs/sound.en.md) · [Encounters](docs/encounters.en.md) · [Hardware](docs/hardware.en.md) · [Board](hardware/rev-b/README.en.md) · [Case](hardware/rev-b/case/README.en.md) · [Power](docs/power.en.md) · [Plan](docs/plan.en.md)
 
 </div>
 
 ---
 
-## Что он умеет
+> [!IMPORTANT]
+> **Project status**
+> - **Works today:** the face engine, the simulators (desktop and browser) and the **ESP32 test stand** — a cheap dev board with a real OLED screen.
+> - **Designed, not built yet:** the **rev B keychain board**. It passes DRC and a full simulation of its firmware, but it has **not been fabricated or tested** on real hardware. Order it only if you are fine with being the first to try it.
+> - **Battery life numbers are estimates** from a simulation of the board, not measurements.
 
-- **139 эмоций.** Радость, смех, грусть, злость, удивление, сон, головокружение, «слушает», «кушает» на зарядке — и мемные: орущий сойджак, Ленни, `¯\_(ツ)_/¯`, FFFUUU, `$_$`, переворот стола. [Весь каталог](docs/emotions.md).
-- **Каждая эмоция живая.** Моргание, взгляд, подвижные зрачки и фирменный жест: дыхание, брови, прищур, наклон головы, «болтовня». Переходы плавные, смена формы глаз спрятана за морганием.
-- **Характер.** Персонаж сам выбирает реакцию на ситуацию: тап, тряску, падение, хлопок, музыку, темноту, холод, зарядку, долгое одиночество. Варианты реакций чередуются, у раздражения есть лестница от «-_-» до переворота стола.
-- **Двух одинаковых не бывает.** Характер и внешность выводятся из серийного номера чипа. Один брелок из ста — легендарный, с золотым кибер-глазом.
-- **Дружба брелоков.** Встречи день за днём поднимают дружбу от NEW FRIEND до BFF. Старший брелок дарит младшему эмоцию, старые знакомые иногда шепчутся шифром.
-- **Растёт вместе с хозяином.** На старте 44 эмоции, остальные открываются «имплантами» за дни вместе, касания, шаги и встречи — примерно за месяц. Сверху — серия дней вместе и 24 достижения с кубком: от FIRST FRIEND до MARATHON и 1337. На брелоке rev B открываются 23: KNOCK KNOCK за секретный стук там пока не получить.
-- **Сюрпризы и пасхалки.** Иногда сам «взламывает» что-то, прячется, перезагружается, выдаёт ERROR 404: MOOD NOT FOUND, синий экран «:(» или визор-сканер. Празднует Новый год, Хэллоуин и твой день рождения. Знает день π, POEKHALI! 12 апреля, MAY THE 4TH, DONT PANIC, 1 апреля и пятницу 13-е. В 13:37 переходит в H4X0R MODE. Праздники и пасхалки по часам — когда дата и время заданы с компьютера: часов с батарейкой у брелока нет, и после выключения кнопкой их задают снова. На стенде ESP32 и в симуляторе в браузере отвечает на секретный стук «Shave and a haircut»; на брелоке rev B стук пока не срабатывает. На зарядке гоняет логотип, пока тот не попадёт точно в угол.
-- **Батарея — часть характера.** Зарядка показывает наливающуюся батарею с процентом. Голодный благодарит, что покормили. При малом заряде сам переходит в экорежим, при пустой батарее желает спокойной ночи.
-- **Десять характеров:** игрун, ворчун, соня, скромник, любопытный, пофигист, драма, глюк, хитрец, добряк. У каждого своё лицо в покое, свой ответ на касания, свои занятия, темп и голос. Характер выводится из серийного номера чипа.
-- **Голос.** Пьезопищалка отвечает на касания короткими «словами» из нот, как R2-D2. У каждого характера своя нота и манера: игрун скачет, ворчун бурчит, соня сползает вниз, хитрец хихикает тройками. Сцены играют свою музыку — от рукопожатия модема при «взломе» до Happy Birthday. Ночью (по заданному времени) говорит только о важном, и тихо. [Как он звучит](docs/sound.md).
-- **Секретный разговор.** После дуэли два брелока переговариваются пищалками шифром: реплики по очереди, на экранах — знаки в пузырях, в конце мелькает «расшифровка» и ACCESS DENIED.
-- **Три темы.** Классика. Киберпанк: загрузка OLERAST LINK, прицел, который щёлкает по делу, и сбои сигнала. Ретро: лицо крупными пикселями, как на старой карманной консоли.
-- **Экран не гаснет**, пока его кто-то может видеть, и при этом экономит батарею. Кадр рисуется только при изменении лица, на экран уходят только изменённые участки, процессор спит между кадрами.
-- **Один код везде:** прошивка своей платы на nRF52840, стенд на ESP32, симуляторы на ПК и страница в браузере.
+## Three ways in
+
+| | | |
+|---|---|---|
+| **Try it in the browser** | No hardware, nothing to install. Tap the face, shake it, turn off the lights, start a duel with a neighbour. | [olerast67.github.io/emotion-keychain](https://olerast67.github.io/emotion-keychain/) |
+| **Build the ~$10 ESP32 version** | Any ESP32 dev board (C5, classic, C3 or S3), a 0.96″ SSD1306 module and four wires. Optional touch button and piezo. Flash it from the browser. | [ESP32 stand](firmware/README.en.md) |
+| **Make the rev B keychain** | The real thing: a 30 × 46 mm nRF52840 board in an acrylic case, with sensors, a piezo voice, vibration and a Li-Po cell. Not yet tested — see the status above. | [Board](hardware/rev-b/README.en.md) · [Case](hardware/rev-b/case/README.en.md) · [Firmware](firmware/README.en.md) |
+
+## Features
+
+- **139 emotions.** Joy, laughter, sadness, anger, surprise, sleep, dizziness, "listening", "eating" while charging — and memes: the screaming soyjak, Lenny, `¯\_(ツ)_/¯`, FFFUUU, `$_$`, the table flip. [Full catalogue](docs/emotions.en.md).
+- **Every face is alive.** Blinking, gaze, moving pupils and a signature gesture each: breathing, eyebrows, squinting, head tilt, chatter. Transitions are smooth, and eye shape changes hide behind a blink.
+- **Ten characters:** playful, grumpy, sleepy, shy, curious, chill, drama, glitchy, sly and kind. Each has its own resting face, its own answer to touches, its own hobbies, tempo and voice. The character and looks come from the chip's serial number, so no two keychains are the same. One in a hundred is legendary, with a golden cyber eye.
+- **It reacts to the world.** Taps, shaking, falls, claps, music, darkness, cold, charging, long loneliness. Reactions rotate, and annoyance has a ladder from "-_-" to flipping the table.
+- **Growth and achievements.** It starts with 44 emotions and unlocks the rest as "implants" for days together, touches, steps and encounters — about a month in all. On top: a streak of days together and 24 achievements with a trophy, from FIRST FRIEND to MARATHON and 1337.
+- **Synthesized voice.** A piezo buzzer answers touches with short "words" made of notes, R2-D2 style, and every character has its own pitch and manner. Scenes have their own music, from a modem handshake during a "hack" to Happy Birthday. [How it sounds](docs/sound.en.md).
+- **Encounters and duels over Bluetooth, without pairing.** Two keychains nearby find each other on their own, become friends day by day from NEW FRIEND to BFF, duel, and the older one gifts the younger an emotion. After a duel they chat in a beeping cipher. [Protocol](docs/encounters.en.md).
+- **Surprises and easter eggs.** Fake hacks, hiding, reboots, ERROR 404: MOOD NOT FOUND, a ":(" blue screen, holidays and your birthday, H4X0R MODE at 13:37, and a logo bouncing until it hits the corner while charging.
+- **Three themes:** classic, cyberpunk and retro (big pixels like an old handheld).
+- **Kind to the battery.** A frame is drawn only when the face changes, only the changed parts go to the screen, and the CPU sleeps between frames.
+- **One codebase everywhere:** the rev B firmware (nRF52840), the ESP32 stand, desktop simulators and the browser page.
 
 <div align="center">
-<img src="docs/img/highlights.gif" width="100%" alt="Восемь эмоций в движении">
+<img src="docs/img/highlights.gif" width="100%" alt="Eight emotions in motion">
 </div>
 
-## Как это работает
+## How it works
 
 ```mermaid
 flowchart LR
-  IMU["Акселерометр<br/>тап · тряска · падение · шаги"] --> B
-  MIC["Микрофон<br/>речь · музыка · хлопок"] --> B
-  LUX["Датчик света<br/>темно · ярко"] --> B
-  PWR["Батарея и USB<br/>заряд · зарядка"] --> B
-  CLK["Часы<br/>день · ночь"] --> B
-  B["Behavior<br/>настроение и реакции"] --> E["FaceEngine<br/>лицо · переходы · жесты"]
-  E -- "только изменённые окна" --> D["SSD1306<br/>128×64 по I2C"]
-  B --> V["Voice<br/>реплики · музыка сцен"]
-  V -- "частота ШИМ" --> Z["Пьезопищалка"]
+  IMU["Accelerometer<br/>tap · shake · fall · steps"] --> B
+  MIC["Microphone<br/>speech · music · clap"] --> B
+  LUX["Light sensor<br/>dark · bright"] --> B
+  PWR["Battery and USB<br/>charge · charging"] --> B
+  CLK["Clock<br/>day · night"] --> B
+  B["Behavior<br/>mood and reactions"] --> E["FaceEngine<br/>face · transitions · gestures"]
+  E -- "changed windows only" --> D["SSD1306<br/>128×64 over I2C"]
+  B --> V["Voice<br/>phrases · scene music"]
+  V -- "PWM frequency" --> Z["Piezo"]
 ```
 
-Подробно — в [описании движка](docs/engine.md).
+Details are in the [engine description](docs/engine.en.md).
 
-## Устройство
-
-| | |
-|---|---|
-| **Экран** | белый OLED 0.96″, SSD1306, 128×64 |
-| **Мозг** | nRF52840: модуль Raytac MDBT50Q на своей плате rev B |
-| **Датчики** | акселерометр LIS3DH, PDM-микрофон, датчик света LTR-303ALS, кнопка |
-| **Голос и отдача** | пьезопищалка, вибромотор |
-| **Питание** | Li-Po с платой защиты: 402025, 502025 или 602025 (150–250 мА·ч); зарядка по USB-C током 100 мА, только при 10–42 °C по температуре кристалла nRF |
-| **Плата** | 30×46 мм и ушко для кольца, 4 слоя, файлы для заказа на JLCPCB и PCBWay |
-| **Корпус** | акриловый «бутерброд» под лазерную резку: 35×51 мм, толщина 18.8, 19.8 или 20.8 мм — три версии S, M, L под ячейки разной толщины |
-| **Автономность** | обычный день — ≈11, 15 и 18 дней (S, M, L); 16 ч лица в сутки — ≈3–5 дней. Оценка по симуляции платы |
-
-Компоненты, стек плат и закупки — в [docs/hardware.md](docs/hardware.md), расчёт тока — в [docs/power.md](docs/power.md). Как пользоваться брелоком — зарядка, кнопка, лица, встречи, хранение — в [памятке владельцу](docs/user-guide.md).
-
-## Своя плата и корпус
+## The rev B keychain
 
 <div align="center">
-<img src="docs/img/pcb-rev-b.png" width="600" alt="Плата rev B: лицевая сторона с модулем nRF52840 и оборот с USB-C, зарядкой, датчиками и пищалкой">
+<img src="docs/img/pcb-rev-b.png" width="600" alt="Rev B board: front with the nRF52840 module, back with USB-C, charger, sensors and piezo">
 </div>
 
 <table>
 <tr>
-<td width="50%"><img src="docs/img/case-3d.png" alt="Брелок в корпусе из акрила: экран с лицом за прозрачной крышкой"></td>
-<td width="50%"><img src="docs/img/case-exploded.png" alt="Корпус в разборе: крышка, рамки, модуль экрана, плата, рамка оборота и дно"></td>
+<td width="50%"><img src="docs/img/case-3d.png" alt="The keychain in its acrylic case: the screen with a face behind a clear cover"></td>
+<td width="50%"><img src="docs/img/case-exploded.png" alt="Exploded case: cover, frames, screen module, board, back frame and bottom"></td>
 </tr>
 <tr>
-<td align="center">В сборе: экран за прозрачной крышкой</td>
-<td align="center">В разборе: слои акрила, модуль экрана и плата</td>
+<td align="center">Assembled: the screen behind a clear cover</td>
+<td align="center">Exploded: acrylic layers, screen module and board</td>
 </tr>
 </table>
 
-**Плата rev B** готова к заказу: DRC — 0 ошибок, 0 несоединённых и 0 предупреждений; панель для монтажа — в [`hardware/rev-b/out/panel`](hardware/rev-b/out/panel).
+| | |
+|---|---|
+| **Screen** | white 0.96″ OLED, SSD1306, 128×64 |
+| **Brain** | nRF52840: Raytac MDBT50Q module on the rev B board |
+| **Sensors** | LIS3DH accelerometer, PDM microphone, LTR-303ALS light sensor, button |
+| **Voice and feedback** | piezo buzzer, vibration motor |
+| **Power** | protected Li-Po cell, 402025, 502025 or 602025 (150–250 mAh); USB-C charging at 100 mA, only at 10–42 °C by the nRF die temperature |
+| **Board** | 30 × 46 mm plus a ring tab, 4 layers, production files for JLCPCB and PCBWay |
+| **Case** | laser-cut acrylic "sandwich", 35 × 51 mm, 18.8 / 19.8 / 20.8 mm thick in three versions S, M, L for different cells |
+| **Battery life (estimate)** | a typical day — about 11, 15 and 18 days (S, M, L); 16 h of face a day — about 3–5 days. **Simulation estimate, not measured** |
 
-- **Генерация из одного описания.** Схема, расстановка, разводка, Gerber, BOM и CPL строятся скриптами из [`netlist.py`](hardware/rev-b/gen/netlist.py), в KiCad руками ничего не правится.
-- **Четыре слоя.** L2 — сплошная земля. L3 — шины питания и медленные сигналы. Антенна у правого края, под ней меди нет.
-- **Трассировка в три прохода.** Шины питания кладёт свой трассировщик, сигналы — Freerouting, остаток доводит собственный трассировщик по трём слоям.
-- **Монтаж.** Мелочь с двух сторон ставит завод — JLCPCB или PCBWay, на панели из двух плат 76 × 72 мм. Руками — модуль экрана, ячейка и вибромотор, около 15 минут.
+- **Generated from one description.** Schematic, placement, routing, Gerber, BOM and CPL are built by scripts from [`netlist.py`](hardware/rev-b/gen/netlist.py); nothing is edited by hand in KiCad.
+- **Four layers,** a solid ground plane, the antenna at the edge with no copper under it.
+- **Assembly:** the factory places the small parts on both sides; by hand you add the screen module, the cell and the vibration motor (about 15 minutes).
+- **Ready to order:** production files are in [`hardware/rev-b/out`](hardware/rev-b/out) and [`hardware/rev-b/out/panel`](hardware/rev-b/out/panel). Remember that nobody has built one yet.
 
-**Корпус** — слои акрила, стянутые четырьмя нейлоновыми винтами M2 × 25 (у всех версий). Экран и плата видны насквозь, торцы закрыты. Три версии, S, M и L, отличаются ячейкой (402025, 502025, 602025) и верхней рамкой вокруг неё (3, 4 или 5 мм), а с ними — гребёнкой экрана (у M и L длинная, от 15 мм) и длиной трубки микрофона. На ушках рамок лежит модуль экрана, покупных стоек нет. Сверху выходит ушко для кольца, снизу — вырез под USB-C, справа — толкатель кнопки на приливе рамки оборота, в дне — отверстие над пищалкой. Что купить для каждой версии — в [README корпуса](hardware/rev-b/case/README.md#три-версии-s-m-l), файлы резки в SVG и DXF — в [`hardware/rev-b/case/out`](hardware/rev-b/case/out).
+Parts, stack-up and sourcing: [docs/hardware.en.md](docs/hardware.en.md). Current budget: [docs/power.en.md](docs/power.en.md). Using the keychain: [owner's guide](docs/user-guide.en.md).
 
-**Для заказа платы ничего запускать не нужно:** она разведена и проверена, файлы для завода лежат в [`hardware/rev-b/out`](hardware/rev-b/out) (одна плата) и [`hardware/rev-b/out/panel`](hardware/rev-b/out/panel) (панель для монтажа) и загружаются как есть — по [README платы](hardware/rev-b/README.md#заказ-на-jlcpcb). Генераторы нужны, только чтобы изменить плату или корпус:
+## Repository layout
 
-```sh
-cd hardware/rev-b/gen
-python3 build.py fab        # DRC и файлы для заказа → out/, out/panel/ (панель — через KiKit, см. README платы)
-cd ../case && python3 case.py && python3 selftest.py && python3 viewer.py   # корпус, проверка проверок, 3D-просмотр
+```
+engine/          face engine: C++20, no heap, no exceptions, no libm
+  include/face/  headers: face parameters, catalogue, engine, behaviour
+  src/           rendering, animation, 139 emotion presets, behaviour
+  tests/         tests with no external dependencies
+firmware/        firmware: rev B board (nRF52840) and the ESP32 stand
+  src/keychain/  rev B: sensors, radio, power, console
+  bootloader/    bootloader for the first flash over SWD
+  release/       ready-made firmware files
+hardware/
+  rev-b/         the rev B board: KiCad, Gerber, BOM, CPL, schematic PDF
+    gen/         generators: netlist.py, placement, routing, production files
+    case/        acrylic case: cut files and a 3D viewer
+sim/
+  cli/           facegen — GIFs, contact sheets, benchmark, catalogue
+  sdl/           facesim — desktop window simulator
+  web/           browser simulator (the engine in WebAssembly)
+docs/            engine, emotions, hardware, power, plan, owner's guide
+tools/           helper scripts
+LICENSES/        licence texts (see REUSE.toml)
 ```
 
-`build.py place --force` и `build.py route` расставляют и разводят плату заново (для `route` нужны Java 21 и Freerouting). Без `--force` `place` разведённую плату не затрёт, а `fab` не выпустит файлы с платы без дорожек, с ошибками DRC или несоединёнными площадками. Вернуть плату и файлы из репозитория:
+## Build
 
-```sh
-git checkout -- hardware/rev-b/keychain-rev-b.kicad_pcb hardware/rev-b/Keychain.pretty hardware/rev-b/out
-```
-
-`viewer.py` собирает `case/out/keychain-3d.html`: модель брелока с вращением и разбором по слоям. Открывается в браузере без сервера. Что нужно для скриптов (KiCad 7, cairosvg, facegen) — в [README корпуса](hardware/rev-b/case/README.md).
-
-## Быстрый старт
-
-Нужны CMake 3.16+ и компилятор с C++20 (GCC 10+ или Clang 12+). SDL2 нужен только для оконного симулятора.
+You need CMake 3.16+ and a C++20 compiler (GCC 10+ or Clang 12+). SDL2 is only needed for the window simulator.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
-./build/face_tests                              # тесты движка
-./build/facegen list                            # все эмоции и клипы
-./build/facegen anim lenny out/lenny.gif        # эмоция в GIF
-./build/facegen trans neutral laugh out/t.gif   # переход между эмоциями
-./build/facegen sheet out/all.gif --scale 2     # контактный лист всех эмоций
-./build/facegen bench                           # кадры и нагрузка на шину по каждой эмоции
-./build/facegen scene hack out/hack.gif         # сцена-сюрприз в GIF (--theme cyber — киберпанк)
-./build/facegen id 9                            # какой персонаж получится из серийного номера
-./build/facegen sound all out/voice.wav         # голос брелока в WAV (--serial N — другой брелок)
-./build/facesim                                 # окно с лицом (если есть SDL2)
+./build/face_tests                              # engine tests
+./build/facegen list                            # all emotions and clips
+./build/facegen anim lenny out/lenny.gif        # one emotion as a GIF
+./build/facegen trans neutral laugh out/t.gif   # a transition between two emotions
+./build/facegen sheet out/all.gif --scale 2     # contact sheet of all emotions
+./build/facegen scene hack out/hack.gif         # a surprise scene (--theme cyber for cyberpunk)
+./build/facegen sound all out/voice.wav         # the keychain's voice as WAV (--serial N for another one)
+./build/facesim                                 # window with a face (if SDL2 is present)
 ```
 
-### Симулятор в браузере
+Browser simulator (needs clang with the wasm32 target and wasm-ld from lld):
 
 ```sh
-sim/web/build.sh    # нужны clang с целью wasm32 и wasm-ld (пакет lld)
+sim/web/build.sh    # then open sim/web/dist/index.html, no server needed
 ```
 
-Откройте `sim/web/dist/index.html`, сервер не нужен. На странице:
-
-- тапы прямо по экрану;
-- ситуации: тряска, падение, музыка, темнота, зарядка;
-- голос через кнопку «Пищалка», встреча и дуэль с соседом, секретный разговор;
-- выбор любой из 139 эмоций и жесты;
-- ускорение времени;
-- живые цифры: кадры в секунду и занятость шины.
-
-### На своей плате
-
-Прошивка платы rev B — в [firmware/README.md](firmware/README.md#плата-rev-b), откуда брать файлы — в [«Где взять файлы»](firmware/README.md#где-взять-файлы).
-
-- **Готовые файлы** — в [`firmware/release/`](firmware/release/README.md): `keychain-revb-factory.hex` для программатора или завода, `keychain-revb.uf2` для диска KEYCHAIN, `keychain-revb-dfu.zip` для adafruit-nrfutil. Версия и коммит — в README той же папки. Это файлы для прототипов: в них USB-номера Adafruit. Брелоки на продажу прошивают своей сборкой со своими номерами (раздел `[sale]` в `firmware/platformio.ini`).
-- **Своя сборка:** `cd firmware && pio run -e keychain` → `firmware/.pio/build/keychain/firmware-factory.hex`, `firmware.uf2` и `firmware.zip`. Когда GitHub Actions снова запускается, те же файлы лежат в артефактах CI.
-- **Старая прошивка не подходит.** Сборки до коммита `098681e` на этой плате не заряжают ячейку: в них нет CHG_EN на P0.24, а акселерометр ищется по адресу 0x18. Какая прошивка залита, видно по команде `ver` в консоли (старая отвечает «Не знаю такую команду»); приветствие при включении до терминала обычно не доходит.
-
-Один раз программатором по SWD записывается загрузчик или сразу заводской файл, плата при этом питается от USB-C. Дальше — файл `.uf2` на диск KEYCHAIN или `pio run -e keychain -t upload`. Без прошивки ячейка не заряжается: заряд включает прошивка, и только при 10–42 °C по температуре кристалла nRF.
-
-### На живом экране
-
-ESP32-C5, обычная ESP32, C3 или S3 и модуль SSD1306 на четырёх проводах. Прошивка ставится из браузера через [olerast.com/flash](https://olerast.com/flash) или через PlatformIO:
+Firmware (PlatformIO):
 
 ```sh
-cd firmware && pio run -e esp32c5 -t upload && pio device monitor
+cd firmware
+pio run -e esp32c5 -t upload && pio device monitor   # ESP32 stand (also esp32dev, esp32c3, esp32s3)
+pio run -e keychain                                  # rev B board → .pio/build/keychain/
 ```
 
-Подключение, команды и что проверить на панели — в [firmware/README.md](firmware/README.md).
+Ready-made firmware files are in [`firmware/release/`](firmware/release/README.en.md). The first flash of a rev B board goes over SWD with a Raspberry Pi Pico as the programmer, see the [bootloader notes](firmware/bootloader/README.en.md). Board and case generators (KiCad 7, Python) are described in the [board README](hardware/rev-b/README.en.md) and [hardware overview](hardware/README.en.md).
 
-## Структура
+## How this was made
 
-```
-engine/          движок лиц: C++20 без кучи, исключений и libm
-  include/face/  заголовки: параметры лица, каталог, движок, поведение
-  src/           отрисовка, анимация, 139 пресетов эмоций, поведение
-  tests/         тесты без внешних зависимостей
-firmware/        прошивки: плата rev B (nRF52840) и стенд на ESP32
-  src/keychain/  плата rev B: датчики, радио, питание, консоль
-  bootloader/    загрузчик для первой прошивки по SWD
-hardware/
-  rev-b/         своя плата: KiCad, Gerber, BOM, CPL, схема в PDF
-    gen/         генераторы: netlist.py, расстановка, разводка, файлы для заказа
-    case/        корпус из акрила: файлы резки и 3D-просмотр
-sim/
-  cli/           facegen — GIF, контактные листы, бенчмарк, каталог
-  sdl/           facesim — оконный симулятор
-  web/           симулятор в браузере (движок в WebAssembly)
-docs/            движок, эмоции, железо, энергия, план
-tools/           вспомогательные скрипты
-```
+This project was built by a non-expert — not an electronics engineer or a professional programmer — working with an AI assistant, Claude by Anthropic. The engine, the firmware, the board generators, the case and these docs were written in conversation, then checked with tests, simulation, DRC and many review passes. That is also why the status box above is so careful: what has not been tested on real hardware is clearly marked. Bug reports and fixes from people who know better are very welcome.
 
-## Дорожная карта
+## Licences
 
-- [x] Движок лиц: 139 эмоций, переходы, жесты, поведение
-- [x] Симуляторы: консольный, оконный, в браузере
-- [x] Прошивка стенда: ESP32-C5 / ESP32 / C3 / S3 + SSD1306 + сенсорная кнопка
-- [x] Свой характер у каждого брелока, рост и импланты, сцены-сюрпризы, праздники, киберпанк-тема
-- [x] Голос: реплики пищалкой, музыка сцен, секретный разговор после дуэли
-- [x] Достижения и серии, дружба брелоков, батарея в характере, ретро-тема, пасхалки
-- [x] Встречи брелоков и дуэли по Bluetooth в прошивке платы ([протокол](docs/encounters.md))
-- [x] Своя плата rev B — схема, разводка, файлы для JLCPCB и PCBWay, исправления по предрелизному аудиту
-- [x] Корпус-«бутерброд» из акрила в трёх версиях и 3D-просмотр
-- [x] Прошивка платы rev B: датчики, голос, вибро, встречи, сон, заряд по температуре, загрузчик UF2
-- [x] Симуляция платы целиком: настоящая прошивка на моделях микросхем, две платы и эфир
-- [ ] Заказ, сборка и запуск rev B
-- [ ] Замеры тока и тест разряда на живой плате
-- [ ] Настоящие датчики: пороги тапов, шагов, звука и света по записям с рюкзака
-- [ ] Механика: падение, рывок за ушко, брызги, неделя носки
-- [ ] Rev C: полностью заводская сборка — экран на разъёме FPC, разъём JST под ячейку, SMD-вибромотор
+The project is fully open source. You may build, modify and sell keychains, boards and cases under these terms:
 
-Этапы с критериями готовности — в [docs/plan.md](docs/plan.md).
+| What | Licence | File |
+|---|---|---|
+| Code: `engine/`, `firmware/`, `sim/`, `tools/`, CMake and scripts | Apache-2.0 | [LICENSE](LICENSE), [NOTICE](NOTICE) |
+| Hardware: `hardware/` — KiCad files, generators, Gerber, BOM/CPL, case files | CERN-OHL-W-2.0 | [hardware/LICENSE](hardware/LICENSE), [text](LICENSES/CERN-OHL-W-2.0.txt) |
+| Documentation and images: `docs/`, README files, `*.md`, PNG and GIF | CC-BY-4.0 | [text](LICENSES/CC-BY-4.0.txt) |
 
-## Как добавить эмоцию
+[REUSE.toml](REUSE.toml) maps every path to its licence. Firmware binaries also contain third-party code under its own licences (the Adafruit nRF52 Arduino core under LGPL-2.1, the Nordic SoftDevice S140 under Nordic's licence, and more): see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-1. Добавьте id в `FACE_EXPR_LIST` в [`engine/include/face/expressions.h`](engine/include/face/expressions.h).
-2. Опишите пресет на том же месте в [`engine/src/expressions.cpp`](engine/src/expressions.cpp): глаза, брови, рот, значки, жест.
-3. Проверьте: `./build/facegen anim <id> out/x.gif` и `./build/face_tests`.
-4. Пересоберите каталог: `./build/facegen catalog docs/emotions.md`. CI проверяет, что он совпадает с кодом.
+**Trademarks.** The project name, logo, mascot and character art style and the OLERAST brand are not licensed. Forks and derivative products must use a different name; "compatible with Emotion keychain" or "based on Emotion keychain" is fine. See [TRADEMARKS.md](TRADEMARKS.md).
 
-Идеи эмоций удобно заводить [задачей по шаблону](https://github.com/olerast67/emotion-keychain/issues/new/choose).
+## Contributing
 
-## Лицензия
+Ideas for new emotions are easiest to file with the [issue template](https://github.com/olerast67/emotion-keychain/issues/new/choose). To add an emotion yourself: add its id to `FACE_EXPR_LIST` in [`engine/include/face/expressions.h`](engine/include/face/expressions.h), describe the preset in [`engine/src/expressions.cpp`](engine/src/expressions.cpp), check it with `./build/facegen anim <id> out/x.gif` and `./build/face_tests`, and regenerate the catalogue with `./build/facegen catalog docs/emotions.md` (CI checks that it matches the code).
 
-Код открыт по [PolyForm Noncommercial 1.0.0](LICENSE.md). Собрать брелок для себя, менять код, рисовать свои эмоции и делиться ими можно бесплатно.
+## Support
 
-Файлы платы и корпуса в `hardware/` — на тех же некоммерческих условиях. Продавать устройства, наборы, платы или корпуса с этим кодом или по этим файлам можно только по коммерческой лицензии: процент с продаж или разовая оплата. Условия — в [COMMERCIAL.md](COMMERCIAL.md).
+If you like the project and want to help it reach a tested board:
+
+- Support: Boosty — &lt;link coming soon&gt;; crypto — &lt;addresses coming soon&gt;

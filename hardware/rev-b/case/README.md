@@ -14,7 +14,7 @@ python3 viewer.py --render ../../../docs/img/pcb-rev-b.png   # картинка 
 
 **Готовые файлы резки и `keychain-3d.html` уже лежат в `out/`** — на номинальные листы. Чтобы резать, скрипты запускать не нужно. Запуск нужен, если вы поменяли плату или `OLED` в `gen/footprints.py` или хотите пересчитать всё по своим листам: тогда `case.py` перепишет `out/`.
 
-**Что нужно для скриптов.** Все работают в Python с модулем `pcbnew` из KiCad 7, как и [скрипты платы](../README.md) (в Linux это системный `python3`). `viewer.py` ещё нужны `kicad-cli`, Pillow и cairosvg: `pip install pillow cairosvg`, другой путь — в переменной `CAIROSVG`; подойдёт и `rsvg-convert`. Лицо на экран `viewer.py` берёт из `build/facegen` в корне репозитория (сборка движка, см. [README](../../../README.md)) или из пути в `FACEGEN`. Для `--shots` нужен Node.js с Playwright (`shots.js`); если браузер не достаёт до CDN, укажите в `THREE_DIR` распакованный пакет npm `three@0.128.0`.
+**Что нужно для скриптов.** Все работают в Python с модулем `pcbnew` из KiCad 7, как и [скрипты платы](../README.md) (в Linux это системный `python3`). `viewer.py` ещё нужны `kicad-cli`, Pillow и cairosvg: `pip install pillow cairosvg`, другой путь — в переменной `CAIROSVG`; подойдёт и `rsvg-convert`. Лицо на экран `viewer.py` берёт из `build/facegen` в корне репозитория (сборка движка, см. [README](../../../README.ru.md)) или из пути в `FACEGEN`. Для `--shots` нужен Node.js с Playwright (`shots.js`); если браузер не достаёт до CDN, укажите в `THREE_DIR` распакованный пакет npm `three@0.128.0`.
 
 ## Три версии: S, M, L
 
