@@ -1850,6 +1850,53 @@ static void test_battery_care() {
   CHECK(eng.expression() != Expr::sleeping, "кнопка будит: %s", expression(eng.expression()).id);
 }
 
+// Выключение не ждёт других сцен: идущая обрывается вместе с музыкой, очередь — свои и общие —
+// сбрасывается, прощание начинается сразу. Иначе экран гас бы позже 10 с от нажатия, и жест
+// загрузчика (держать кнопку и подключить USB) не успевал бы.
+static void test_power_off_now() {
+  for (int low = 0; low < 2; ++low) {
+    FaceEngine eng;
+    Behavior bh;
+    Voice v;
+    eng.init(7, 0);
+    bh.init(&eng, 7, 0);
+    v.init(&temperament(Archetype::playful), 7);
+    bh.attach_voice(&v);
+    bh.set_clock(12 * 60);
+    bh.update(0);
+    SceneParams p;
+    p.set_text("FRIEND");
+    // Долгий общий разговор идёт, за ним в очереди — общая дуэль, достижение и имплант.
+    bh.queue_shared(Scene::chat, p, Expr::happy, 1000, "разговор");
+    bh.queue_scene(Scene::achievement, p, Expr::proud, 1000, "достижение");
+    bh.queue_scene(Scene::upgrade, p, Expr::happy, 1000, "имплант");
+    bh.queue_shared(Scene::duel, p, Expr::happy, 1100, "дуэль");
+    SceneLog before;
+    run_log(bh, eng, 1100, 2000, before, 20);
+    CHECK(eng.scene() == Scene::chat && v.busy(2000), "до выключения идёт разговор со своей музыкой");
+    bh.power_off(2000, low != 0);
+    CHECK(eng.scene() == Scene::shutdown && eng.scene_params().value == low,
+          "%s: прощание сразу, не после разговора и очереди (сцена %s)", low ? "пустая ячейка" : "кнопка",
+          scene_id(eng.scene()));
+    // Общая сцена, пришедшая во время прощания, его не прерывает.
+    bh.queue_shared(Scene::greet, p, Expr::happy, 2500, "встреча");
+    eng.update(2500);
+    CHECK(eng.scene() == Scene::shutdown, "встреча во время прощания его не прерывает");
+    const uint32_t end = 2000 + scene_duration_ms(Scene::shutdown);
+    SceneLog after;
+    run_log(bh, eng, 2500, end + 100, after, 20);
+    CHECK(eng.scene() == Scene::None && after.n == 1 && after.seen[0] == Scene::shutdown,
+          "прощание кончилось через %u мс после выключения, других сцен не было (%d)",
+          (unsigned)scene_duration_ms(Scene::shutdown), after.n);
+    CHECK(!v.busy(end + 600), "музыка разговора не тянется после прощания");
+    // Сброшенная очередь не возвращается и позже.
+    run_log(bh, eng, end + 100, 40000, after, 50);
+    CHECK(!after.has(Scene::chat) && !after.has(Scene::duel) && !after.has(Scene::achievement) &&
+              !after.has(Scene::upgrade),
+          "разговор, дуэль, достижение и имплант из очереди не показываются");
+  }
+}
+
 static void test_friendship_and_gifts() {
   FaceEngine eng;
   Behavior bh;
@@ -3490,6 +3537,7 @@ int main() {
   test_date_and_time_eggs();
   test_knock_code();
   test_battery_care();
+  test_power_off_now();
   test_friendship_and_gifts();
   test_whisper_sync();
   test_battery_settle();

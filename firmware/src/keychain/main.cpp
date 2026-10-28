@@ -7,8 +7,8 @@
 //   батарея и USB — заряд, экорежим, выключение на пустой ячейке;
 //   радио — встречи, дуэли и разговор шифром с другими брелоками (docs/encounters.md).
 //
-// Кнопка: нажатие — «кнопка» для характера; двойное — включить или выключить дуэли;
-// удержание 3 с — выключить (проснётся от кнопки или USB).
+// Кнопка: нажатие — «кнопка» для характера; двойное — включить или выключить дуэли; тройное —
+// звук; удержание 3 с — выключить (проснётся от кнопки или USB).
 // Консоль USB на 115200 — `?` выводит список команд.
 #include <Arduino.h>
 #include <Wire.h>
@@ -47,6 +47,8 @@ namespace {
 constexpr uint64_t kDayMs = 24ull * 3600000ull;
 constexpr uint32_t kDarkScreenOffMs = 60000;  // в кармане дольше минуты — экран гаснет
 constexpr uint32_t kLongPressMs = 3000;
+// Серия нажатий: следующее нажатие — не позже 400 мс после отпускания прошлого.
+constexpr uint32_t kSeriesGapMs = 400;
 // Загрузчик по кнопке: USB подключили, пока кнопку держат, и зажали её не раньше чем за 10 с.
 // Кнопка, которую держат дольше (залипла или зажата с самого включения), загрузчик не включает.
 constexpr uint32_t kDfuPressMs = 10000;
@@ -112,7 +114,7 @@ uint32_t cfg_changed_at = 0;
 
 // Кнопка (poll_button): нажата ли после подавления дребезга и с какого момента.
 bool btn_down = false, long_fired = false;
-uint8_t taps = 0;  // нажатий в серии: следующее — не позже 400 мс после отпускания
+uint8_t taps = 0;  // отпущенных нажатий в серии; tap_at — когда отпустили последнее
 uint32_t btn_t0 = 0, btn_change = 0, tap_at = 0;
 
 bool verbose = false;
@@ -645,7 +647,12 @@ void poll_battery(uint32_t now) {
     save_all(now, true);
     hal::enter_bootloader();
   }
-  if (usb != usb_seen) hal::usb_crystal(usb);
+  // Кварц для USB — по уровню, на каждом проходе: запрос у SoftDevice один на приложение, и
+  // TinyUSB снимает его при каждом отключении. Дребезг VBUS между двумя проходами (отключили и
+  // сразу подключили) этот цикл не видит — запрос по одному фронту там бы и пропал, и USBD
+  // остался бы на внутреннем генераторе. Повторный запрос ничего не стоит; ждать кварц — только
+  // при подключении.
+  hal::usb_crystal(usb, usb && !usb_seen);
   const bool usb_prev = usb_seen;
   usb_seen = usb;
   const bool opened = update_charge_gate(usb);
@@ -793,8 +800,10 @@ void poll_radio(uint32_t now) {
   radio::set_advert(enc.advert(now));
   radio::update(now);
 
+  // Во время выключения встреч нет: прощание идёт до конца, а знакомый, записанный в эти
+  // секунды, остался бы и после factory yes. Сосед сыграет общую сцену у себя.
   Meeting m;
-  if (!enc.poll(now, &m)) return;
+  if (powering_off || !enc.poll(now, &m)) return;
   const Identity peer = identity_from_hash(m.peer);
   eng.note_activity(now);
   if (m.kind == Rendezvous::Duel) {
@@ -821,22 +830,35 @@ void poll_radio(uint32_t now) {
 
 // ---------------------------------------------------------------- кнопка
 
+// Серия нажатий кончилась: одно — «кнопка» для характера, два — дуэли вкл/выкл (три решаются
+// сразу, на третьем отпускании). Во время выключения нажатия не в счёт: после factory yes они
+// записали бы касание или настройку.
+void end_series(uint32_t now) {
+  if (!powering_off) {
+    if (taps == 1)
+      event(Event::button, now);
+    else if (taps == 2)
+      set_duel_ready(!cfg.duel_ready, now);
+  }
+  taps = 0;
+}
+
 void poll_button(uint32_t now) {
   const bool raw = digitalRead(board::kButton) == LOW;
   if (raw != btn_down && now - btn_change > 25) {
     btn_down = raw;
     btn_change = now;
     if (raw) {
+      // Серия: следующее нажатие — не позже 400 мс после отпускания прошлого, сколько бы его ни
+      // держали. Нажали позже — прошлая серия решается сейчас (и если цикл задержался за срок).
+      if (taps && now - tap_at >= kSeriesGapMs) end_series(now);
       btn_t0 = now;
       long_fired = false;
       eng.note_activity(now);
       if (!screen_on) screen_power(true, now);
-    } else if (!long_fired) {
-      // Серия нажатий: одно — «кнопка» для характера, два — дуэли, три — звук. Решение — через
-      // 400 мс после последнего отпускания, тройное — сразу.
-      taps = taps && now - tap_at < 400 ? taps + 1 : 1;
+    } else if (!long_fired && !powering_off) {
       tap_at = now;
-      if (taps == 3) {
+      if (++taps == 3) {
         taps = 0;
         set_sound(!cfg.sound, now);
       }
@@ -844,16 +866,14 @@ void poll_button(uint32_t now) {
   }
   if (btn_down && !long_fired && now - btn_t0 >= kLongPressMs) {
     long_fired = true;
-    taps = 0;
+    taps = 0;  // удержание после коротких нажатий: серия не в счёт, только выключение
     event(Event::button_long, now);
-    powering_off = true;
-    bh.power_off(now);
+    if (!powering_off) {
+      powering_off = true;
+      bh.power_off(now);
+    }
   }
-  if (taps && !btn_down && now - tap_at >= 400) {
-    if (taps == 1) event(Event::button, now);
-    else set_duel_ready(!cfg.duel_ready, now);
-    taps = 0;
-  }
+  if (taps && !btn_down && now - tap_at >= kSeriesGapMs) end_series(now);
 }
 
 // ---------------------------------------------------------------- консоль
@@ -882,7 +902,39 @@ void help() {
       "  x <сцена>    сцена: hack birthday visor bsod …\n"
       "  v [on|off]   печатать события датчиков\n"
       "  off          выключиться; dfu — загрузчик для новой прошивки; ver — версия прошивки\n"
-      "  reset yes    начать рост заново");
+      "  reset yes    начать рост заново (настройки остаются)\n"
+      "  factory yes  перед продажей: рост, знакомые, настройки и часы — заводские, и выключиться");
+}
+
+// Заводское состояние перед продажей (factory yes): рост, достижения и знакомые — с нуля, все
+// настройки — заводские: тема, звук, дуэли, невидимка, яркость, день рождения, дата, часы и счёт
+// суток. Потом брелок выключается — так после проверки (встреча с контрольным брелоком, b 255…)
+// он уже ни с кем не встретится и ничего не запишет, а включит его покупатель. Позывной и
+// характер — от номера чипа, они не меняются.
+void factory_reset(uint32_t now) {
+  progress.reset();
+  friends.reset();
+  cfg = Settings{};
+  clock_base_up = day_t0 = uptime;
+  last_clock = (uint16_t)clock_minutes();
+  // То, что уже работает, — как после включения новой платы: прощание — в заводской теме и со
+  // звуком.
+  eng.options().theme = (Theme)cfg.theme;
+  voice.set_enabled(cfg.sound != 0);
+  radio::set_ghost(cfg.ghost != 0);
+  bh.set_birthday(0, 0);
+  bh.set_date(0, 0, 0);
+  bh.set_clock_known(false);
+  bh.set_clock(day_minutes());
+  save_all(now, true);
+  print_me();
+  // Запись не удалась — брелок не выключается: повторить команду (или запись повторится сама).
+  if (save_failed) return (void)out_line("Запись во флеш не удалась: повторите factory yes");
+  out_line("Заводское состояние записано. Выключаюсь: следующим брелок включит покупатель");
+  if (!powering_off) {
+    powering_off = true;
+    bh.power_off(now);
+  }
 }
 
 void command(char* s, uint32_t now) {
@@ -924,7 +976,12 @@ void command(char* s, uint32_t now) {
   if (!strcmp(s, "ach")) {
     for (int i = 0; i < kAchCount; ++i) {
       const Achievement& a = achievement((Ach)i);
-      out("  [%c] %-14s %s — %s\n", progress.earned((Ach)i) ? 'x' : ' ', a.tag, a.name, a.how);
+      // Секретный стук на плате rev B не складывается: «тук-тук» датчик сам сливает в двойное
+      // касание, а одиночное приходит только после 0.5 с ожидания (poll_motion). Стенд и
+      // симуляторы его слышат, брелок — пока нет.
+      const bool no_knock = (Ach)i == Ach::knock;
+      out("  [%c] %-14s %s — %s%s\n", progress.earned((Ach)i) ? 'x' : ' ', a.tag, a.name, a.how,
+          no_knock ? " (на брелоке пока не работает)" : "");
     }
     return;
   }
@@ -1022,8 +1079,10 @@ void command(char* s, uint32_t now) {
     return;
   }
   if (!strcmp(s, "off")) {
-    powering_off = true;
-    bh.power_off(now);
+    if (!powering_off) {
+      powering_off = true;
+      bh.power_off(now);
+    }
     return;
   }
   if (!strcmp(s, "dfu")) {
@@ -1040,6 +1099,11 @@ void command(char* s, uint32_t now) {
     save_all(now, true);
     return print_me();
   }
+  if (!strcmp(s, "factory") && arg && !strcmp(arg, "yes")) return factory_reset(now);
+  if (!strcmp(s, "reset") || !strcmp(s, "factory"))
+    return (void)out_line(!strcmp(s, "reset") ? "Начать рост заново: reset yes (настройки остаются)"
+                                              : "Заводское состояние для продажи: factory yes — рост, знакомые, "
+                                                "настройки и часы стираются, брелок выключается");
   out_line("Не знаю такую команду, помощь — ?");
 }
 
@@ -1096,6 +1160,7 @@ void off_on_usb() {
     tick_clock(now);
     save_all(now, false);
     const bool usb = hal::usb_present();
+    if (usb) hal::usb_crystal(true, false);  // как в poll_battery: по уровню, на каждом проходе
     update_charge_gate(usb);
     if (!usb) return;
     if (digitalRead(board::kButton) == HIGH) {
@@ -1186,7 +1251,7 @@ void setup() {
   next_health = now + 10000;
   next_fix = now;
   usb_seen = hal::usb_present();
-  if (usb_seen) hal::usb_crystal(true);
+  hal::usb_crystal(usb_seen, usb_seen);
   eng.play_scene(Scene::boot, now);
   voice.scene(Scene::boot, SceneParams{}, now);
   hal::watchdog_feed();

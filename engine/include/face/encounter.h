@@ -14,7 +14,14 @@ namespace face {
 
 // Пакет — данные производителя (Manufacturer Specific Data), 15 байт.
 constexpr int kAdvLen = 15;
-constexpr uint16_t kAdvCompany = 0xFFFF;  // прототип; для продаж — свой ID из Bluetooth SIG
+// Company ID в пакете. 0xFFFF — номер для прототипов; для продажи — свой ID из Bluetooth SIG.
+// Задаётся при сборке (-DFACE_ADV_COMPANY=0x…): у прошивки брелока — в разделе [sale] файла
+// firmware/platformio.ini, рядом с USB VID/PID. Брелоки с разными ID друг друга не узнают.
+#ifndef FACE_ADV_COMPANY
+#define FACE_ADV_COMPANY 0xFFFF
+#endif
+constexpr uint16_t kAdvCompany = FACE_ADV_COMPANY;
+static_assert(FACE_ADV_COMPANY >= 0 && FACE_ADV_COMPANY <= 0xFFFF, "Company ID — 16 бит");
 constexpr uint8_t kAdvVersion = 2;  // 2: ответ «принял» и отсчёт 4 с — со старой прошивкой встреч нет
 
 // Флаги пакета.

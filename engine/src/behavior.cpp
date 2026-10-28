@@ -1097,7 +1097,8 @@ void Behavior::queue_scene(Scene s, const SceneParams& p, Expr after, uint32_t n
 
 void Behavior::queue_shared(Scene s, const SceneParams& p, Expr after, uint32_t now, const char* why, bool fresh) {
   const Scene playing = eng_->scene();
-  if (playing != Scene::None && !(cur_shared_ && playing == cur_scene_)) {
+  // Прощание (power_off) общей сцене не уступает: та встаёт в очередь за ним.
+  if (playing != Scene::None && playing != Scene::shutdown && !(cur_shared_ && playing == cur_scene_)) {
     // Своя сцена уступает: доиграет после общих (если её запускала очередь).
     if (playing == cur_scene_ && queue_n_ < (int)(sizeof(queue_) / sizeof(queue_[0])))
       queue_[queue_n_++] = Queued{playing, eng_->scene_params(), after_scene_, after_why_, after_fresh_};
@@ -1189,6 +1190,21 @@ void Behavior::set_eco(int level) {
 
 void Behavior::power_off(uint32_t now, bool low_battery) {
   off_ = true;
+  // Прощание — сразу, а не после очереди: идущая сцена обрывается (с её музыкой), очередь — и
+  // свои сцены, и общие — сбрасывается, паузы между сценами нет. Иначе выключение ждало бы
+  // встречу, разговор или достижение, и жест загрузчика (10 с от нажатия) не успевал бы после
+  // того, как экран погас. Опыт и достижения уже записаны в рост — пропадают только их сцены;
+  // общую сцену сосед доиграет у себя.
+  queue_n_ = shared_n_ = 0;
+  if (eng_->scene() != Scene::None) {
+    eng_->stop_scene(now);
+    if (voice_) voice_->stop();
+  }
+  cur_scene_ = Scene::None;
+  cur_shared_ = false;
+  after_scene_ = Expr::Count;
+  after_fresh_ = false;
+  queue_at_ = now;
   SceneParams p;
   p.value = low_battery ? 1 : 0;
   queue_scene(Scene::shutdown, p, Expr::sleeping, now, low_battery ? "выключается: ячейка пуста" : "выключается");

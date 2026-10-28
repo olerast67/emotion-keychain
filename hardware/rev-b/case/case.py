@@ -14,16 +14,17 @@ M и L — в out/m/ и out/l/:
   шайбы 2 мм              H+1.2 … H+3.2  между платой модуля экрана и крышкой
   рамка экрана 3 мм       H … H+3        стенки вокруг модуля, держатель трубки микрофона
   верхняя рамка ячейки    3 … H          3, 4 или 5 мм; ушки под модулем вместо стоек
-  нижняя рамка ячейки 3   0 … 3          окно под вилку USB-C
+  нижняя рамка ячейки 3   0 … 3          без окна под вилку USB-C: торец ячейки закрыт
   плата 1.6 мм            −1.6 … 0
-  рамка оборота 4 мм      −5.6 … −1.6    ушки под винтами, толкатель кнопки с крыльями под платой
+  рамка оборота 4 мм      −5.6 … −1.6    ушки под винтами, толкатель кнопки с крыльями под платой, окно USB-C
   дно 2 мм                −7.6 … −5.6    прозрачное, вырез под вилку USB-C, отверстие над пищалкой
 
 Модуль экрана лежит на ушках рамок ячейки: стопка рамок и есть «проставка», поэтому
 её высота всегда совпадает с высотой рамок. Всё стягивают четыре винта M2 с гайками
 на дне. В конце сборки модели идут проверки (check()): пересечения деталей, зазоры
 до деталей платы, модуля, вилки USB-C и трубки микрофона, тонкие перемычки, ход
-толкателя, длина винтов. Любая ошибка — выход с перечнем, файлы не пишутся.
+толкателя, длина винтов, ячейка закрыта со всех сторон. Любая ошибка — выход с перечнем,
+файлы не пишутся.
 
 Высоты считаются на номинальные листы. Листы акрила гуляют по толщине, поэтому
 смерьте свои и пересчитайте:
@@ -31,7 +32,9 @@ M и L — в out/m/ и out/l/:
   python3 case.py --sheet 3=2.86 --sheet 4=4.05 --module 1.6
 
 --sheet НОМИНАЛ=МЕРА — лист, который продают как 3 мм, на деле 2.86; --module — толщина
-платы модуля экрана. От них зависят высота над ячейкой, длина трубки и винтов.
+платы модуля экрана. От них зависят высота над ячейкой, длина трубки и винтов. То, что
+правят при сборке (подшлифовать рамку экрана, укоротить штыри), по мерам — предупреждение
+с размерами, а модель строится уже поправленной.
 """
 import argparse
 import glob
@@ -70,6 +73,11 @@ NYLON_LENGTHS = (16, 20, 25)
 # на каждый из шести листов акрила под винтом. Лишнее откусывают после затяжки.
 SCREW_MIN_OUT = 1.2
 SCREW_TRIM_OUT = 1.0  # сколько оставить над гайкой, когда откусываете
+# По мерам листов их разброс уже известен. Если ни один ходовой винт не выходит на
+# SCREW_MIN_OUT, хватит и SCREW_MEASURED_OUT — виток с фаской на конце винта (шаг M2 —
+# 0.4 мм) и разброс платы, которую не меряют, — но это предупреждение. Меньше — ошибка:
+# гайка не навинтится целиком.
+SCREW_MEASURED_OUT = 0.6
 
 # Ушко платы для кольца выходит сверху. Вырез стенок под ним — до TAB_NOTCH_Y: кольцо
 # ходит в отверстии H1 (y −3.6 … −0.4), а перемычка рамок между вырезом и двором U1
@@ -79,6 +87,9 @@ TAB_NOTCH_Y = -1.25
 
 # Модуль экрана (footprints.OLED) и что на нём.
 MODULE_T = 1.2      # плата модуля
+# Рамка экрана ниже «плата модуля + шайба» на столько: зазор выбирает скотч на её верхней
+# грани. Выше — крышка ляжет на рамку, а не на шайбы, и модуль будет болтаться.
+SCREEN_GAP = (0.1, 0.3)
 GLASS_T = 1.4       # стекло с поляризатором на скотче
 MODULE_GAP = 0.5    # рамка экрана вокруг платы модуля: у продавцов размеры гуляют на ±0.2
 GLASS_GAP = 0.3     # шайбы не ближе к стеклу: нижние упираются в стекло уже на 1.9 мм от оси
@@ -92,6 +103,7 @@ FPC_W, FPC_OUT = 13.0, 0.7
 # платой модуля на 3 − MODULE_T (1.8 мм на плате 1.2).
 HEADER_PLASTIC, HEADER_TAIL, HEADER_SHORT = 2.5, 6.0, 3.0
 PIN_OUT_MIN = 0.5   # штырь выходит из платы для пайки не меньше
+PIN_COVER = (0.15, 0.2)  # штыри над модулем не ближе к крышке; укорачивают их с запасом до 0.2
 LONG_HEADER = 15.0  # длинная гребёнка: 3 + 2.5 + 9.5
 
 # Ячейка: под ней каптон на спиленных лапках USB-C и тонкий двусторонний скотч, над ней —
@@ -107,6 +119,14 @@ LEAD_PATH = 0.6     # провода, прижатые к правому бок�
 # TYPE-C-31-M-12 (корпус 3.26 мм) на обороте — 1.63 мм от платы.
 PLUG_W, PLUG_T, PLUG_GAP = 12.35, 6.5, 0.5
 J1_AXIS = -1.6 - 1.63
+# Окно под вилку — только в дне и рамке оборота. В нижней рамке ячейки его нет: через окно
+# торец ячейки достали бы снаружи ключом или булавкой. Рамка лежит на лице платы, а верх
+# вилки по пределу стандарта — на 0.02 мм выше него (J1_AXIS + 6.5 / 2): вилки до 6.46 мм
+# проходят под рамкой, вилка 6.5 мм её касается. Это не зазор PLUG_GAP, а принятый допуск
+# касания: оболочка вилки (2.4 мм) в окне гнезда (2.56 мм) ходит по высоте на ~0.15 мм, и
+# касание в сотые доли мм вилка выбирает этим люфтом; в худшем случае она входит не до упора
+# (README: обычный кабель, не с толстой вилкой). Больше PLUG_TOUCH — ошибка.
+PLUG_TOUCH = 0.05
 
 # Микрофон U6 на обороте слушает через отверстие в плате. На лице до крышки идёт
 # силиконовая трубка 1 × 2 мм: так он слышит наружу, а не всю полость корпуса.
@@ -392,6 +412,11 @@ def build(v):
     b = board_data()
     h, Z, T, S = stack(v)
     cfg = VARIANTS[v]
+    # Рамка экрана выше «плата модуля + шайба»: при сборке её подшлифуют (check() скажет, до
+    # скольких), поэтому по мерам листов модель строится уже по подшлифованной рамке.
+    fs_raw = T["frame_screen"]
+    if MEASURED and fs_raw > MODULE_T + T["washers"]:
+        T["frame_screen"] = MODULE_T + T["washers"] - SCREEN_GAP[0]
     a = MIN_WEB / 2 - 0.05
 
     body = rounded(0, 0, W, H, R)
@@ -429,7 +454,8 @@ def build(v):
                     inflated(b["front"]["BT1"][0], GAP))
     pocket = rect(*pocket)
 
-    # Вилка USB-C перед гнездом: окно во всех листах, куда она достаёт по высоте.
+    # Вилка USB-C перед гнездом: окно в листах под платой, куда она достаёт по высоте. В рамках
+    # ячейки окна нет (PLUG_TOUCH): торец ячейки закрыт.
     ux = b["usb_x"]
     plug = rect(ux - PLUG_W / 2, b["usb_face"], ux + PLUG_W / 2, H + WALL + 10)
     plug_z = (J1_AXIS - PLUG_T / 2, J1_AXIS + PLUG_T / 2)
@@ -484,8 +510,6 @@ def build(v):
         keep += [inflated(crt, GAP) for ref, (crt, hgt) in b["front"].items() if ref != "J2" and hgt > z0]
         if z0 < fpc_z[1] and z0 + t > fpc_z[0]:
             keep.append(inflated(fpc, GAP))
-        if needs_window(z0, t):
-            keep.append(usb_cut)
         if not guide:
             keep.append(inflated(tube, GAP))
         solid = union(ears, arm) if guide else ears
@@ -512,6 +536,12 @@ def build(v):
     btn_slot = rect(pocket_out - 0.05, btn_y - 1.3, boss_out + 1, btn_y + 1.3)
     by0, by1 = wings_y[0][0] - BTN_PLAY_Y - MIN_WEB, wings_y[1][1] + BTN_PLAY_Y + MIN_WEB
     boss = rounded(W + WALL - 2 * R, by0, boss_out, by1, boss_out - W - WALL)
+    # Щель штока и окно USB-C режут рамку на две части. Правая нижняя держится на одном винте,
+    # а на ней нижняя половина прилива и стенки, на которую ложится толкатель: прижатая
+    # пальцем, она могла бы со временем повернуться вокруг винта и поджать кнопку. Перемычку
+    # к другой части провести негде (U3 и J1, TP3 и кнопка, M1 и Q4), поэтому при сборке обе
+    # части клеят к дну тонкой клеевой плёнкой без основы (README, шаг 16): дно держат все
+    # четыре винта. Плёнка до 0.06 мм в стек не входит — она меньше разброса листов.
     keep = [btn_pocket, btn_slot] + [inflated(crt, GAP) for crt, _ in b["back"].values()]
     if needs_window(Z["frame_back"], T["frame_back"]):
         keep.append(usb_cut)
@@ -531,15 +561,21 @@ def build(v):
     guide = NEED["держатель трубки"]
     module_back = minus(module, *[circle(x, y, MODULE_FREE_R) for x, y in mod_holes])
     plug_need = NEED["вилка USB-C"]
+    # Штыри над модулем по мерам листов ближе PIN_COVER к крышке — при сборке их укоротят.
+    pin_top = h + HEADER_SHORT
+    if MEASURED and Z["cover"] - pin_top < PIN_COVER[0] - 1e-9:
+        pin_top = Z["cover"] - PIN_COVER[1]
     solids = {
         "плата модуля": (h, h + MODULE_T, module, NEED["плата модуля"], {}),
         "стекло": (h + MODULE_T, h + MODULE_T + GLASS_T, glass, NEED["стекло"], {}),
         "детали оборота модуля": (h - MODULE_BACK[1], h, module_back, NEED["оборот модуля"], {}),
         "пластик гребёнки": (h - HEADER_PLASTIC, h, plastic, NEED["пластик гребёнки"], {}),
-        "штыри экрана": (-1.6 - 1.0, h + HEADER_SHORT, pin_pads, NEED["штыри экрана"], {}),
+        "штыри экрана": (-1.6 - 1.0, pin_top, pin_pads, NEED["штыри экрана"], {}),
         "шлейф стекла": (fpc_z[0], fpc_z[1], fpc, NEED["шлейф стекла"], {}),
         "ячейка": (UNDER_CELL, UNDER_CELL + cfg["cell_t"] + SWELL, cell, NEED["ячейка"], {}),
-        "вилка USB-C": (plug_z[0] - plug_need, plug_z[1] + plug_need, plug, plug_need, {}),
+        # Зазор вилки — до лица платы: выше лежит нижняя рамка ячейки без окна, там свой допуск
+        # касания PLUG_TOUCH (check()).
+        "вилка USB-C": (plug_z[0] - plug_need, min(plug_z[1] + plug_need, Z["frame_cell1"]), plug, plug_need, {}),
         "трубка микрофона": (0.0, Z["cover"], tube, NEED["трубка"],
                              {"frame_screen": guide, "frame_cell2": guide, "frame_cell3": guide}),
         "винты": (Z["bottom"] - NUT_T, top, union(*[circle(x, y, SHAFT_D / 2) for x, y in screws]), NEED["винты"], {}),
@@ -555,6 +591,7 @@ def build(v):
         "board": b, "h": h, "module": (mx0, my0, o["w"], o["h"]), "mod_holes": mod_holes, "glass": glass,
         "tube_c": tube_c, "tube_len": Z["cover"] + TUBE_SQUEEZE, "pocket": bbox(pocket), "cell": cell,
         "x0": x0, "pocket_out": pocket_out, "boss_out": boss_out, "btn_y": btn_y, "plug_z": plug_z, "top": top,
+        "frame_screen_raw": fs_raw,
     }
     return parts, solids, info
 
@@ -598,9 +635,21 @@ def plunger_sweep(shape, k, s1, dys=(0.0,), step=0.05):
     return union(*[plunger_at(shape, k, s1 * i / n, dy) for i in range(n + 1) for dy in dys])
 
 
+def screw_for(lengths, need):
+    """Самый короткий ходовой винт, который выходит из гайки на SCREW_MIN_OUT; по мерам листов,
+    если такого нет, — самый длинный, лишь бы на SCREW_MEASURED_OUT. Нет и его — None."""
+    ok = [n for n in lengths if n >= need + SCREW_MIN_OUT - 1e-9]
+    if ok:
+        return min(ok)
+    if MEASURED and max(lengths) >= need + SCREW_MEASURED_OUT - 1e-9:
+        return max(lengths)
+    return None
+
+
 def check(v, parts, solids, info):
     """Проверки версии v: (ошибки, предупреждения). Предупреждения бывают только на измеренных
-    листах — то, что правят при сборке: подшлифовать рамку, взять ячейку тоньше."""
+    листах — то, что правят при сборке: подшлифовать рамку, укоротить штыри, взять ячейку
+    тоньше. Ошибкой и по мерам остаётся то, что при сборке не поправить."""
     err, warn = [], []
     soft = warn if MEASURED else err
     cfg = VARIANTS[v]
@@ -616,14 +665,29 @@ def check(v, parts, solids, info):
             err.append(f"{p['name']}: лист {p['sheet']:g} мм редкий")
     if abs(sum(real(t) for t in cfg["mid"]) - h) > 1e-9:
         err.append("стопка рамок ячейки не равна высоте под модулем")
-    gap = parts["cover"]["z"] - (parts["frame_screen"]["z"] + parts["frame_screen"]["t"])
-    if not 0.1 - 1e-9 <= gap <= 0.3 + 1e-9:
-        fix = "подшлифуйте её или клейте без скотча" if gap < 0.1 else "скотч на её верхней грани возьмите толще"
-        soft.append(f"рамка экрана ниже крышки на {gap:.2f} мм, нужно 0.1…0.3: {fix}")
+    # Рамка экрана — по мере листа: по мерам модель уже подшлифована (build()).
+    stack_t = MODULE_T + parts["washers"]["t"]
+    raw = info["frame_screen_raw"]
+    gap = stack_t - raw
+    lo, hi = stack_t - SCREEN_GAP[1], stack_t - SCREEN_GAP[0]
+    if gap < -1e-9:
+        soft.append(f"рамка экрана ({raw:.2f} мм) выше «плата модуля + шайба» ({stack_t:.2f} мм) на {-gap:.2f} мм: "
+                    f"подшлифуйте её до {lo:.2f}…{hi:.2f} мм, иначе крышка ляжет на рамку, а не на шайбы")
+    elif gap < SCREEN_GAP[0] - 1e-9:
+        soft.append(f"рамка экрана ниже крышки всего на {gap:.2f} мм, нужно {SCREEN_GAP[0]:g}…{SCREEN_GAP[1]:g}: "
+                    f"клейте её без скотча или подшлифуйте до {lo:.2f}…{hi:.2f} мм")
+    elif gap > SCREEN_GAP[1] + 1e-9:
+        soft.append(f"рамка экрана ниже крышки на {gap:.2f} мм, нужно {SCREEN_GAP[0]:g}…{SCREEN_GAP[1]:g}: "
+                    "скотч на её верхней грани возьмите толще")
     if parts["cover"]["z"] - (h + MODULE_T + GLASS_T) < 0.5 - 1e-9:
-        soft.append("над стеклом меньше 0.5 мм: шайбы режьте из листа потолще")
-    if parts["cover"]["z"] - (h + HEADER_SHORT) < 0.15 - 1e-9:
-        soft.append("штыри над модулем ближе 0.15 мм к крышке: укоротите их над модулем")
+        soft.append(f"над стеклом {parts['cover']['z'] - h - MODULE_T - GLASS_T:.2f} мм, меньше 0.5: "
+                    "шайбы режьте из листа потолще")
+    pins = parts["cover"]["z"] - (h + HEADER_SHORT)
+    if pins < PIN_COVER[0] - 1e-9:
+        where = f"выше крышки на {-pins:.2f} мм" if pins < 0 else f"в {pins:.2f} мм от крышки"
+        soft.append(f"штыри над модулем {where}, нужно не ближе {PIN_COVER[0]:g}: укоротите их "
+                    f"над модулем до {parts['cover']['z'] - PIN_COVER[1] - h - MODULE_T:.1f} мм над его платой "
+                    f"(у обычной гребёнки {HEADER_SHORT - MODULE_T:.1f})")
     if max(hgt for _, hgt in b["back"].values()) > parts["frame_back"]["t"] - 0.5 + 1e-9:
         soft.append("деталь оборота ближе 0.5 мм к дну: рамку оборота режьте из листа потолще")
     # Ячейка своей версии входит хотя бы при низких деталях на обороте модуля.
@@ -718,6 +782,29 @@ def check(v, parts, solids, info):
     if area(intersect(fb, circle(bx, by, BUZZER_D / 2 + NEED["пищалка"]))) > 1e-4:
         err.append(f"рамка оборота ближе {NEED['пищалка']:g} мм к отверстию пищалки")
 
+    # Вилка USB-C под нижней рамкой ячейки: окна в рамке нет, и верх вилки по пределу стандарта
+    # заходит в неё не дальше допуска касания PLUG_TOUCH. Под рамкой зазор вилки проверяют тела.
+    over = info["plug_z"][1] - parts["frame_cell1"]["z"]
+    if over > PLUG_TOUCH + 1e-9:
+        err.append(f"вилка USB-C по пределу стандарта заходит в нижнюю рамку ячейки на {over:.2f} мм, "
+                   f"допуск касания {PLUG_TOUCH:g}")
+
+    # Ячейка закрыта со всех сторон: в каждом листе на её высоте она в замкнутом вырезе, и ни
+    # одно окно контура до неё не доходит — снаружи до ячейки ничем не достать.
+    cz0, cz1 = UNDER_CELL, UNDER_CELL + cfg["cell_t"] + SWELL
+    cx0, cy0, cx1, cy1 = bbox(info["cell"])
+    box = rect(-WALL - 5, -WALL - 5, W + WALL + 5, H + WALL + 5)
+    for key, p in parts.items():
+        if min(cz1, p["z"] + p["t"]) - max(cz0, p["z"]) <= 1e-6:
+            continue
+        void = minus(box, material(p))
+        for i in range(void.OutlineCount()):
+            piece = void.Subset(i, i + 1)
+            if piece.Contains(pcbnew.VECTOR2I(MM((cx0 + cx1) / 2), MM((cy0 + cy1) / 2))):
+                bx0, by0, bx1, by1 = bbox(piece)
+                if bx0 < -WALL - 1 or by0 < -WALL - 1 or bx1 > W + WALL + 1 or by1 > H + WALL + 1:
+                    err.append(f"{p['name']}: ячейка открыта наружу — вырез под неё не замкнут")
+
     # Детали одного слоя по высоте не пересекаются.
     keys = list(parts)
     for i, ka in enumerate(keys):
@@ -749,11 +836,20 @@ def check(v, parts, solids, info):
             if area(intersect(material(p), ring)) < 4.0:
                 err.append(f"{p['name']}: под винтом ({x:.1f}, {y:.1f}) мало опоры")
 
-    # Винт с запасом SCREW_MIN_OUT над гайкой есть среди ходовых.
+    # Винт с запасом SCREW_MIN_OUT над гайкой есть среди ходовых. По мерам листов хватит и
+    # SCREW_MEASURED_OUT, а нет нейлонового нужной длины — стальных; то и другое — предупреждение.
     need = info["top"] - parts["bottom"]["z"] + NUT_T
-    for lengths, what in ((SCREW_LENGTHS, "стальных"), (NYLON_LENGTHS, "нейлоновых")):
-        if not any(n >= need + SCREW_MIN_OUT - 1e-9 for n in lengths):
-            err.append(f"среди {what} M2 нет винта на {need + SCREW_MIN_OUT:.1f} мм и длиннее")
+    steel, nylon = screw_for(SCREW_LENGTHS, need), screw_for(NYLON_LENGTHS, need)
+    for n, what in ((steel, "стальных"), (nylon, "нейлоновых")):
+        if n is None and not (MEASURED and what == "нейлоновых" and steel):
+            out = SCREW_MEASURED_OUT if MEASURED else SCREW_MIN_OUT
+            err.append(f"среди {what} M2 нет винта на {need + out:.1f} мм и длиннее")
+        elif n is not None and n < need + SCREW_MIN_OUT - 1e-9:
+            warn.append(f"из {what} M2 × {n} выйдет из гайки всего на {n - need:.1f} мм, на номинальных листах "
+                        f"нужно {SCREW_MIN_OUT:g}: навинтите гайку целиком, конец винта не откусывайте")
+    if nylon is None and MEASURED and steel:
+        warn.append(f"нейлоновых M2 на {need + SCREW_MEASURED_OUT:.1f} мм и длиннее не продают: берите стальные "
+                    f"M2 × {steel} с нейлоновыми гайками — радио у антенны станет чуть слабее")
 
     # Трубка: отверстие в плате внутри её канала, площадки лица не под её стенкой.
     tx, ty = info["tube_c"]
@@ -775,8 +871,7 @@ def numbers(v, parts, info):
     h = info["h"]
     top, low = info["top"], parts["bottom"]["z"]
     need = top - low + NUT_T
-    nylon = min(n for n in NYLON_LENGTHS if n >= need + SCREW_MIN_OUT - 1e-9)
-    steel = min(n for n in SCREW_LENGTHS if n >= need + SCREW_MIN_OUT - 1e-9)
+    nylon, steel = screw_for(NYLON_LENGTHS, need), screw_for(SCREW_LENGTHS, need)
     below = h + BOARD_T + PIN_OUT_MIN
     std = HEADER_PLASTIC + HEADER_TAIL
     free = [h - m for m in MODULE_BACK]
@@ -785,7 +880,8 @@ def numbers(v, parts, info):
     press = [(BTN_OUT + k) - (BTN_REST + 1.5 * k) - SW_TRAVEL for k in (0.0, KERF_MAX)]
     return {
         "standoff": round(h, 3), "module_t": MODULE_T, "thickness": round(top - low, 2),
-        "screw": nylon, "screw_out": round(nylon - need, 2), "screw_steel": steel,
+        "screw": nylon or steel, "screw_nylon": bool(nylon), "screw_out": round((nylon or steel) - need, 2),
+        "screw_steel": steel,
         "screw_steel_out": round(steel - need, 2), "screw_need": round(need, 2),
         "screw_cut": round(need + SCREW_TRIM_OUT, 2), "below_module": round(below, 2),
         "std_header_margin": round(std - below, 2),
@@ -794,6 +890,7 @@ def numbers(v, parts, info):
         "free": [round(f, 2) for f in free], "cell_max": [round(c_, 2) for c_ in cell_max],
         "cell_width_max": round(POCKET_W - 0.3, 2), "tube_len": round(info["tube_len"], 1),
         "press": [round(p, 2) for p in press], "tube": [round(c_, 3) for c_ in info["tube_c"]],
+        "plug_max": round(2 * (parts["frame_cell1"]["z"] - J1_AXIS), 2),
         "sheets": sorted({p["sheet"] for p in parts.values()}),
     }
 
@@ -802,10 +899,17 @@ def buy(v, n):
     """Что купить к корпусу версии v — для README и просмотра."""
     cfg = VARIANTS[v]
     frames = ", ".join(f"{t:g}" for t in n["sheets"] if t != 2.0)
-    screw = (f"Винты M2 × {n['screw']} нейлоновые с цилиндрической или полукруглой головкой, не потайные, и гайки M2 "
-             f"нейлоновые — по 4 шт. Винт выйдет из гайки на {n['screw_out']:g} мм: после окончательной "
-             f"затяжки откусите, оставив около {SCREW_TRIM_OUT:g} мм. Нейлоновых M2 × {n['screw']} не нашлось — можно "
-             f"стальные M2 × {n['screw_steel']} с нейлоновыми гайками, но радио у антенны станет чуть слабее")
+    trim = (f"после окончательной затяжки откусите, оставив около {SCREW_TRIM_OUT:g} мм"
+            if n["screw_out"] > SCREW_TRIM_OUT + 0.3 else "откусывать не нужно")
+    if n["screw_nylon"]:
+        screw = (f"Винты M2 × {n['screw']} нейлоновые с цилиндрической или полукруглой головкой, не потайные, "
+                 f"и гайки M2 нейлоновые — по 4 шт. Винт выйдет из гайки на {n['screw_out']:g} мм: {trim}. "
+                 f"Нейлоновых M2 × {n['screw']} не нашлось — можно "
+                 f"стальные M2 × {n['screw_steel']} с нейлоновыми гайками, но радио у антенны станет чуть слабее")
+    else:
+        screw = (f"Винты M2 × {n['screw']} стальные (нейлоновых такой длины не продают) с цилиндрической или "
+                 "полукруглой головкой, не потайные, и гайки M2 нейлоновые — по 4 шт.; радио у антенны станет "
+                 f"чуть слабее. Винт выйдет из гайки на {n['screw_out']:g} мм: {trim}")
     if n["long_header"]:
         header = (f"Модуль экрана без впаянной гребёнки и длинная гребёнка 2.54 на 4 штыря, 15 мм и длиннее "
                   f"(штыри выйдут из платы на {n['long_header_out']:g} мм, лишнее откусить)")
@@ -820,6 +924,9 @@ def buy(v, n):
         header,
         f"Силиконовая трубка 1 × 2 мм, кусок {n['tube_len']:g} мм — к микрофону; длиннее можно, короче нельзя",
         "Каптоновый скотч (лапки USB-C, пайка ячейки, оборот модуля над ней) и тонкий двусторонний скотч 0.1–0.15 мм",
+        "Клеевая плёнка без основы до 0.06 мм (например, 3M 467MP) — приклеить обе части рамки оборота к дну",
+        f"Кабель USB-C с обычной вилкой: корпус вилки не толще {math.floor(n['plug_max'] * 10) / 10:g} мм — "
+        "толстая вилка упрётся в нижнюю рамку ячейки",
     ]
 
 
@@ -912,8 +1019,10 @@ def write_variant(v, parts, nums):
 
     print(f"Версия {v.upper()}: ячейка {cfg['cell']} (~{cfg['mah']} мА·ч), под модулем {nums['standoff']:g} мм "
           f"(рамки ячейки {' + '.join(f'{real(t):g}' for t in cfg['mid'])}), толщина {nums['thickness']:.1f} мм, "
-          f"винты M2 × {nums['screw']} нейлон или M2 × {nums['screw_steel']} сталь (нужно {nums['screw_need']:g}, "
-          f"из гайки выйдет {nums['screw_out']:g} и {nums['screw_steel_out']:g}) → {os.path.relpath(out, HERE)}/")
+          + (f"винты M2 × {nums['screw']} нейлон или M2 × {nums['screw_steel']} сталь (нужно {nums['screw_need']:g}, "
+             f"из гайки выйдет {nums['screw_out']:g} и {nums['screw_steel_out']:g})" if nums["screw_nylon"] else
+             f"винты M2 × {nums['screw_steel']} сталь (нужно {nums['screw_need']:g}, из гайки выйдет "
+             f"{nums['screw_steel_out']:g})") + f" → {os.path.relpath(out, HERE)}/")
     print(f"  ячейка: свободно {nums['free'][1]:g}…{nums['free'][0]:g} мм, ячейка не толще "
           f"{nums['cell_max'][1]:g}…{nums['cell_max'][0]:g} мм, не шире {nums['cell_width_max']:g}; "
           f"гребёнка: нужно {nums['below_module']:g} мм под модулем, у обычной запас {nums['std_header_margin']:g}; "

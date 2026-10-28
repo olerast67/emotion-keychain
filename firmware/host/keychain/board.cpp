@@ -178,11 +178,14 @@ void report() {
   // dm — минуты текущих суток в настройках; ovcc — минимум питания экрана перед
   // последним включением, por — сколько раз контроллер экрана сбрасывался по питанию; offua —
   // ток, если плата сейчас уснёт (System OFF), bpct — процент заряда у характера, vb — вибро
-  // по узору (и в паузах между толчками).
+  // по узору (и в паузах между толчками); scene — сцена на экране (none — лицо); theme, snd,
+  // duel, ghost, ucon, bday, date, clk — настройки: тема, звук, дуэли, невидимка, яркость
+  // (b), день рождения, дата и часы заданы.
   printf("ST t=%u adv=%d iv=%u scan=%d disp=%d vis=%d con=%u lit=%d tone=%u vib=%d mic=%d als=%d acc=%d hf=%d "
          "vibv=%.2f chgen=%d q=%.0f loops=%u mism=%u dark=%u i2c=%u ffail=%u ovr=%u frames=%u xp=%u sxp=%u fr=%u "
          "steps=%u days=%u dm=%u ls=%u fop=%d oled=%d accok=%d alsok=%d sbus=%d ovcc=%.2f por=%u scanms=%.0f adv_ev=%.1f "
-         "offua=%.1f bpct=%d vb=%d uicr=%x data=%s\n",
+         "offua=%.1f bpct=%d vb=%d scene=%s theme=%u snd=%u duel=%u ghost=%u ucon=%u bday=%u date=%u clk=%u uicr=%x "
+         "data=%s\n",
          sim::now_ms(), adv.running ? 1 : 0, adv.interval, Bluefruit.Scanner.isRunning() ? 1 : 0,
          sim::oled_powered() ? 1 : 0, sim::oled_dev.visible() ? 1 : 0, sim::oled_dev.contrast, sim::oled_dev.lit(),
          sim::status.tone_hz, NRF_PWM2->ENABLE.v ? 1 : 0, sim::status.pdm_running ? 1 : 0, sim::ltr_active() ? 1 : 0,
@@ -192,7 +195,9 @@ void report() {
          (unsigned)progress.xp, (unsigned)progress_saved.xp, (unsigned)friends.count(), (unsigned)progress.steps,
          (unsigned)progress.days, (unsigned)cfg.day_min, (unsigned)last_save, sim::flash_busy() ? 1 : 0, have_oled ? 1 : 0, acc.ok() ? 1 : 0,
          als.ok() ? 1 : 0, sensor_bus ? 1 : 0, sim::oled_dev.last_off_min, sim::oled_dev.resets, scan_ms, adv_events,
-         off_ua(), battery_shown, hal::vibro_busy() ? 1 : 0, sim::status.uicr_regout0, hex.empty() ? "-" : hex.c_str());
+         off_ua(), battery_shown, hal::vibro_busy() ? 1 : 0, scene_id(eng.scene()), cfg.theme, cfg.sound, cfg.duel_ready,
+         cfg.ghost, cfg.contrast, cfg.bday_m ? 1 : 0, cfg.year ? 1 : 0, cfg.clock_known, sim::status.uicr_regout0,
+         hex.empty() ? "-" : hex.c_str());
   charge_uams = 0;
   sim::status.vib_peak_v = sim::status.vib_duty * (sim::world.vbus ? 4.7f : sim::world.cell_v);
   save_uicr();
@@ -248,7 +253,14 @@ void serve() {
       if (!strcmp(key, "mic")) w.mic_db = a, w.mic_pattern = (int)b;
       if (!strcmp(key, "temp")) w.temp_c = a;
       if (!strcmp(key, "vbus")) {
-        if (w.vbus && a == 0) w.vbus_off_us = sim::now_us;
+        // TinyUSB: отключение (USB_EVT_REMOVED) снимает запрос кварца у SoftDevice — и тот, что
+        // делала прошивка (запрос один на приложение). При подключении (USB_EVT_DETECTED) он
+        // просит кварц, только если тот не идёт, а на плате кварц в этот миг часто идёт для
+        // радио. Здесь худший случай: TinyUSB кварц не просит, для USB его держит только прошивка.
+        if (w.vbus && a == 0) {
+          w.vbus_off_us = sim::now_us;
+          if (Bluefruit.started) sim::status.hfclk_requested = false;
+        }
         w.vbus = a != 0;
       }
       if (!strcmp(key, "chg")) w.charging = a != 0;

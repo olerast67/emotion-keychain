@@ -66,7 +66,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_executable(keychain_sim firmware/host/keychain/keychain_sim.cpp)
   target_link_libraries(keychain_sim PRIVATE face_sim_common)
   add_test(NAME keychain_sim COMMAND keychain_sim $<TARGET_FILE:keychain_board> ${CMAKE_BINARY_DIR}/keychain_sim_out)
-  # Все сценарии подряд идут ~10 минут под санитайзерами; на медленной машине CI — дольше.
+  # Все сценарии подряд идут 6–17 минут под санитайзерами (по машине); поиск соседа во встрече
+  # ждёт до 15 минут времени симуляции, поэтому запас большой.
   set_tests_properties(keychain_sim PROPERTIES TIMEOUT 3600)
 endif()
 

@@ -375,6 +375,12 @@ int count_said(Board& b, const char* text, uint64_t since) {
   for (auto& [t, s] : b.out) n += t >= since && s.find(text) != std::string::npos;
   return n;
 }
+// Строк консоли ровно с таким текстом («Событие: button», но не «Событие: button_long»).
+int count_line(Board& b, const char* text, uint64_t since) {
+  int n = 0;
+  for (auto& [t, s] : b.out) n += t >= since && s == text;
+  return n;
+}
 bool happened(Board& b, const char* ev, uint64_t since) {
   for (auto& [t, e] : b.events)
     if (t >= since && e == ev) return true;
@@ -551,6 +557,13 @@ Board& neighbour() {
   spawn(b, 0);
   run(4000);
   return b;
+}
+
+// Сосед больше не нужен: сценарии после встречи и атаки идут без него. Иначе в метре от A он
+// встречался бы с ним посреди их проверок и сдвигал сцены, эфир и сроки.
+void drop_neighbour() {
+  for (Board* b : boards)
+    if (b->name == "B") return drop_board(b);
 }
 
 // ---------------------------------------------------------------- сценарии
@@ -742,6 +755,12 @@ void sc_charge() {
   a.cmd("SET lux 300");
   run(8000);
   CHECK(a.num("mic") == 1 && a.num("hf") == 1, "микрофон перезапущен на USB — кварц по-прежнему запрошен");
+  // Дребезг кабеля между двумя проходами цикла: TinyUSB при отключении снимает запрос кварца, а
+  // прошивка отключения не видит. Запрос — по уровню, и следующий проход его возвращает.
+  a.cmd("SET vbus 0");
+  a.cmd("SET vbus 1");
+  run(50);
+  CHECK(a.num("hf") == 1, "USB отключили и подключили между проходами цикла — кварц снова запрошен");
   t = g_ms;
   a.soc_mah = a.cap_mah * 0.994;
   run(15000);
@@ -797,9 +816,17 @@ void sc_meeting() {
   a.cmd("IN snd");  // у A без звука: во время вибро микрофон глушит только мотор
   const uint64_t t = g_ms;
   a.vib_max = b.vib_max = 0;
+  // Найти соседа — дело случая: окно прослушивания 150 мс раз в 30 с ловит рекламу раз в 1 с не
+  // сразу, бывает и через 3–4 минуты (а фазы окон в полном прогоне зависят от прошлых сценариев).
+  // Поэтому сначала ждём, пока один услышит другого — тогда он рекламирует себя раз в 100 мс и
+  // слушает чаще (iv = 160), — с запасом до 15 минут, и только потом даём дуэли 2 минуты.
+  const auto duel_seen = [&] { return said(a, "Дуэль с", t) || said(b, "Дуэль с", t); };
+  const long heard = wait_for([&] { return a.num("iv") == 160 || b.num("iv") == 160 || duel_seen(); }, 900000);
+  CHECK(heard >= 0, "сосед услышан через %.1f с", heard / 1000.0);
+  const uint64_t th = g_ms;
   uint64_t ta = 0, tb = 0, t_inj = 0;
   bool inj_vib = false;
-  for (int i = 0; i < 1800 && !(said(a, "Дуэль с", t, &ta) && said(b, "Дуэль с", t, &tb)); ++i) {
+  for (int i = 0; i < 1200 && !(said(a, "Дуэль с", t, &ta) && said(b, "Дуэль с", t, &tb)); ++i) {
     run(100);
     if (said(a, "Дуэль с", t) || said(b, "Дуэль с", t)) rec.frame(10);
     if (!t_inj && said(a, "Дуэль с", t)) {
@@ -814,7 +841,8 @@ void sc_meeting() {
   }
   run_rec(rec, 12000);
   rec.close();
-  CHECK(ta && tb, "дуэль у обоих (через %.1f с)", ta ? (double)(ta - t) / 1000.0 : -1.0);
+  CHECK(ta && tb, "дуэль у обоих (через %.1f с, после того как услышали, — %.1f с)",
+        ta ? (double)(ta - t) / 1000.0 : -1.0, ta ? ((double)ta - (double)th) / 1000.0 : -1.0);
   CHECK((ta > tb ? ta - tb : tb - ta) <= 150, "начало одновременно: разница %lld мс", (long long)ta - (long long)tb);
   const bool wa = said(a, "победа", t), wb = said(b, "победа", t);
   CHECK(wa != wb, "победитель один (A %s, B %s)", wa ? "победил" : "проиграл", wb ? "победил" : "проиграл");
@@ -911,6 +939,7 @@ void sc_attack() {
         "во время и после атаки настоящий сосед встречается (сцен с ним: %d)",
         count_said(a, "Встреча с", attack_t0) + count_said(a, "Дуэль с", attack_t0));
   health(a, "атака");
+  drop_neighbour();
 }
 
 void sc_power_off_battery() {
@@ -1044,18 +1073,27 @@ void sc_power_off_usb() {
   CHECK(happened(a, "off", t) && !a.alive, "USB отключили — полный сон с пробуждением от кнопки");
   CHECK(wake(a), "кнопка будит");
   // Жест загрузчика и после прощания: кнопку, зажатую для выключения, держат, экран уже погас,
-  // и через 8 с от нажатия подключают USB — README обещает 10 с.
+  // и через 8 с от нажатия подключают USB — README обещает 10 с. Нажимают посреди долгой сцены
+  // (разговор шифром, ~9 с): выключение её обрывает, прощание — сразу после 3 с удержания, и
+  // экран гаснет раньше 8 с. USB — ровно через 8 с, погас ли экран — отдельная проверка.
   run(3000);
+  a.cmd("IN x chat");
+  run(500);
   t = g_ms;
   a.button = true;
   a.cmd("SET button 1");
-  wait_for([&] { return a.num("disp") == 0; }, 25000);
+  const long bye = wait_for([&] { return a.hex("scene") == "shutdown"; }, 5000, 20);
+  CHECK(a.hex("scene") == "shutdown" && bye <= 3300,
+        "шёл разговор, а прощание — сразу после 3 с удержания (через %.2f с от нажатия)",
+        bye >= 0 ? bye / 1000.0 : -1.0);
+  wait_for([&] { return a.num("disp") == 0; }, t + 8000 - g_ms);
+  const double dark_s = (double)(g_ms - t) / 1000.0;
+  CHECK(a.alive && a.num("disp") == 0, "экран погас через %.1f с от нажатия — раньше 8 с", dark_s);
   if (g_ms < t + 8000) run(t + 8000 - g_ms);
-  const bool dark = a.alive && a.num("disp") == 0;
   a.vbus = true;
   a.cmd("SET vbus 1");
   run(500);
-  CHECK(dark && happened(a, "dfu", t) && a.boot_mode == 1, "экран погас, USB через 8 с от нажатия — загрузчик");
+  CHECK(happened(a, "dfu", t) && a.boot_mode == 1, "USB через 8 с от нажатия — загрузчик");
   a.button = false;
   run(2000);
   t = g_ms;
@@ -1134,39 +1172,132 @@ void sc_console_stuck() {
 }
 
 // Серии нажатий: одно — «кнопка» для характера, два — дуэли вкл/выкл, три — звук вкл/выкл.
+// Серия — пока следующее нажатие не позже 400 мс после отпускания прошлого, сколько бы его ни
+// держали; удержание 3 с после коротких нажатий только выключает. Одиночное нажатие — ровно
+// одно событие button (v on), у серии из двух и трёх — ни одного.
 void sc_buttons() {
   say("\n== Нажатия кнопки: одно, два, три ==");
   Board& a = *boards[0];
-  auto taps = [&](int n) {
+  a.cmd("IN v on");
+  run(200);
+  // n нажатий по hold мс, между ними — gap мс от отпускания до следующего нажатия.
+  auto series = [&](int n, uint64_t hold, uint64_t gap) {
     for (int i = 0; i < n; ++i) {
-      press(a, 120);
-      run(150);
+      if (i) run(gap);
+      press(a, hold);
     }
     run(1500);
   };
+  const char* const kBtn = "Событие: button";
   uint64_t t = g_ms;
-  taps(1);
-  CHECK(!count_said(a, "Дуэли", t) && !count_said(a, "Звук", t), "одно нажатие ничего не переключает");
+  series(1, 120, 0);
+  CHECK(count_line(a, kBtn, t) == 1 && !count_said(a, "Дуэли", t) && !count_said(a, "Звук", t),
+        "одно нажатие — одно событие button (%d), ничего не переключает", count_line(a, kBtn, t));
   t = g_ms;
-  taps(2);
-  CHECK(count_said(a, "Дуэли выключены", t) == 1 && !count_said(a, "Звук", t), "два нажатия — дуэли выключены");
+  series(2, 120, 150);
+  CHECK(count_said(a, "Дуэли выключены", t) == 1 && !count_said(a, "Звук", t) && !count_line(a, kBtn, t),
+        "два нажатия — дуэли выключены, без button");
   t = g_ms;
-  taps(3);
-  CHECK(count_said(a, "Звук выключен", t) == 1 && !count_said(a, "Дуэли", t), "три нажатия — звук выключен");
+  series(3, 120, 150);
+  CHECK(count_said(a, "Звук выключен", t) == 1 && !count_said(a, "Дуэли", t) && !count_line(a, kBtn, t),
+        "три нажатия — звук выключен, без button");
+  // Медленная серия: нажатия держат долго, пауза до следующего — меньше 400 мс.
   t = g_ms;
-  taps(3);
-  CHECK(count_said(a, "Звук включён", t) == 1, "ещё три — звук включён");
+  series(3, 180, 220);
+  CHECK(count_said(a, "Звук включён", t) == 1 && !count_said(a, "Дуэли", t) && !count_line(a, kBtn, t),
+        "три нажатия по 180 мс с паузами 220 мс — звук включён");
   t = g_ms;
-  taps(2);
-  CHECK(count_said(a, "Дуэли включены", t) == 1, "ещё два — дуэли включены");
-  // Нажатия с паузой больше 400 мс — по одному, без переключений.
+  series(2, 250, 250);
+  CHECK(count_said(a, "Дуэли включены", t) == 1 && !count_said(a, "Звук", t) && !count_line(a, kBtn, t),
+        "два нажатия по 250 мс с паузой 250 мс — дуэли включены");
+  // Пауза больше 400 мс — по одному, без переключений.
   t = g_ms;
+  series(2, 120, 450);
+  CHECK(count_line(a, kBtn, t) == 2 && !count_said(a, "Дуэли", t) && !count_said(a, "Звук", t),
+        "пауза 450 мс — два одиночных нажатия (%d button)", count_line(a, kBtn, t));
+  t = g_ms;
+  series(3, 120, 700);
+  CHECK(count_line(a, kBtn, t) == 3 && !count_said(a, "Дуэли", t) && !count_said(a, "Звук", t),
+        "редкие нажатия — по одному (%d button)", count_line(a, kBtn, t));
+  // Два быстрых нажатия и удержание: серия не в счёт, только выключение.
+  t = g_ms;
+  press(a, 120);
+  run(150);
+  press(a, 120);
+  run(150);
+  CHECK(power_off(a) && !count_said(a, "Дуэли", t) && !count_said(a, "Звук", t) && !count_line(a, kBtn, t),
+        "два нажатия и удержание 3 с — только выключение, без дуэлей и button");
+  CHECK(wake(a), "кнопка будит");
+}
+
+// Перед продажей: factory yes возвращает брелок к заводскому состоянию — рост, достижения,
+// знакомые, все настройки и часы — и выключает его; следующим его включает покупатель.
+void sc_factory() {
+  say("\n== Заводское состояние перед продажей: factory yes ==");
+  Board& a = *boards[0];
+  // Проверка перед отправкой оставляет знакомого и опыт: в полном прогоне они уже есть, отдельно
+  // — встреча с соседом.
+  if (a.num("fr") < 1) {
+    Board& b = neighbour();
+    wait_for([&] { return a.num("fr") >= 1; }, 900000);
+    drop_board(&b);
+  }
+  a.cmd("IN theme cyber");
+  if (a.num("snd") == 1) a.cmd("IN snd");
+  if (a.num("duel") == 1) a.cmd("IN duel");
+  if (a.num("ghost") == 0) a.cmd("IN ghost");
+  a.cmd("IN b 255");
+  a.cmd("IN bday 05-14");
+  a.cmd("IN date 2026-12-31");
+  a.cmd("IN t 10:15");
+  run(15000);  // настройки с консоли пишутся через 3 с после последнего изменения
+  CHECK(a.num("theme") == 1 && a.num("snd") == 0 && a.num("duel") == 0 && a.num("ghost") == 1 && a.num("ucon") == 255 &&
+            a.num("bday") == 1 && a.num("date") == 1 && a.num("clk") == 1 && a.num("fr") >= 1 && a.num("xp") > 0,
+        "до сброса: свои тема, звук, дуэли, невидимка, яркость, день рождения, дата и часы; знакомых %ld, опыт %ld",
+        a.num("fr"), a.num("xp"));
+  uint64_t t = g_ms;
+  a.cmd("IN factory");
+  run(500);
+  CHECK(said(a, "factory yes", t) && a.alive && a.num("fr") >= 1 && a.num("xp") > 0 && a.num("ucon") == 255,
+        "factory без yes — только подсказка, ничего не стёрто");
+  // Консоль — по USB.
+  a.vbus = true;
+  a.cmd("SET vbus 1");
+  run(3000);
+  t = g_ms;
+  a.cmd("IN factory yes");
+  run(500);
+  // Три нажатия во время прощания (звук выкл) не в счёт: записались бы вместе с заводскими.
   for (int i = 0; i < 3; ++i) {
     press(a, 120);
-    run(700);
+    run(150);
   }
-  run(1000);
-  CHECK(!count_said(a, "Дуэли", t) && !count_said(a, "Звук", t), "редкие нажатия — по одному");
+  run(7000);
+  CHECK(said(a, "Заводское состояние записано", t) && said(a, "опыт 0, имплант 0/", t) && said(a, "достижений 0/", t) &&
+            said(a, "друзей 0, дуэлей 0/0; дуэли вкл, невидимка выкл", t),
+        "factory yes: рост, достижения и знакомые с нуля, дуэли вкл, невидимка выкл");
+  CHECK(a.alive && !any_event(a, t) && a.num("disp") == 0 && a.num("adv") == 0,
+        "и выключился: на USB — экран и эфир выключены до отключения кабеля");
+  t = g_ms;
+  a.vbus = false;
+  a.cmd("SET vbus 0");
+  wait_for([&] { return happened(a, "off", t); }, 5000);
+  CHECK(happened(a, "off", t) && !a.alive, "USB отключили — полный сон");
+  run(5000);
+  t = g_ms;
+  CHECK(wake(a), "покупатель включает кнопкой");
+  run(3000);
+  a.cmd("IN t");
+  a.cmd("IN me");
+  run(500);
+  CHECK(a.num("theme") == 0 && a.num("snd") == 1 && a.num("duel") == 1 && a.num("ghost") == 0 && a.num("ucon") == 127 &&
+            a.num("bday") == 0 && a.num("date") == 0 && a.num("clk") == 0,
+        "после включения настройки заводские: тема classic, звук и дуэли вкл, невидимка выкл, яркость 127, без дня "
+        "рождения, даты и часов");
+  CHECK(a.num("fr") == 0 && a.num("days") == 1 && said(a, "Время не задано", t) && said(a, "достижений 0/", t) &&
+            said(a, "друзей 0, дуэлей 0/0", t) && a.num("adv") == 1,
+        "первый день, знакомых и достижений нет, время не задано, брелок снова виден в эфире (день %ld)", a.num("days"));
+  health(a, "после factory yes");
 }
 
 void sc_power_cuts() {
@@ -1792,7 +1923,7 @@ int main(int argc, char** argv) {
       {"clock", sc_clock_unknown},     {"off", sc_power_off_battery},
       {"dfu", sc_dfu},                 {"offusb", sc_power_off_usb},  {"stuck", sc_stuck_button},
       {"watchdog", sc_watchdog},       {"console", sc_console_stuck}, {"buttons", sc_buttons},
-      {"cuts", sc_power_cuts},
+      {"factory", sc_factory},         {"cuts", sc_power_cuts},
       {"empty", sc_empty_cell},        {"wrap", sc_millis_wrap},      {"days", sc_days},
       {"day", sc_day},
   };
@@ -1804,7 +1935,10 @@ int main(int argc, char** argv) {
   };
   for (auto& [n, f] : all) {
     if (strcmp(n, "boot") && boards.empty()) sc_first_boot();
-    if (wanted(n) && !(strcmp(n, "boot") == 0 && !boards.empty())) f();
+    if (!wanted(n) || (strcmp(n, "boot") == 0 && !boards.empty())) continue;
+    // Соседа B сценарии после встречи и атаки не видят (и при выборочном запуске).
+    if (strcmp(n, "meeting") && strcmp(n, "lossy") && strcmp(n, "attack")) drop_neighbour();
+    f();
   }
   drop_boards();
   say("\nИтог: %d проверок, %d не прошли", checks, failures);
