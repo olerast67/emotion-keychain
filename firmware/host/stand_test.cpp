@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include <set>
+#include <vector>
 
 #include "../src/main.cpp"
 
@@ -18,6 +19,52 @@ uint32_t ledc_hz = 0, ledc_duty = 0, ledc_tones = 0;
 HostSerial Serial;
 TwoWire Wire;
 EspClass ESP;
+
+// ---------------------------------------------------------------- эфир
+
+// Радио стенда на ПК: вместо Bluetooth — очередь пакетов, которую наполняет тест, и последний
+// пакет стенда, который тест слышит, пока стенд не невидимка и радио не выключено.
+namespace radio {
+namespace {
+face::Advert air_adv;
+Pace air_pace = Pace::Normal;
+bool air_ghost = false;
+struct Heard {
+  face::Advert a;
+  int rssi;
+};
+std::vector<Heard> air_in;
+uint32_t air_heard = 0;
+}  // namespace
+bool begin() { return true; }
+bool ok() { return true; }
+const char* stack() { return "эфир теста"; }
+void set_advert(const face::Advert& a) { air_adv = a; }
+void set_pace(Pace p) { air_pace = p; }
+Pace pace() { return air_pace; }
+void update(uint32_t) {}
+bool take(face::Advert* a, int* rssi) {
+  if (air_in.empty()) return false;
+  *a = air_in.front().a, *rssi = air_in.front().rssi;
+  air_in.erase(air_in.begin());
+  return true;
+}
+void set_ghost(bool on) { air_ghost = on; }
+bool ghost() { return air_ghost; }
+uint32_t heard() { return air_heard; }
+uint32_t dropped() { return 0; }
+uint32_t heap_free() { return 200000; }
+// Что стенд сейчас рассылает в эфир; false — молчит.
+bool on_air(face::Advert* a) {
+  if (air_ghost || air_pace == Pace::Off) return false;
+  *a = air_adv;
+  return true;
+}
+void hear(const face::Advert& a, int rssi) {
+  air_in.push_back({a, rssi});
+  ++air_heard;
+}
+}  // namespace radio
 
 // ---------------------------------------------------------------- эмулятор контроллера
 
@@ -147,6 +194,34 @@ static void touch(uint32_t ms) {
 }
 
 static bool reason_has(const char* s) { return strstr(bh.last_reason(), s) != nullptr; }
+
+// Брелок рядом со стендом: та же логика встреч движка, пакеты ходят через эфир теста раз в
+// 100 мс в обе стороны. Возвращает, сыграли ли сцену оба: ok — стенд напечатал встречу или
+// дуэль с этим соседом, pm — сцена брелока, dt — сколько мс между сценами у них.
+struct Rendezvous2 {
+  bool stand = false, peer = false;
+  Meeting pm;
+  uint32_t stand_at = 0, peer_at = 0;
+};
+static Rendezvous2 near_peer(Encounters& peer, uint32_t ms, int rssi = -55) {
+  Rendezvous2 r;
+  const Identity pid = identity_from_hash(peer.advert(millis()).hash);
+  char duel_line[64], meet_line[64];
+  snprintf(duel_line, sizeof duel_line, "Дуэль с %s", pid.code);
+  snprintf(meet_line, sizeof meet_line, "Встреча с %s", pid.code);
+  Serial.out.clear();
+  for (uint32_t t = 0; t < ms && !(r.stand && r.peer); t += 100) {
+    Advert a;
+    const uint32_t now = millis();
+    if (radio::on_air(&a)) peer.on_advert(a, rssi, now);
+    radio::hear(peer.advert(now), rssi);
+    run_ms(100);
+    Meeting m;
+    if (!r.peer && peer.poll(millis(), &m)) r.peer = true, r.pm = m, r.peer_at = millis();
+    if (!r.stand && (said(duel_line) || said(meet_line))) r.stand = true, r.stand_at = millis();
+  }
+  return r;
+}
 
 int main(int argc, char** argv) {
   const bool verbose = argc > 1 && !strcmp(argv[1], "-v");
@@ -432,6 +507,102 @@ int main(int argc, char** argv) {
         scene_id(eng.scene()));
   run_ms(20000);
   type("t 12:00");
+
+  // Встречи по радио: брелок (или второй стенд) рядом — та же логика движка, тот же пакет.
+  {
+    type("a");
+    run_ms(3000);
+    Advert mine;
+    CHECK(radio::on_air(&mine) && mine.hash == me.hash && mine.level == progress.implant &&
+              (mine.flags & kAdvDuelReady),
+          "стенд рассылает свой пакет: позывной, уровень, готов к дуэли");
+    uint8_t raw[kAdvLen];
+    adv_encode(mine, raw);
+    Advert back;
+    CHECK(adv_decode(raw, kAdvLen, &back) && back.hash == me.hash, "пакет стенда разбирается как пакет брелока");
+
+    // Сосед с меньшим позывным объявляет дуэль, стенд принимает: исходы противоположные,
+    // сцены начинаются одновременно, после дуэли — разговор.
+    Encounters lo;
+    lo.init(me.hash >> 1);
+    lo.set_self(0, kAdvDuelReady, 200);
+    const uint16_t duels0 = (uint16_t)(progress.duels_won + progress.duels_lost);
+    Rendezvous2 r = near_peer(lo, 20000);
+    CHECK(r.stand && r.peer, "дуэль у обоих: стенд %d, брелок %d", r.stand, r.peer);
+    CHECK(r.pm.kind == face::Rendezvous::Duel, "сцена — дуэль: %d", (int)r.pm.kind);
+    const bool stand_won = said("победа");
+    CHECK(stand_won != r.pm.won, "один победитель: стенд %s, брелок %s", stand_won ? "выиграл" : "проиграл",
+          r.pm.won ? "выиграл" : "проиграл");
+    CHECK((r.stand_at > r.peer_at ? r.stand_at - r.peer_at : r.peer_at - r.stand_at) <= 200,
+          "сцены одновременно: стенд %u, брелок %u", r.stand_at, r.peer_at);
+    run_ms(300);
+    CHECK(eng.scene() == Scene::duel, "на экране дуэль: %s", scene_id(eng.scene()));
+    CHECK(progress.duels_won + progress.duels_lost == duels0 + 1, "дуэль засчитана");
+    {
+      bool chat = false;
+      for (int i = 0; i < 150 && !chat; ++i) run_ms(100), chat = eng.scene() == Scene::chat;
+      CHECK(chat, "после дуэли — разговор с настоящим соседом");
+    }
+    run_ms(30000);
+
+    // Дуэли выключены, сосед с большим позывным: объявляет стенд, сосед принимает — встреча.
+    type("duels");
+    CHECK(!duel_ready && said("Дуэли с соседами выключены") && Preferences::store().count("keychain/duels"),
+          "дуэли выключаются и сохраняются");
+    Encounters hi;
+    hi.init(me.hash + (0xFFFFFFFFu - me.hash) / 2 + 1);
+    hi.set_self(1, kAdvDuelReady, 100);
+    const int friends0 = friends.count();
+    r = near_peer(hi, 20000);
+    CHECK(r.stand && r.peer && r.pm.kind == face::Rendezvous::Greet, "встреча у обоих: стенд %d, брелок %d, сцена %d",
+          r.stand, r.peer, (int)r.pm.kind);
+    CHECK(said("новый"), "новый знакомый в консоли");
+    run_ms(300);
+    CHECK(eng.scene() == Scene::greet, "на экране приветствие: %s", scene_id(eng.scene()));
+    CHECK(friends.count() == friends0 + 1 && friends.level(hi.advert(millis()).hash) >= 0, "сосед в знакомых");
+    CHECK(Preferences::store().count("keychain/friends"), "знакомые во флеше");
+    run_ms(10000);
+    type("duels");
+    CHECK(duel_ready, "дуэли снова включены");
+
+    // Слабый сигнал (дальше 1–3 м) — не встреча.
+    Encounters far;
+    far.init(me.hash >> 2);
+    far.set_self(0, 0, 128);
+    run_ms(25000);  // лимит: встреч не чаще раза в 20 с
+    r = near_peer(far, 30000, -80);
+    CHECK(!r.stand && !r.peer, "издалека встречи нет");
+
+    // Невидимка: стенд молчит в эфире и ни с кем не встречается.
+    type("ghost");
+    CHECK(ghost && said("Невидимка") && Preferences::store().count("keychain/ghost"), "невидимка включена");
+    CHECK(!radio::on_air(&mine), "невидимка не рассылает пакет");
+    Encounters g;
+    g.init(me.hash >> 3);
+    g.set_self(0, kAdvDuelReady, 128);
+    r = near_peer(g, 30000);
+    CHECK(!r.stand && !r.peer, "невидимка ни с кем не встречается");
+    type("ghost");
+    CHECK(!ghost && radio::on_air(&mine), "снова виден");
+
+    // Ночью эфир не слушается, в показе стенд в эфире молчит.
+    type("t 23:30");
+    run_ms(500);
+    CHECK(radio::pace() == radio::Pace::Night, "ночью — редкая реклама без прослушивания: %d", (int)radio::pace());
+    type("t 12:00");
+    type("s");
+    run_ms(200);
+    CHECK(radio::pace() == radio::Pace::Off && !radio::on_air(&mine), "в показе радио молчит");
+    type("a");
+    run_ms(200);
+    CHECK(radio::pace() != radio::Pace::Off, "в живом режиме радио снова работает");
+    Serial.out.clear();
+    type("radio");
+    CHECK(said("Радио эфир теста") && said("услышано"), "команда radio: %s", Serial.out.c_str());
+    // Новые сутки: дуэль с тем же соседом снова возможна (новый день — и у логики встреч).
+    type("day");
+    run_ms(15000);
+  }
 
   // Плохой ввод: сообщение о формате, и ничего не применяется.
   type("a");
